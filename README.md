@@ -52,6 +52,7 @@ Winter is extensible by design — the framework, the meta workspace it's develo
 - **[winter-service-tmux](https://codeberg.org/pgross/winter-service-tmux)** — extension: tmux-based service orchestration so agents can launch and monitor application suites
 - **[winter-product](https://codeberg.org/pgross/winter-product)** — extension: planning agents and the `todo` skill
 - **[winter-workflow](https://codeberg.org/pgross/winter-workflow)** — extension: the author's personal agentic workflow, interchangeable with your own
+- **[winter-codeberg](https://codeberg.org/pgross/winter-codeberg)** — extension: AI-native Codeberg issue format and the `/wc-issue` skill
 
 ## 🌿 Forking
 
