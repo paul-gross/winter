@@ -17,7 +17,21 @@ def render_repo_cell(repo_status: WorktreeRepoStatus) -> Text:
     elif repo_status.dirty_count > 1:
         parts.append((f"{repo_status.dirty_count} files", "red"))
 
-    if len(parts) == 0:
+    # `[+]` flags a non-pinned repo whose upstream is configured but the
+    # remote-tracking ref doesn't exist locally yet — i.e., we're set up to
+    # push to a feature branch that doesn't exist on origin, AND we actually
+    # have commits the first push would carry across. Pinned repos follow
+    # main and never participate in feature-branch flow; a repo with no
+    # tracking config has nothing to flag; and a fresh worktree with no
+    # commits ahead of main has nothing the marker would advertise.
+    unborn_upstream = (
+        not repo_status.worktree.repository.pinned
+        and repo_status.tracking_branch is not None
+        and not repo_status.tracking_ref_present
+        and repo_status.ahead > 0
+    )
+
+    if len(parts) == 0 and not unborn_upstream and repo_status.tracking_ahead == 0:
         return Text("·", style="dim")
 
     text = Text()
@@ -27,7 +41,15 @@ def render_repo_cell(repo_status: WorktreeRepoStatus) -> Text:
         text.append(label, style=style)
 
     if repo_status.tracking_ahead > 0:
-        text.append(f" [+{repo_status.tracking_ahead}]", style="cyan")
+        prefix = " " if parts else ""
+        text.append(f"{prefix}[+{repo_status.tracking_ahead}]", style="cyan")
+    elif unborn_upstream:
+        # Upstream configured but never fetched / never pushed. The bare
+        # `[+]` (no count) reads as "ahead, by an unknown amount" alongside
+        # the existing `[+N]` notation; orange flags it as a distinct state
+        # — local config points somewhere that doesn't exist on the remote.
+        prefix = " " if parts else ""
+        text.append(f"{prefix}[+]", style="dark_orange")
 
     for key, value in repo_status.extensions.items():
         if key.startswith("_"):

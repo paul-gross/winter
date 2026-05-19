@@ -43,6 +43,14 @@ class RepoStatus:
     recent_commits: list[RepoCommit] = dataclasses.field(default_factory=list)
     tracking_branch: str | None = None
     tracking_ahead: int = 0
+    tracking_ref_present: bool = False
+    """Whether the remote-tracking ref actually resolves locally.
+
+    Distinguishes "upstream configured but never fetched / never pushed"
+    (False) from "upstream configured and up-to-date" (True with
+    tracking_ahead == 0). Without this, both states read as tracking_ahead=0
+    because git rev-list silently returns 0 when the ref is missing.
+    """
 
 
 @dataclasses.dataclass
@@ -54,6 +62,7 @@ class StandaloneRepoStatus:
     behind: int = 0
     dirty_count: int = 0
     tracking_ahead: int = 0
+    tracking_ref_present: bool = False
     latest_commit: str | None = None
 
     @property
@@ -120,6 +129,7 @@ class WorktreeRepoStatus:
     dirty_count: int
     tracking_branch: str | None = None
     tracking_ahead: int = 0
+    tracking_ref_present: bool = False
     extensions: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 

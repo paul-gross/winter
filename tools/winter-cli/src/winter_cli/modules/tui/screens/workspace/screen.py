@@ -79,7 +79,8 @@ class WorkspaceScreen(Screen):
                 "[green]+N[/green] [dim]ahead of main[/dim]  "
                 "[yellow]-N[/yellow] [dim]behind main[/dim]  "
                 "[red]N files[/red] [dim]uncommitted[/dim]  "
-                "[cyan]\\[+N][/cyan] [dim]unpushed to tracking[/dim]",
+                "[cyan]\\[+N][/cyan] [dim]unpushed to tracking[/dim]  "
+                "[dark_orange]\\[+][/dark_orange] [dim]upstream not pushed yet[/dim]",
                 id="legend",
             )
             yield RefreshStatus(id="refresh-status")

@@ -132,6 +132,7 @@ class WorkspaceService:
                 dirty_count=len(rs.dirty_files),
                 tracking_branch=rs.tracking_branch,
                 tracking_ahead=rs.tracking_ahead,
+                tracking_ref_present=rs.tracking_ref_present,
             ))
 
         if worktree_repo_decorators:

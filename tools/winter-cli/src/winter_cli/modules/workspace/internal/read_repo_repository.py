@@ -150,14 +150,24 @@ class ReadRepoRepository:
 
         tracking_branch: str | None = None
         tracking_ahead = 0
+        tracking_ref_present = False
         try:
             tb = r.active_branch.tracking_branch()
             if tb:
                 tracking_branch = tb.name
+                # `rev-list <ref>..HEAD` silently returns 0 when <ref> doesn't
+                # resolve, so we can't tell "up-to-date" from "remote ref
+                # missing" by tracking_ahead alone — verify the ref explicitly.
                 try:
-                    tracking_ahead = int(r.git.rev_list("--count", f"{tb.name}..HEAD"))
+                    r.git.rev_parse("--verify", "--quiet", tb.name)
+                    tracking_ref_present = True
                 except git.GitCommandError:
                     pass
+                if tracking_ref_present:
+                    try:
+                        tracking_ahead = int(r.git.rev_list("--count", f"{tb.name}..HEAD"))
+                    except git.GitCommandError:
+                        pass
         except TypeError:
             pass
 

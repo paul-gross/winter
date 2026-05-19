@@ -8,6 +8,14 @@ from textual.widgets import DataTable
 from winter_cli.modules.workspace.models import FeatureEnvironmentOverview
 from winter_cli.modules.tui.screens.workspace.repo_status import render_repo_cell
 
+# Pushpin marks pinned project repos in the row label. The trailing
+# U+FE0E (variation selector-15) requests text-style monochrome rendering
+# instead of the colored emoji presentation. Most modern terminals render
+# it as 2 columns wide; unpinned repos pad with two spaces so all repo
+# names align on the same column regardless of pinned status.
+_PIN_GLYPH = "📌︎"
+_PIN_PAD = "  "
+
 
 class FeatureWorktreesGrid(DataTable):
 
@@ -91,14 +99,17 @@ class FeatureWorktreesGrid(DataTable):
         self._repo_keys = []
 
         repo_lookup = self._build_repo_lookup()
-        repo_names = (
-            [rs.worktree.repository.name for rs in self.statuses[0].repo_statuses]
-            if self.statuses else []
-        )
+        first_repo_statuses = self.statuses[0].repo_statuses if self.statuses else []
+        repo_names = [rs.worktree.repository.name for rs in first_repo_statuses]
+        pinned_by_name = {
+            rs.worktree.repository.name: rs.worktree.repository.pinned
+            for rs in first_repo_statuses
+        }
         self._repo_keys = list(repo_names)
 
         for repo_name in repo_names:
-            row_cells: list = [repo_name]
+            prefix = f"{_PIN_GLYPH} " if pinned_by_name.get(repo_name) else f"{_PIN_PAD} "
+            row_cells: list = [f"{prefix}{repo_name}"]
             for overview in self.statuses:
                 repo_status = repo_lookup[overview.status.environment.name].get(repo_name)
                 row_cells.append(render_repo_cell(repo_status) if repo_status else Text("-"))
