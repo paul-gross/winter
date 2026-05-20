@@ -4,6 +4,7 @@ import hashlib
 
 import git
 
+from winter_cli.modules.workspace.internal.repo_error_factory import RepoErrorFactory
 from winter_cli.modules.workspace.models import (
     FeatureEnvironment,
     FeatureEnvironmentStatus,
@@ -49,6 +50,9 @@ class ReadWorkspaceRepository:
     by visual plugins (see `EnvironmentDecorator`); this class leaves `extensions={}` and
     has no awareness of any service-orchestration extension.
     """
+
+    def __init__(self, error_factory: RepoErrorFactory) -> None:
+        self._error_factory = error_factory
 
     def get_environments(self, workspace: Workspace, project_repos: list[ProjectRepository]) -> list[FeatureEnvironment]:
         return [self._build_environment(workspace, name) for name in self._discover_env_names(workspace, project_repos)]
@@ -105,6 +109,12 @@ class ReadWorkspaceRepository:
         never been fetched. We want a freshly-connected env to read back as
         connected immediately.
         """
+        # TypeError on detached HEAD and ValueError on unborn HEAD are both
+        # "no feature branch yet", not failures.
+        #
+        # `git config --get` exits 1 specifically for "key not set" — that's
+        # the "env not connected" answer. Any other exit code is a real
+        # failure and raises so the dashboard's Log tab / CLI exit surface it.
         for repo in project_repos:
             if repo.pinned:
                 continue
@@ -114,10 +124,19 @@ class ReadWorkspaceRepository:
             try:
                 r = git.Repo(str(worktree_path))
                 head = r.active_branch.name
+            except (TypeError, ValueError):
+                return None
+            try:
                 remote = r.git.config("--get", f"branch.{head}.remote").strip()
                 merge = r.git.config("--get", f"branch.{head}.merge").strip()
-            except (git.GitCommandError, TypeError):
-                return None
+            except git.GitCommandError as exc:
+                if exc.status == 1:
+                    return None  # branch.<head>.{remote,merge} not configured
+                raise self._error_factory.from_git(
+                    exc,
+                    message=f"reading feature-branch config failed for {repo.name}",
+                    cwd=worktree_path,
+                ) from exc
             if remote != "origin" or not merge.startswith("refs/heads/"):
                 return None
             return merge[len("refs/heads/"):]

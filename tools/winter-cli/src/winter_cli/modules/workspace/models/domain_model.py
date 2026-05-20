@@ -130,7 +130,42 @@ class RepoError(Exception):
 
     Raised by repository methods so callers can catch a single winter-defined
     type instead of depending on GitPython's exception hierarchy.
+
+    Carries structured fields so the dashboard's Log tab can render a
+    `git <subcommand> <args>` line plus cwd / exit code / stderr alongside the
+    high-level message.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        subcommand: str | None = None,
+        args: tuple[str, ...] = (),
+        cwd: str | None = None,
+        exit_code: int | None = None,
+        stderr: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.subcommand = subcommand
+        self.args = tuple(args)
+        self.cwd = cwd
+        self.exit_code = exit_code
+        self.stderr = stderr
+
+    def __str__(self) -> str:
+        parts: list[str] = [self.message]
+        if self.subcommand:
+            cmd = " ".join(("git", self.subcommand, *self.args))
+            parts.append(f"  $ {cmd}")
+        if self.cwd:
+            parts.append(f"  cwd: {self.cwd}")
+        if self.exit_code is not None:
+            parts.append(f"  exit {self.exit_code}")
+        if self.stderr:
+            parts.append(f"  stderr: {self.stderr.strip()}")
+        return "\n".join(parts)
 
 
 @dataclasses.dataclass

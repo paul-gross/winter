@@ -4,6 +4,7 @@ import concurrent.futures
 import dataclasses
 import fnmatch
 import logging
+from typing import Callable
 
 import click
 
@@ -118,12 +119,27 @@ class WorkspaceService:
         self,
         env_worktrees: FeatureEnvironmentWorktrees,
         worktree_repo_decorators: list[WorktreeRepoDecorator] | None = None,
+        on_repo_error: "Callable[[FeatureWorktree, RepoError], None] | None" = None,
     ) -> list[WorktreeRepoStatus]:
+        """Read one row per worktree, optionally tolerating per-worktree failures.
+
+        When `on_repo_error` is `None` (CLI / JSON output / tests), the first
+        `RepoError` propagates so the caller exits non-zero with full context.
+        When the dashboard passes a callback, the failed worktree is reported
+        to it and skipped — the rest of the env still renders. This is what
+        keeps one broken repo from hanging the whole dashboard refresh.
+        """
         env = env_worktrees.environment
 
         wt_repo_statuses: list[WorktreeRepoStatus] = []
         for wt in env_worktrees.worktrees:
-            rs = self._repo_repo.get_worktree_status(wt)
+            try:
+                rs = self._repo_repo.get_worktree_status(wt)
+            except RepoError as exc:
+                if on_repo_error is None:
+                    raise
+                on_repo_error(wt, exc)
+                continue
             wt_repo_statuses.append(WorktreeRepoStatus(
                 worktree=wt,
                 branch=rs.branch,

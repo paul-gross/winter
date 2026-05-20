@@ -7,10 +7,12 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Static
 
+from winter_cli.modules.tui.error_log import ErrorLogService
 from winter_cli.modules.tui.widgets.refresh_status import RefreshStatus
 
 from winter_cli.modules.workspace.models import (
     FeatureEnvironmentStatus,
+    RepoError,
     RepoStatus,
     Workspace,
     WorktreeRepoStatus,
@@ -33,6 +35,7 @@ class WorktreeDetailScreen(Screen):
     BINDINGS = [
         Binding("r", "refresh", "Refresh"),
         Binding("s", "sync", "Sync"),
+        Binding("L", "open_log", "Log"),
         Binding("h", "cursor_left", "Left", show=False),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
@@ -49,6 +52,7 @@ class WorktreeDetailScreen(Screen):
         repo_factory: RepositoryFactory,
         workspace: Workspace,
         plugin_registry: PluginRegistry,
+        error_log: ErrorLogService,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -59,6 +63,7 @@ class WorktreeDetailScreen(Screen):
         self._repo_factory = repo_factory
         self._workspace = workspace
         self._plugin_registry = plugin_registry
+        self._error_log = error_log
         self._env_status: FeatureEnvironmentStatus | None = None
         self._repo_statuses: list[WorktreeRepoStatus] = []
         self._focused_repo: str | None = None
@@ -91,15 +96,49 @@ class WorktreeDetailScreen(Screen):
         self.app.call_from_thread(self._on_refresh_start)
         worktree_repo_decorators = list(self._plugin_registry.worktree_repo_decorators)
         environment_decorators = list(self._plugin_registry.environment_decorators)
-        project_repos = self._repo_factory.get_project_repos()
-        env = self._workspace_repo.get_environment(self._workspace, self.worktree_name)
-        env_status = self._workspace_svc.get_environment_status(env, project_repos, environment_decorators or None)
-        env_worktrees = self._workspace_svc.get_feature_environment_worktrees(env, project_repos)
+        try:
+            project_repos = self._repo_factory.get_project_repos()
+            env = self._workspace_repo.get_environment(self._workspace, self.worktree_name)
+            env_status = self._workspace_svc.get_environment_status(env, project_repos, environment_decorators or None)
+            env_worktrees = self._workspace_svc.get_feature_environment_worktrees(env, project_repos)
+        except RepoError as exc:
+            self._capture_error(f"WorktreeDetailScreen({self.worktree_name}).refresh", exc)
+            self.app.call_from_thread(self._on_refresh_finished)
+            return
+
+        def _on_repo_error(wt, exc):
+            self._capture_error(
+                f"WorktreeDetailScreen({self.worktree_name}).refresh({wt.repository.name})", exc,
+            )
         repo_statuses = self._workspace_svc.get_worktree_repo_statuses(
             env_worktrees,
             worktree_repo_decorators or None,
+            on_repo_error=_on_repo_error,
         )
         self.app.call_from_thread(self._update_widgets, env_status, repo_statuses)
+
+    def _capture_error(self, location: str, exc: RepoError) -> None:
+        """Log a RepoError to the session log and toast (deduped) without crashing."""
+        entry, should_notify = self._error_log.record(location=location, exc=exc)
+        if should_notify:
+            self.app.call_from_thread(
+                self.app.notify,
+                f"{entry.message}\nPress L for log",
+                title="git error",
+                severity="error",
+                timeout=6,
+            )
+
+    def _on_refresh_finished(self) -> None:
+        try:
+            self.query_one("#refresh-status", RefreshStatus).finish_refresh()
+        except Exception:
+            pass
+
+    def action_open_log(self) -> None:
+        from winter_cli.modules.tui.app import WinterDashboardApp
+        app: WinterDashboardApp = self.app
+        app.push_screen(app.screen_factory.error_log_screen())
 
     def _on_refresh_start(self) -> None:
         try:
@@ -198,11 +237,17 @@ class WorktreeDetailScreen(Screen):
 
     @work(thread=True)
     def _load_repo_detail(self, repo_name: str) -> None:
-        project_repos = self._repo_factory.get_project_repos()
-        env = self._workspace_repo.get_environment(self._workspace, self.worktree_name)
-        env_worktrees = self._workspace_svc.get_feature_environment_worktrees(env, project_repos)
-        wt = next(wt for wt in env_worktrees.worktrees if wt.repository.name == repo_name)
-        detail = self._repo_repo.get_worktree_status(wt)
+        try:
+            project_repos = self._repo_factory.get_project_repos()
+            env = self._workspace_repo.get_environment(self._workspace, self.worktree_name)
+            env_worktrees = self._workspace_svc.get_feature_environment_worktrees(env, project_repos)
+            wt = next(wt for wt in env_worktrees.worktrees if wt.repository.name == repo_name)
+            detail = self._repo_repo.get_worktree_status(wt)
+        except RepoError as exc:
+            self._capture_error(
+                f"WorktreeDetailScreen({self.worktree_name}).load_repo_detail({repo_name})", exc,
+            )
+            return
         self.app.call_from_thread(self._update_repo_info, detail)
 
     def _update_repo_info(self, detail: RepoStatus) -> None:
@@ -255,10 +300,13 @@ class WorktreeDetailScreen(Screen):
 
     @work(thread=True)
     def _run_sync(self) -> None:
-        project_repos = self._repo_factory.get_project_repos()
-        env = self._workspace_repo.get_environment(self._workspace, self.worktree_name)
-        env_worktrees = self._workspace_svc.get_feature_environment_worktrees(env, project_repos)
-        self._workspace_svc.sync_env(env_worktrees)
+        try:
+            project_repos = self._repo_factory.get_project_repos()
+            env = self._workspace_repo.get_environment(self._workspace, self.worktree_name)
+            env_worktrees = self._workspace_svc.get_feature_environment_worktrees(env, project_repos)
+            self._workspace_svc.sync_env(env_worktrees)
+        except RepoError as exc:
+            self._capture_error(f"WorktreeDetailScreen({self.worktree_name}).sync", exc)
         self._refresh_data()
 
     def _run_plugin_action(self, action_name: str) -> None:

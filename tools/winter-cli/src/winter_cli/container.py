@@ -6,6 +6,7 @@ from dependency_injector import containers, providers
 from winter_cli.config.workspace import WorkspaceConfigService
 from winter_cli.config.internal.write_winter_configuration_repository import WriteWinterConfigurationRepository
 from winter_cli.modules.workspace.internal.read_workspace_repository import ReadWorkspaceRepository
+from winter_cli.modules.workspace.internal.repo_error_factory import RepoErrorFactory
 from winter_cli.modules.workspace.internal.write_repo_repository import WriteRepoRepository
 from winter_cli.modules.workspace.drift import DriftWarningService
 from winter_cli.modules.workspace.extensions import ExtensionService
@@ -22,6 +23,8 @@ from winter_cli.modules.workspace.repository_factory import RepositoryFactory
 from winter_cli.modules.workspace.workspace_service import WorkspaceService
 from winter_cli.core.cli_input_validation_service import CliInputValidationService
 from winter_cli.core.internal.click_cli_output_service import ClickCliOutputService
+from winter_cli.modules.tui.error_log import ErrorLogService
+from winter_cli.modules.tui.screens.error_log import ErrorLogScreen
 from winter_cli.modules.tui.screens.workspace import WorkspaceScreen
 from winter_cli.modules.tui.screens.worktree_detail import WorktreeDetailScreen
 from winter_cli.plugins.loader import PluginRegistry
@@ -43,7 +46,11 @@ class Container(containers.DeclarativeContainer):
         workspace_config=workspace_config,
     )
 
-    repo_repo = providers.Factory(WriteRepoRepository)
+    # Factory for structured RepoError instances — injected into every class
+    # that translates GitPython exceptions into winter's error type.
+    repo_error_factory = providers.Singleton(RepoErrorFactory)
+
+    repo_repo = providers.Factory(WriteRepoRepository, error_factory=repo_error_factory)
     workspace = providers.Singleton(
         repo_repo.provided.get_workspace.call(
             workspace_config.provided.workspace_root,
@@ -63,7 +70,7 @@ class Container(containers.DeclarativeContainer):
         standalone_repos=repo_factory.provided.get_standalone_repos.call(),
     )
 
-    worktree_repo = providers.Factory(ReadWorkspaceRepository)
+    worktree_repo = providers.Factory(ReadWorkspaceRepository, error_factory=repo_error_factory)
 
     drift_warning_svc = providers.Factory(
         DriftWarningService,
@@ -97,6 +104,7 @@ class Container(containers.DeclarativeContainer):
         config=workspace_config,
         repo_factory=repo_factory,
         extension_svc=extension_svc,
+        error_factory=repo_error_factory,
     )
 
     stream_reporter = providers.Factory(
@@ -163,6 +171,11 @@ class Container(containers.DeclarativeContainer):
         reporter_factory=reporter_factory,
     )
 
+    # Session-scoped log buffer for RepoErrors captured during dashboard
+    # polling and actions. Singleton so navigating between screens preserves
+    # the entries within a single dashboard session.
+    error_log_svc = providers.Singleton(ErrorLogService)
+
     workspace_screen = providers.Factory(
         WorkspaceScreen,
         workspace_svc=workspace_svc,
@@ -171,6 +184,7 @@ class Container(containers.DeclarativeContainer):
         repo_factory=repo_factory,
         workspace=workspace,
         plugin_registry=plugin_registry,
+        error_log=error_log_svc,
     )
 
     worktree_detail_screen = providers.Factory(
@@ -181,4 +195,10 @@ class Container(containers.DeclarativeContainer):
         repo_factory=repo_factory,
         workspace=workspace,
         plugin_registry=plugin_registry,
+        error_log=error_log_svc,
+    )
+
+    error_log_screen = providers.Factory(
+        ErrorLogScreen,
+        error_log=error_log_svc,
     )

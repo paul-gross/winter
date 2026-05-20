@@ -17,6 +17,7 @@ from winter_cli.modules.workspace.internal.managed_block import (
     replace_or_append_block,
 )
 from winter_cli.modules.workspace.internal.read_workspace_repository import resolve_env_index
+from winter_cli.modules.workspace.internal.repo_error_factory import RepoErrorFactory
 from winter_cli.modules.workspace.models import ProjectRepository, IWorkspaceRepository, StandaloneRepository
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
 
@@ -57,10 +58,12 @@ class InitService:
         config: WorkspaceConfig,
         repo_factory: RepositoryFactory,
         extension_svc: ExtensionService,
+        error_factory: RepoErrorFactory,
     ) -> None:
         self._config = config
         self._repo_factory = repo_factory
         self._extension_svc = extension_svc
+        self._error_factory = error_factory
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -190,8 +193,15 @@ class InitService:
         try:
             r = git.Repo(str(first.main_path))
             lines = r.git.worktree("list", "--porcelain").splitlines()
-        except git.GitCommandError:
-            return []
+        except git.GitCommandError as exc:
+            # If the source checkout's worktree list is unreadable, we can't
+            # know what envs exist — reconciling a subset would silently
+            # leave drift, so surface this as a hard failure of `winter ws init`.
+            raise self._error_factory.from_git(
+                exc,
+                message=f"discovering existing worktrees failed for {first.name}",
+                cwd=first.main_path,
+            ) from exc
 
         names: list[str] = []
         source_main = first.main_path.resolve()

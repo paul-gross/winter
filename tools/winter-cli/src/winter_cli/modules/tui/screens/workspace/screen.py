@@ -8,9 +8,11 @@ from textual.screen import Screen
 from textual.containers import Center, Horizontal, Middle
 from textual.widgets import Footer, Header, LoadingIndicator, Static
 
+from winter_cli.modules.tui.error_log import ErrorLogService
 from winter_cli.modules.workspace.models import (
     FeatureEnvironmentOverview,
     FeatureEnvironmentWorktrees,
+    RepoError,
     StandaloneRepoStatus,
     Workspace,
 )
@@ -39,6 +41,7 @@ class WorkspaceScreen(Screen):
     BINDINGS = [
         Binding("r", "refresh", "Refresh"),
         Binding("s", "sync", "Sync"),
+        Binding("L", "open_log", "Log"),
         Binding("q", "quit", "Quit"),
         Binding("ctrl+k", "jump_prev", "Jump prev", show=False),
         Binding("ctrl+j", "jump_next", "Jump next", show=False),
@@ -52,6 +55,7 @@ class WorkspaceScreen(Screen):
         repo_factory: RepositoryFactory,
         workspace: Workspace,
         plugin_registry: PluginRegistry,
+        error_log: ErrorLogService,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -61,6 +65,7 @@ class WorkspaceScreen(Screen):
         self._repo_factory = repo_factory
         self._workspace = workspace
         self._plugin_registry = plugin_registry
+        self._error_log = error_log
         self._env_worktrees: dict[str, FeatureEnvironmentWorktrees] = {}
 
     def compose(self):
@@ -104,24 +109,70 @@ class WorkspaceScreen(Screen):
 
     @work(thread=True)
     def _refresh_data(self) -> None:
+        """Read every env and standalone repo, isolating failures per-source.
+
+        One broken repo would otherwise poison the entire refresh: the worker
+        bails on the first RepoError, _update_widgets never runs, and the
+        dashboard stays stuck on the loading splash. Catching at the env /
+        standalone-repo boundary keeps the rest of the dashboard responsive
+        while every individual failure still lands in the Log tab.
+        """
         self.app.call_from_thread(self._on_refresh_start)
         worktree_repo_decorators = list(self._plugin_registry.worktree_repo_decorators)
         environment_decorators = list(self._plugin_registry.environment_decorators)
-        project_repos = self._repo_factory.get_project_repos()
-        environments = self._workspace_repo.get_environments(self._workspace, project_repos)
+
+        try:
+            project_repos = self._repo_factory.get_project_repos()
+            environments = self._workspace_repo.get_environments(self._workspace, project_repos)
+        except RepoError as exc:
+            self._capture_error("WorkspaceScreen.refresh", exc)
+            self.app.call_from_thread(self._update_widgets, {}, [], [])
+            return
+
         env_worktrees_map: dict[str, FeatureEnvironmentWorktrees] = {}
         overviews: list[FeatureEnvironmentOverview] = []
         for env in environments:
-            env_status = self._workspace_svc.get_environment_status(env, project_repos, environment_decorators or None)
-            env_worktrees = self._workspace_svc.get_feature_environment_worktrees(env, project_repos)
-            env_worktrees_map[env.name] = env_worktrees
-            repo_statuses = self._workspace_svc.get_worktree_repo_statuses(env_worktrees, worktree_repo_decorators or None)
-            overviews.append(FeatureEnvironmentOverview(status=env_status, repo_statuses=repo_statuses))
-        singleton_statuses = [
-            self._repo_repo.get_standalone_status(r)
-            for r in [*self._repo_factory.get_singleton_repos(), *self._repo_factory.get_standalone_repos()]
-        ]
+            def _on_repo_error(wt, exc, env_name=env.name):
+                self._capture_error(f"WorkspaceScreen.refresh({env_name}/{wt.repository.name})", exc)
+            try:
+                env_status = self._workspace_svc.get_environment_status(
+                    env, project_repos, environment_decorators or None,
+                )
+                env_worktrees = self._workspace_svc.get_feature_environment_worktrees(env, project_repos)
+                env_worktrees_map[env.name] = env_worktrees
+                repo_statuses = self._workspace_svc.get_worktree_repo_statuses(
+                    env_worktrees,
+                    worktree_repo_decorators or None,
+                    on_repo_error=_on_repo_error,
+                )
+                overviews.append(FeatureEnvironmentOverview(status=env_status, repo_statuses=repo_statuses))
+            except RepoError as exc:
+                self._capture_error(f"WorkspaceScreen.refresh({env.name})", exc)
+
+        singleton_statuses: list[StandaloneRepoStatus] = []
+        for r in [*self._repo_factory.get_singleton_repos(), *self._repo_factory.get_standalone_repos()]:
+            try:
+                singleton_statuses.append(self._repo_repo.get_standalone_status(r))
+            except RepoError as exc:
+                self._capture_error(f"WorkspaceScreen.refresh(standalone:{r.name})", exc)
+
         self.app.call_from_thread(self._update_widgets, env_worktrees_map, overviews, singleton_statuses)
+
+    def _capture_error(self, location: str, exc: RepoError) -> None:
+        """Log a RepoError to the session log and toast (deduped) without crashing."""
+        entry, should_notify = self._error_log.record(location=location, exc=exc)
+        if should_notify:
+            self.app.call_from_thread(
+                self.app.notify,
+                f"{entry.message}\nPress L for log",
+                title="git error",
+                severity="error",
+                timeout=6,
+            )
+
+    def action_open_log(self) -> None:
+        app: WinterDashboardApp = self.app
+        app.push_screen(app.screen_factory.error_log_screen())
 
     def _on_refresh_start(self) -> None:
         try:
@@ -179,7 +230,10 @@ class WorkspaceScreen(Screen):
         env_worktrees = self._env_worktrees.get(name)
         if env_worktrees is None:
             return
-        self._workspace_svc.sync_env(env_worktrees)
+        try:
+            self._workspace_svc.sync_env(env_worktrees)
+        except RepoError as exc:
+            self._capture_error(f"WorkspaceScreen.sync({name})", exc)
         self._refresh_data()
 
     def on_data_table_cell_selected(self, event: FeatureWorktreesGrid.CellSelected) -> None:

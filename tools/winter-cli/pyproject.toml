@@ -24,3 +24,13 @@ packages = ["src/winter_cli"]
 
 [project.scripts]
 winter = "winter_cli.cli:cli"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

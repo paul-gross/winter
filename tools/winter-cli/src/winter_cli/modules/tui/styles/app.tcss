@@ -105,3 +105,23 @@ Footer {
 Header {
     dock: top;
 }
+
+ErrorLogScreen {
+    layout: vertical;
+}
+
+#error-log-table {
+    height: 50%;
+    margin: 0 1;
+}
+
+#error-log-detail {
+    height: 1fr;
+    margin: 0 1;
+    padding: 0 1;
+    border-top: solid $surface-lighten-2;
+}
+
+#error-log-detail-text {
+    width: 1fr;
+}
