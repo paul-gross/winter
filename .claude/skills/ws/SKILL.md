@@ -20,7 +20,8 @@ This workspace manages feature development through git worktrees. Here are the a
 - `/ws-pull [name]` — Pull remote commits into the local checkout
 - `/ws-push [name]` — Push local commits to the recorded upstream
 - `/ws-work <plan> [in <feature-environment>]` — Start working on a plan
-- `/ws-setup` — One-time setup: clone repos, create environments, configure workspace
+- `/ws-init [target]` — Non-interactive: apply declared config to the workspace, a feature environment, or a project repo
+- `/ws-setup` — Interactive configuration: clone repos, create environments, set git identity, wire up project rules
 
 For workspace status, use the `winter` CLI directly — no skill needed:
 - `winter dashboard` — interactive TUI overview
@@ -40,7 +41,8 @@ What would you like to do?
 | Push, send up, ship | `/ws-push [name]` |
 | Bring main into an env, sync env against main | `winter ws sync <name>` |
 | Work, implement, build, start a plan | `/ws-work <plan>` |
-| Setup, initialize workspace | `/ws-setup` |
+| Initialize, bring up after clone, make it work | `/ws-init [target]` |
+| Configure, declare new repo, set git identity | `/ws-setup` |
 
 Respond with a brief explanation and the exact command to run. For example:
 
@@ -49,6 +51,8 @@ Respond with a brief explanation and the exact command to run. For example:
 - "fetch alpha" → "To refresh refs for the alpha environment, run: `/ws-fetch alpha`"
 - "what's going on" → "For an overview, run: `winter dashboard` (or `winter ws list` for a quick list)."
 - "start user-notifications" → "To begin work on that plan, run: `/ws-work user-notifications`"
+- "I just cloned this, get it working" → "To apply your declared config across the workspace, run: `/ws-init`"
+- "bring up alpha after clone" → "To reconcile the alpha environment against your declared config, run: `/ws-init alpha`"
 
 If the intent is unclear, list the available skills and ask the user to clarify.
 
