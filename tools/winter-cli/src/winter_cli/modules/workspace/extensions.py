@@ -17,7 +17,7 @@ from winter_cli.modules.workspace.internal.managed_block import (
     strip_block,
 )
 from winter_cli.modules.workspace.internal.read_workspace_repository import resolve_env_index
-from winter_cli.modules.workspace.models import StandaloneRepository
+from winter_cli.modules.workspace.models import RepoError, StandaloneRepository
 
 EXT_MANIFEST = "winter-ext.toml"
 DEFAULT_SKILLS_DIRS = ("skills", ".claude/skills")
@@ -73,6 +73,10 @@ class ExtensionService:
     `.claude/agents/<prefix>-<dir>`. After all standalones are reconciled,
     `finalize_excludes` writes a marker-bracketed block per extension to the
     workspace `.git/info/exclude`.
+
+    Error-handling shape: each public entrypoint (`process`, the env-hook
+    orchestrators, the `finalize_*` writers) wraps once at the boundary and
+    routes `(RepoError, OSError)` through the reporter. Leaves raise.
     """
 
     def __init__(
@@ -102,43 +106,35 @@ class ExtensionService:
         if mode == AdoptExtensions.winter and not manifest_present:
             return True
 
-        manifest = self._load_manifest(repo, manifest_path if manifest_present else None, reporter)
-        if manifest is None:
-            return False
+        try:
+            manifest = self._load_manifest(repo, manifest_path if manifest_present else None)
+            skills_root = self._resolve_existing_dir(repo.path, manifest.skills_dirs)
+            agents_root = self._resolve_existing_dir(repo.path, manifest.agents_dirs)
 
-        skills_root = self._resolve_existing_dir(repo.path, manifest.skills_dirs)
-        agents_root = self._resolve_existing_dir(repo.path, manifest.agents_dirs)
+            self._validate_frontmatter(repo, skills_root, reporter, strict=mode == AdoptExtensions.winter)
 
-        if not self._validate_frontmatter(repo, skills_root, reporter, strict=mode == AdoptExtensions.winter):
-            return False
+            # Skills are always directories containing SKILL.md.
+            skill_links = self._symlink_entries(
+                source_root=skills_root,
+                target_root=self._config.workspace_root / ".claude" / "skills",
+                prefix=manifest.prefix,
+                include_dirs=True,
+                include_files=False,
+                kind="skill",
+            )
 
-        # Skills are always directories containing SKILL.md.
-        skill_links = self._symlink_entries(
-            source_root=skills_root,
-            target_root=self._config.workspace_root / ".claude" / "skills",
-            prefix=manifest.prefix,
-            kind="skill",
-            repo_name=repo.name,
-            reporter=reporter,
-            include_dirs=True,
-            include_files=False,
-        )
-        if skill_links is None:
-            return False
-
-        # Agents can be flat .md files or directories (nested-agents convention).
-        agent_links = self._symlink_entries(
-            source_root=agents_root,
-            target_root=self._config.workspace_root / ".claude" / "agents",
-            prefix=manifest.prefix,
-            kind="agent",
-            repo_name=repo.name,
-            reporter=reporter,
-            include_dirs=True,
-            include_files=True,
-            file_suffix=".md",
-        )
-        if agent_links is None:
+            # Agents can be flat .md files or directories (nested-agents convention).
+            agent_links = self._symlink_entries(
+                source_root=agents_root,
+                target_root=self._config.workspace_root / ".claude" / "agents",
+                prefix=manifest.prefix,
+                include_dirs=True,
+                include_files=True,
+                file_suffix=".md",
+                kind="agent",
+            )
+        except (RepoError, OSError) as exc:
+            reporter.repo_error(repo.name, str(exc))
             return False
 
         if skill_links or agent_links:
@@ -206,6 +202,7 @@ class ExtensionService:
         hook_name: str,
         reporter: IInitReporter,
     ) -> bool:
+        """Aggregate per-extension hook results. Each extension is its own wrap site."""
         if self._config.adopt_extensions == AdoptExtensions.none:
             return True
 
@@ -216,16 +213,29 @@ class ExtensionService:
             manifest_path = repo.path / EXT_MANIFEST
             if not self._fs.is_file(manifest_path):
                 continue
-            manifest = self._load_manifest(repo, manifest_path, reporter)
-            if manifest is None:
-                success = False
-                continue
-            hook = manifest.hooks.get(hook_name)
-            if not hook:
-                continue
-            if not self._run_hook(repo, manifest, hook, hook_name, env_root, env_name, reporter):
+            if not self._run_one_env_hook(repo, manifest_path, hook_name, env_root, env_name, reporter):
                 success = False
         return success
+
+    def _run_one_env_hook(
+        self,
+        repo: StandaloneRepository,
+        manifest_path: Path,
+        hook_name: str,
+        env_root: Path,
+        env_name: str,
+        reporter: IInitReporter,
+    ) -> bool:
+        try:
+            manifest = self._load_manifest(repo, manifest_path)
+            hook = manifest.hooks.get(hook_name)
+            if not hook:
+                return True
+            self._run_hook(repo, manifest, hook, hook_name, env_root, env_name, reporter)
+        except (RepoError, OSError) as exc:
+            reporter.repo_error(repo.name, str(exc))
+            return False
+        return True
 
     def _run_hook(
         self,
@@ -236,22 +246,18 @@ class ExtensionService:
         env_root: Path,
         env_name: str,
         reporter: IInitReporter,
-    ) -> bool:
+    ) -> None:
         script_path = (repo.path / hook).resolve()
         try:
             script_path.relative_to(repo.path.resolve())
-        except ValueError:
-            reporter.repo_error(
-                repo.name,
+        except ValueError as exc:
+            raise RepoError(
                 f"hook path `{hook}` escapes the extension directory; refusing to run",
-            )
-            return False
+            ) from exc
         if not self._fs.is_file(script_path):
-            reporter.repo_error(repo.name, f"hook `{hook}` not found at {script_path}")
-            return False
+            raise RepoError(f"hook `{hook}` not found at {script_path}")
         if not self._fs.access_x_ok(script_path):
-            reporter.repo_error(repo.name, f"hook `{hook}` is not executable")
-            return False
+            raise RepoError(f"hook `{hook}` is not executable")
 
         index = resolve_env_index(env_name)
         env = os.environ.copy()
@@ -274,17 +280,11 @@ class ExtensionService:
                     reporter.cmd_output_line(repo.name, line)
                 returncode = proc.wait()
         except OSError as exc:
-            reporter.repo_error(repo.name, f"hook {hook_name} — {exc}")
-            return False
+            raise RepoError(f"hook {hook_name} — {exc}") from exc
         reporter.cmd_completed(repo.name, label, returncode)
         if returncode != 0:
-            reporter.repo_error(
-                repo.name,
-                f"hook {hook_name} exited with code {returncode}",
-            )
-            return False
+            raise RepoError(f"hook {hook_name} exited with code {returncode}")
         reporter.repo_action(repo.name, str(env_root), "hook_ran", hook_name)
-        return True
 
     # ── Manifest ──────────────────────────────────────────────────────────
 
@@ -292,15 +292,13 @@ class ExtensionService:
         self,
         repo: StandaloneRepository,
         manifest_path: Path | None,
-        reporter: IInitReporter,
-    ) -> ExtensionManifest | None:
+    ) -> ExtensionManifest:
         data: dict = {}
         if manifest_path is not None:
             try:
                 data = self._config_file_reader.load(manifest_path)
             except ConfigFileReadError as exc:
-                reporter.repo_error(repo.name, f"reading {EXT_MANIFEST} — {exc}")
-                return None
+                raise RepoError(f"reading {EXT_MANIFEST} — {exc}") from exc
 
         # Prefix resolution: workspace override > manifest prefix > manifest name > repo dir name.
         prefix = repo.prefix or data.get("prefix") or data.get("name") or repo.name
@@ -328,16 +326,16 @@ class ExtensionService:
         skills_root: Path | None,
         reporter: IInitReporter,
         strict: bool,
-    ) -> bool:
+    ) -> None:
         """Ensure SKILL.md files don't override the symlinked directory name.
 
         Claude Code lets the `name` frontmatter field override the directory name
         when discovering skills — that defeats the prefix-by-symlink design. In
-        strict (`winter`) mode, refuse to install if any SKILL.md sets `name`.
-        In `all` mode, the user opts into a less-curated experience, so we only warn.
+        strict (`winter`) mode, raise so the wrap site fails the install. In
+        `all` mode, the user opts into a less-curated experience, so we only warn.
         """
         if skills_root is None or not self._fs.is_dir(skills_root):
-            return True
+            return
 
         offenders: list[str] = []
         for entry in sorted(self._fs.iterdir(skills_root)):
@@ -352,7 +350,7 @@ class ExtensionService:
             offenders.append(f"{entry.name}/SKILL.md sets `name: {name_field}`")
 
         if not offenders:
-            return True
+            return
 
         msg = (
             f"extension {repo.name} has SKILL.md files with frontmatter `name` set, "
@@ -361,11 +359,9 @@ class ExtensionService:
             f"Offenders: {'; '.join(offenders)}"
         )
         if strict:
-            reporter.repo_error(repo.name, msg)
-            return False
+            raise RepoError(msg)
         # adopt_extensions = "all": warn via repo_action so the user sees it but install proceeds.
         reporter.repo_action(repo.name, str(repo.path), "extension_warning", msg)
-        return True
 
     def _extract_frontmatter_name(self, skill_md: Path) -> str | None:
         """Return the `name` field from YAML frontmatter, or None if not set.
@@ -417,20 +413,18 @@ class ExtensionService:
         target_root: Path,
         prefix: str,
         kind: str,
-        repo_name: str,
-        reporter: IInitReporter,
         include_dirs: bool,
         include_files: bool,
         file_suffix: str = "",
-    ) -> list[str] | None:
+    ) -> list[str]:
         """Create one symlink per matching entry in `source_root`.
 
         For directory entries the symlink keeps the directory name (`<prefix>-<dirname>`).
         For file entries with a matching suffix the symlink keeps the full filename
         (`<prefix>-<filename>`), so a `.md` extension is preserved.
 
-        Returns the list of created/existing symlink names on success, or None on error.
-        Returns an empty list if `source_root` is None or doesn't exist.
+        Returns the list of created/existing symlink names. Empty when `source_root`
+        is None or doesn't exist. Raises `RepoError` on conflict or I/O failure.
         """
         if source_root is None or not self._fs.is_dir(source_root):
             return []
@@ -466,23 +460,19 @@ class ExtensionService:
                         self._fs.unlink(link_path)
                         self._fs.symlink_to(link_path, relative_target)
                     except OSError as exc:
-                        reporter.repo_error(repo_name, f"refresh {kind} symlink {link_name}: {exc}")
-                        return None
+                        raise RepoError(f"refresh {kind} symlink {link_name}: {exc}") from exc
                 linked.append(link_name)
                 continue
 
             if self._fs.exists(link_path):
-                reporter.repo_error(
-                    repo_name,
+                raise RepoError(
                     f"cannot create {kind} symlink {link_name}: path exists and is not a symlink",
                 )
-                return None
 
             try:
                 self._fs.symlink_to(link_path, relative_target)
             except OSError as exc:
-                reporter.repo_error(repo_name, f"create {kind} symlink {link_name}: {exc}")
-                return None
+                raise RepoError(f"create {kind} symlink {link_name}: {exc}") from exc
             linked.append(link_name)
 
         return linked
@@ -516,54 +506,42 @@ class ExtensionService:
 
         exclude_path = self._config.workspace_root / ".git" / "info" / "exclude"
 
-        existing = ""
-        if self._fs.exists(exclude_path):
-            try:
-                existing = self._fs.read_text(exclude_path)
-            except OSError as exc:
-                reporter.repo_error(
-                    CLAUDEMD_BLOCK_NAME,
-                    f"reading .git/info/exclude — {exc}",
-                )
-                return False
-
-        eligible: list[tuple[str, list[str]]] = []
-        for repo in repos:
-            resolved = self._resolve_for_excludes(repo)
-            if resolved is None:
-                continue
-            relative, prefix = resolved
-            begin = GITIGNORE_BEGIN.format(name=repo.name)
-            end = GITIGNORE_END.format(name=repo.name)
-            lines = [begin, f"/{relative}/"]
-            if prefix is not None:
-                lines.extend(
-                    [
-                        f".claude/skills/{prefix}-*",
-                        f".claude/agents/{prefix}-*",
-                    ]
-                )
-            lines.append(end)
-            eligible.append((repo.name, lines))
-
-        eligible_names = {name for name, _ in eligible}
-        new_content = self._strip_orphan_managed_blocks(existing, eligible_names)
-        for block_name, desired_lines in eligible:
-            begin = GITIGNORE_BEGIN.format(name=block_name)
-            end = GITIGNORE_END.format(name=block_name)
-            new_content = replace_or_append_block(new_content, begin, end, desired_lines)
-
-        if new_content == existing:
-            return True
-
-        self._fs.mkdir(exclude_path.parent, parents=True, exist_ok=True)
         try:
+            existing = self._fs.read_text(exclude_path) if self._fs.exists(exclude_path) else ""
+
+            eligible: list[tuple[str, list[str]]] = []
+            for repo in repos:
+                resolved = self._resolve_for_excludes(repo)
+                if resolved is None:
+                    continue
+                relative, prefix = resolved
+                begin = GITIGNORE_BEGIN.format(name=repo.name)
+                end = GITIGNORE_END.format(name=repo.name)
+                lines = [begin, f"/{relative}/"]
+                if prefix is not None:
+                    lines.extend(
+                        [
+                            f".claude/skills/{prefix}-*",
+                            f".claude/agents/{prefix}-*",
+                        ]
+                    )
+                lines.append(end)
+                eligible.append((repo.name, lines))
+
+            eligible_names = {name for name, _ in eligible}
+            new_content = self._strip_orphan_managed_blocks(existing, eligible_names)
+            for block_name, desired_lines in eligible:
+                begin = GITIGNORE_BEGIN.format(name=block_name)
+                end = GITIGNORE_END.format(name=block_name)
+                new_content = replace_or_append_block(new_content, begin, end, desired_lines)
+
+            if new_content == existing:
+                return True
+
+            self._fs.mkdir(exclude_path.parent, parents=True, exist_ok=True)
             self._fs.write_text(exclude_path, new_content)
         except OSError as exc:
-            reporter.repo_error(
-                CLAUDEMD_BLOCK_NAME,
-                f"writing .git/info/exclude — {exc}",
-            )
+            reporter.repo_error(CLAUDEMD_BLOCK_NAME, f".git/info/exclude — {exc}")
             return False
 
         detail = ", ".join(sorted(eligible_names)) if eligible_names else "cleared"
@@ -695,21 +673,13 @@ class ExtensionService:
         ]
         new_winter = "\n".join(winter_lines) + "\n"
 
-        existing_winter = ""
-        if self._fs.exists(winter_path):
-            try:
-                existing_winter = self._fs.read_text(winter_path)
-            except OSError as exc:
-                reporter.repo_error(CLAUDEMD_BLOCK_NAME, f"reading {CLAUDEMD_WINTER_FILENAME} — {exc}")
-                return False
-
-        if new_winter == existing_winter:
-            return True
-
         try:
+            existing_winter = self._fs.read_text(winter_path) if self._fs.exists(winter_path) else ""
+            if new_winter == existing_winter:
+                return True
             self._fs.write_text(winter_path, new_winter)
         except OSError as exc:
-            reporter.repo_error(CLAUDEMD_BLOCK_NAME, f"writing {CLAUDEMD_WINTER_FILENAME} — {exc}")
+            reporter.repo_error(CLAUDEMD_BLOCK_NAME, f"{CLAUDEMD_WINTER_FILENAME} — {exc}")
             return False
 
         detail = ", ".join(name for name, _ in sorted(eligible))

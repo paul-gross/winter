@@ -25,6 +25,10 @@ class DestroyService:
     `git worktree remove`; any directory left behind under the env path is
     cleared by an `rmtree` pass at the end so stray files don't strand the
     env after a partial earlier teardown.
+
+    Error-handling shape: `destroy_env` is the aggregator and collects per-phase
+    booleans. Each per-repo and per-step helper wraps `(RepoError, OSError)`
+    once at its boundary; leaves raise.
     """
 
     def __init__(
@@ -126,14 +130,8 @@ class DestroyService:
 
         # Phase 4: drop the env directory itself (covers .winter.env and any
         # stray files from project setup steps).
-        if self._fs.exists(env_root):
-            try:
-                self._fs.rmtree(env_root)
-            except OSError as exc:
-                reporter.repo_error(name, f"removing env directory — {exc}")
-                success = False
-            else:
-                reporter.repo_action(name, str(env_root), "env_removed")
+        if not self._remove_env_directory(name, env_root, reporter):
+            success = False
 
         # Phase 5: strip the matching `winter-dir/<env>` block from the workspace
         # `.git/info/exclude`. Init writes this block in `_write_workspace_self_exclude`;
@@ -154,28 +152,34 @@ class DestroyService:
         marker = GITIGNORE_BEGIN.format(name=f"winter-dir/{env_name}")
         return marker in content
 
+    def _remove_env_directory(self, name: str, env_root: Path, reporter: IInitReporter) -> bool:
+        if not self._fs.exists(env_root):
+            return True
+        try:
+            self._fs.rmtree(env_root)
+        except OSError as exc:
+            reporter.repo_error(name, f"removing env directory — {exc}")
+            return False
+        reporter.repo_action(name, str(env_root), "env_removed")
+        return True
+
     def _strip_self_exclude(self, env_name: str, reporter: IInitReporter) -> bool:
         exclude_path = self._config.workspace_root / ".git" / "info" / "exclude"
         if not self._fs.exists(exclude_path):
             return True
 
-        try:
-            existing = self._fs.read_text(exclude_path)
-        except OSError as exc:
-            reporter.repo_error(env_name, f"reading .git/info/exclude — {exc}")
-            return False
-
         block_name = f"winter-dir/{env_name}"
         begin = GITIGNORE_BEGIN.format(name=block_name)
         end = GITIGNORE_END.format(name=block_name)
-        new_content = strip_block(existing, begin, end)
-        if new_content == existing:
-            return True
 
         try:
+            existing = self._fs.read_text(exclude_path)
+            new_content = strip_block(existing, begin, end)
+            if new_content == existing:
+                return True
             self._fs.write_text(exclude_path, new_content)
         except OSError as exc:
-            reporter.repo_error(env_name, f"writing .git/info/exclude — {exc}")
+            reporter.repo_error(env_name, f".git/info/exclude — {exc}")
             return False
 
         reporter.repo_action(
@@ -193,21 +197,17 @@ class DestroyService:
         force: bool,
         reporter: IInitReporter,
     ) -> bool:
-        if not self._fs.exists(repo.main_path):
-            # Source checkout is gone too — fall back to a plain rmtree so we
-            # don't leave the env half-removed.
-            try:
-                self._fs.rmtree(worktree_path)
-            except OSError as exc:
-                reporter.repo_error(repo.name, f"removing worktree dir — {exc}")
-                return False
-            reporter.repo_action(repo.name, str(worktree_path), "worktree_removed", "no source checkout")
-            return True
-
         try:
+            if not self._fs.exists(repo.main_path):
+                # Source checkout is gone too — fall back to a plain rmtree so we
+                # don't leave the env half-removed.
+                self._fs.rmtree(worktree_path)
+                reporter.repo_action(repo.name, str(worktree_path), "worktree_removed", "no source checkout")
+                return True
+
             self._git_repo.remove_worktree(repo.main_path, worktree_path, force)
-        except RepoError as exc:
-            reporter.repo_error(repo.name, f"git worktree remove failed — {exc}")
+        except (RepoError, OSError) as exc:
+            reporter.repo_error(repo.name, str(exc))
             return False
         reporter.repo_action(repo.name, str(worktree_path), "worktree_removed")
         return True

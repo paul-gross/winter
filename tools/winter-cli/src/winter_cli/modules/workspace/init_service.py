@@ -56,6 +56,11 @@ class InitService:
     config, so repeated runs are safe. Each run reapplies git identity, git-exclude
     entries, and setup commands — these are the knobs that drift most often between
     config edits.
+
+    Error-handling shape: each per-repo task and each workspace-level step has one
+    wrap-site that catches `(RepoError, OSError)` and routes the failure through
+    the reporter. Leaves either return their result or raise. The public reconcile
+    entrypoints are aggregators — they collect per-step booleans and never `try`.
     """
 
     def __init__(
@@ -226,21 +231,22 @@ class InitService:
         repo_path = repo.main_path
         label = repo.name
 
-        if not self._fs.exists(repo_path):
-            if not repo.url:
-                reporter.repo_error(label, "no `url` declared in config; cannot clone")
-                return False
-            if not self._clone(repo.url, repo.name, repo_path, reporter):
-                return False
-            reporter.repo_action(label, str(repo_path), "cloned")
-        else:
-            reporter.repo_action(label, str(repo_path), "exists")
+        try:
+            if not self._fs.exists(repo_path):
+                if not repo.url:
+                    raise RepoError("no `url` declared in config; cannot clone")
+                self._git_repo.clone(repo.url, repo_path)
+                reporter.repo_action(label, str(repo_path), "cloned")
+            else:
+                reporter.repo_action(label, str(repo_path), "exists")
 
-        if not self._apply_identity(repo_path, reporter, label):
+            self._apply_identity(repo_path)
+            self._write_excludes(repo_path, repo, reporter, str(repo_path))
+            self._run_cmds(repo_path, repo, reporter)
+        except (RepoError, OSError) as exc:
+            reporter.repo_error(label, str(exc))
             return False
-        if not self._write_excludes(repo_path, repo, reporter, str(repo_path)):
-            return False
-        return self._run_cmds(repo_path, repo, reporter)
+        return True
 
     # ── Standalone repo ───────────────────────────────────────────────────
 
@@ -252,39 +258,24 @@ class InitService:
         repo_path = repo.path
         label = repo.name
 
-        if not self._fs.exists(repo_path):
-            if not repo.url:
-                reporter.repo_error(label, "no `url` declared in config; cannot clone")
-                return False
-            self._fs.mkdir(repo_path.parent, parents=True, exist_ok=True)
-            if not self._clone(repo.url, repo.name, repo_path, reporter):
-                return False
-            reporter.repo_action(label, str(repo_path), "cloned")
-        else:
-            reporter.repo_action(label, str(repo_path), "exists")
+        try:
+            if not self._fs.exists(repo_path):
+                if not repo.url:
+                    raise RepoError("no `url` declared in config; cannot clone")
+                self._fs.mkdir(repo_path.parent, parents=True, exist_ok=True)
+                self._git_repo.clone(repo.url, repo_path)
+                reporter.repo_action(label, str(repo_path), "cloned")
+            else:
+                reporter.repo_action(label, str(repo_path), "exists")
 
-        if not self._apply_identity(repo_path, reporter, label):
-            return False
-        if not self._write_excludes(repo_path, repo, reporter, str(repo_path)):
-            return False
-        if not self._run_cmds(repo_path, repo, reporter):
+            self._apply_identity(repo_path)
+            self._write_excludes(repo_path, repo, reporter, str(repo_path))
+            self._run_cmds(repo_path, repo, reporter)
+        except (RepoError, OSError) as exc:
+            reporter.repo_error(label, str(exc))
             return False
 
         return self._extension_svc.process(repo, reporter)
-
-    def _clone(
-        self,
-        url: str,
-        name: str,
-        repo_path: Path,
-        reporter: IInitReporter,
-    ) -> bool:
-        try:
-            self._git_repo.clone(url, repo_path)
-            return True
-        except RepoError as exc:
-            reporter.repo_error(name, f"clone failed — {exc}")
-            return False
 
     # ── Feature worktree ──────────────────────────────────────────────────
 
@@ -299,27 +290,28 @@ class InitService:
         location = str(worktree_path)
         label = repo.name
 
-        if not self._fs.exists(worktree_path):
-            if not self._create_git_worktree(repo, branch_name, worktree_path, reporter):
-                return False
-            reporter.repo_action(label, location, "worktree_created")
-        else:
-            reporter.repo_action(label, location, "exists")
+        try:
+            if not self._fs.exists(worktree_path):
+                self._create_git_worktree(repo, branch_name, worktree_path)
+                reporter.repo_action(label, location, "worktree_created")
+            else:
+                reporter.repo_action(label, location, "exists")
 
-        if not self._apply_identity(worktree_path, reporter, label):
+            self._apply_identity(worktree_path)
+            self._write_excludes(worktree_path, repo, reporter, location)
+            self._configure_pinned_tracking(repo, worktree_path, reporter)
+            self._run_cmds(worktree_path, repo, reporter)
+        except (RepoError, OSError) as exc:
+            reporter.repo_error(label, str(exc))
             return False
-        if not self._write_excludes(worktree_path, repo, reporter, location):
-            return False
-        if not self._configure_pinned_tracking(repo, worktree_path, reporter):
-            return False
-        return self._run_cmds(worktree_path, repo, reporter)
+        return True
 
     def _configure_pinned_tracking(
         self,
         repo: ProjectRepository,
         worktree_path: Path,
         reporter: IInitReporter,
-    ) -> bool:
+    ) -> None:
         """Wire a pinned worktree to push and pull against `origin/<main-branch>`.
 
         `winter ws connect` deliberately skips pinned repos — they never participate
@@ -330,21 +322,17 @@ class InitService:
         target the main branch. Idempotent: a no-op when both are already in place.
         """
         if not repo.pinned:
-            return True
+            return
         desired = f"origin/{repo.main_branch}"
         changes: list[str] = []
-        try:
-            current = self._git_repo.get_tracking_branch(worktree_path)
-            if current != desired:
-                self._git_repo.set_upstream_to(worktree_path, desired)
-                changes.append(desired)
+        current = self._git_repo.get_tracking_branch(worktree_path)
+        if current != desired:
+            self._git_repo.set_upstream_to(worktree_path, desired)
+            changes.append(desired)
 
-            if self._git_repo.get_push_default(worktree_path) != "upstream":
-                self._git_repo.set_push_default_upstream(worktree_path)
-                changes.append("push.default=upstream")
-        except RepoError as exc:
-            reporter.repo_error(repo.name, f"configure pinned tracking — {exc}")
-            return False
+        if self._git_repo.get_push_default(worktree_path) != "upstream":
+            self._git_repo.set_push_default_upstream(worktree_path)
+            changes.append("push.default=upstream")
 
         if changes:
             reporter.repo_action(
@@ -353,25 +341,18 @@ class InitService:
                 "pinned_tracking_set",
                 ", ".join(changes),
             )
-        return True
 
     def _create_git_worktree(
         self,
         repo: ProjectRepository,
         branch_name: str,
         worktree_path: Path,
-        reporter: IInitReporter,
-    ) -> bool:
-        try:
-            existing_heads = set(self._git_repo.get_local_branches(repo.main_path))
-            if branch_name in existing_heads:
-                self._git_repo.add_worktree(repo.main_path, worktree_path, branch_name)
-            else:
-                self._git_repo.add_worktree(repo.main_path, worktree_path, branch_name, base_branch=repo.main_branch)
-            return True
-        except RepoError as exc:
-            reporter.repo_error(repo.name, f"git worktree add failed — {exc}")
-            return False
+    ) -> None:
+        existing_heads = set(self._git_repo.get_local_branches(repo.main_path))
+        if branch_name in existing_heads:
+            self._git_repo.add_worktree(repo.main_path, worktree_path, branch_name)
+        else:
+            self._git_repo.add_worktree(repo.main_path, worktree_path, branch_name, base_branch=repo.main_branch)
 
     def _write_workspace_self_exclude(
         self,
@@ -396,23 +377,15 @@ class InitService:
         if not self._fs.exists(self._config.workspace_root / ".git"):
             return True
 
-        existing = ""
-        if self._fs.exists(exclude_path):
-            try:
-                existing = self._fs.read_text(exclude_path)
-            except OSError as exc:
-                reporter.repo_error("winter", f"reading .git/info/exclude — {exc}")
-                return False
-
-        new_content = replace_or_append_block(existing, begin, end, desired_lines)
-        if new_content == existing:
-            return True
-
         try:
+            existing = self._fs.read_text(exclude_path) if self._fs.exists(exclude_path) else ""
+            new_content = replace_or_append_block(existing, begin, end, desired_lines)
+            if new_content == existing:
+                return True
             self._fs.mkdir(exclude_path.parent, parents=True, exist_ok=True)
             self._fs.write_text(exclude_path, new_content)
         except OSError as exc:
-            reporter.repo_error("winter", f"writing .git/info/exclude — {exc}")
+            reporter.repo_error("winter", f".git/info/exclude — {exc}")
             return False
 
         reporter.repo_action(
@@ -449,27 +422,19 @@ class InitService:
         ]
 
         env_path = env_root / WINTER_ENV_FILE
-        existing = ""
-        if self._fs.exists(env_path):
-            try:
-                existing = self._fs.read_text(env_path)
-            except OSError as exc:
-                reporter.repo_error("winter", f"reading {WINTER_ENV_FILE} — {exc}")
-                return False
-
-        new_content = self._replace_or_prepend_block(
-            existing,
-            WINTER_ENV_BEGIN,
-            WINTER_ENV_END,
-            block_lines,
-        )
-        if new_content == existing:
-            return True
-
         try:
+            existing = self._fs.read_text(env_path) if self._fs.exists(env_path) else ""
+            new_content = self._replace_or_prepend_block(
+                existing,
+                WINTER_ENV_BEGIN,
+                WINTER_ENV_END,
+                block_lines,
+            )
+            if new_content == existing:
+                return True
             self._fs.write_text(env_path, new_content)
         except OSError as exc:
-            reporter.repo_error("winter", f"writing {WINTER_ENV_FILE} — {exc}")
+            reporter.repo_error("winter", f"{WINTER_ENV_FILE} — {exc}")
             return False
 
         reporter.repo_action(
@@ -517,21 +482,11 @@ class InitService:
 
     # ── Shared reconcile steps ────────────────────────────────────────────
 
-    def _apply_identity(
-        self,
-        repo_path: Path,
-        reporter: IInitReporter,
-        repo_name: str,
-    ) -> bool:
+    def _apply_identity(self, repo_path: Path) -> None:
         identity = self._config.git_identity
         if identity is None:
-            return True
-        try:
-            self._git_repo.set_user_identity(repo_path, identity.name, identity.email)
-            return True
-        except (RepoError, OSError) as exc:
-            reporter.repo_error(repo_name, f"git identity — {exc}")
-            return False
+            return
+        self._git_repo.set_user_identity(repo_path, identity.name, identity.email)
 
     def _write_excludes(
         self,
@@ -539,18 +494,14 @@ class InitService:
         repo: IWorkspaceRepository,
         reporter: IInitReporter,
         location: str,
-    ) -> bool:
+    ) -> None:
         entries = list(self._config.git_excludes) + list(repo.git_excludes)
         if not entries:
-            return True
+            return
 
         exclude_path = self._exclude_path(repo_path)
         if exclude_path is None:
-            reporter.repo_error(
-                repo.name,
-                f"could not locate .git/info/exclude at {repo_path}",
-            )
-            return False
+            raise RepoError(f"could not locate .git/info/exclude at {repo_path}")
 
         existing: list[str] = []
         if self._fs.exists(exclude_path):
@@ -566,7 +517,7 @@ class InitService:
             existing_set.add(entry)
 
         if not appended:
-            return True
+            return
 
         self._fs.mkdir(exclude_path.parent, parents=True, exist_ok=True)
         new_lines: list[str] = []
@@ -577,7 +528,6 @@ class InitService:
         self._fs.append_lines(exclude_path, new_lines)
 
         reporter.repo_action(repo.name, location, "excludes_updated", ", ".join(appended))
-        return True
 
     def _exclude_path(self, repo_path: Path) -> Path | None:
         """Locate .git/info/exclude, following the `.git` file pointer used by worktrees."""
@@ -604,9 +554,9 @@ class InitService:
         repo_path: Path,
         repo: IWorkspaceRepository,
         reporter: IInitReporter,
-    ) -> bool:
+    ) -> None:
         if not repo.cmd:
-            return True
+            return
         env = os.environ.copy()
         env.update(TUI_SUPPRESS_ENV)
         for command in repo.cmd:
@@ -617,13 +567,7 @@ class InitService:
                         reporter.cmd_output_line(repo.name, line)
                     returncode = proc.wait()
             except OSError as exc:
-                reporter.repo_error(repo.name, f"`{command}` — {exc}")
-                return False
+                raise RepoError(f"`{command}` — {exc}") from exc
             reporter.cmd_completed(repo.name, command, returncode)
             if returncode != 0:
-                reporter.repo_error(
-                    repo.name,
-                    f"`{command}` exited with code {returncode}",
-                )
-                return False
-        return True
+                raise RepoError(f"`{command}` exited with code {returncode}")

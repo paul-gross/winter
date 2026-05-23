@@ -23,6 +23,7 @@ from winter_cli.modules.workspace.extensions import ExtensionService
 from winter_cli.modules.workspace.init_service import InitService
 from winter_cli.modules.workspace.internal.git_ops_service import GitOpsService
 from winter_cli.modules.workspace.internal.repo_error_factory import RepoErrorFactory
+from winter_cli.modules.workspace.models import RepoError
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
 
 WORKSPACE_ROOT = Path("/ws")
@@ -244,3 +245,61 @@ def test_run_per_repo_caps_parallelism_via_git_ops_executor(
     assert all(workers == GitOpsService.PARALLELISM for workers in observed_max_workers), (
         f"expected each fan-out capped at {GitOpsService.PARALLELISM}, got {observed_max_workers}"
     )
+
+
+class _ExplodingGitRepository(FakeGitRepository):
+    """FakeGitRepository whose clone raises RepoError — exercises the per-repo wrap site."""
+
+    def clone(self, url: str, dest: Path) -> None:  # type: ignore[override]
+        raise RepoError(f"boom cloning {url}")
+
+
+def test_per_repo_wrap_catches_leaf_repo_error(
+    workspace_config: WorkspaceConfig, init_reporter: FakeInitReporter
+) -> None:
+    """A RepoError raised by a leaf (clone) is caught at the per-repo wrap site:
+    reporter sees one repo_error, the entrypoint returns False, no exception escapes."""
+    fs = FakeFilesystem()
+    fs.directories.add(WORKSPACE_ROOT / ".git" / "info")
+    fs.files[WORKSPACE_ROOT / ".git" / "info" / "exclude"] = ""
+    subprocess = FakeSubprocessRunner()
+    git = _ExplodingGitRepository()
+
+    svc = _service(workspace_config, fs, subprocess, git)
+    ok = svc.reconcile_projects(init_reporter)
+
+    assert ok is False
+    error_messages = [error for _, error in init_reporter.errors]
+    assert any("boom cloning" in msg for msg in error_messages)
+    # The wrap site reports exactly once per failing repo — no duplicate
+    # catch-log-rethrow chains.
+    demo_errors = [msg for repo, msg in init_reporter.errors if repo == "demo"]
+    assert len(demo_errors) == 1
+    # target_completed still fires with success=False.
+    assert ("projects/", False) in init_reporter.targets_completed
+
+
+def test_run_cmds_failure_surfaces_via_wrap_site(
+    workspace_config: WorkspaceConfig, init_reporter: FakeInitReporter
+) -> None:
+    """A non-zero command exit raises from `_run_cmds` and is caught at the
+    per-repo wrap site — the entrypoint returns False with a single error."""
+    cfg = workspace_config.model_copy(
+        update={
+            "project_repos": [ProjectRepositoryConfig(name="demo", url="git@example.com:org/demo.git", cmd=["false"])]
+        }
+    )
+    demo_path = WORKSPACE_ROOT / "projects" / "demo"
+    fs = FakeFilesystem(directories=[WORKSPACE_ROOT / "projects", demo_path])
+    fs.directories.add(WORKSPACE_ROOT / ".git" / "info")
+    fs.files[WORKSPACE_ROOT / ".git" / "info" / "exclude"] = ""
+    subprocess = FakeSubprocessRunner(popen_responses={"false": ([], 1)})
+    git = FakeGitRepository()
+
+    svc = _service(cfg, fs, subprocess, git)
+    ok = svc.reconcile_projects(init_reporter)
+
+    assert ok is False
+    demo_errors = [msg for repo, msg in init_reporter.errors if repo == "demo"]
+    assert len(demo_errors) == 1
+    assert "exited with code 1" in demo_errors[0]
