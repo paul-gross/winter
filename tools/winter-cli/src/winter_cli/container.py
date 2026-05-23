@@ -63,7 +63,12 @@ class Container(containers.DeclarativeContainer):
     # fake that returns a fixed path.
     workspace_locator = providers.Singleton(CwdWorkspaceLocator)
 
-    workspace_config_svc = providers.Singleton(WorkspaceConfigService)
+    workspace_config_svc = providers.Singleton(
+        WorkspaceConfigService,
+        workspace_locator=workspace_locator,
+        fs=fs,
+        config_file_reader=config_file_reader,
+    )
     workspace_config = providers.Singleton(workspace_config_svc.provided.load.call())
 
     write_winter_config_repo = providers.Factory(

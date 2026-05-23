@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
 
 from winter_cli.config.models import (
@@ -12,6 +11,9 @@ from winter_cli.config.models import (
     StandaloneRepositoryConfig,
     WorkspaceConfig,
 )
+from winter_cli.config.workspace_locator import IWorkspaceLocator
+from winter_cli.core.config_file import IConfigFileReader
+from winter_cli.core.filesystem import IFilesystemReader
 from winter_cli.util import deep_merge
 
 WINTER_DIR = ".winter"
@@ -20,8 +22,25 @@ LOCAL_CONFIG_FILE = "config.local.toml"
 
 
 class WorkspaceConfigService:
+    """Loads `.winter/config.toml` (+ optional local overlay) into a WorkspaceConfig.
+
+    Depends on Protocol seams for I/O: `IWorkspaceLocator` for root discovery,
+    `IConfigFileReader` for TOML parsing, and `IFilesystemReader` for the
+    singleton-detection probes (`product/`, `ai/harness/.git`).
+    """
+
+    def __init__(
+        self,
+        workspace_locator: IWorkspaceLocator,
+        fs: IFilesystemReader,
+        config_file_reader: IConfigFileReader,
+    ) -> None:
+        self._workspace_locator = workspace_locator
+        self._fs = fs
+        self._config_file_reader = config_file_reader
+
     def load(self) -> WorkspaceConfig:
-        workspace_root = self._find_workspace_root()
+        workspace_root = self._workspace_locator.find_workspace_root()
         raw = self._read_config(workspace_root / WINTER_DIR / CONFIG_FILE)
         overlay = self._read_config(workspace_root / WINTER_DIR / LOCAL_CONFIG_FILE)
         merged = deep_merge(raw, overlay)
@@ -29,9 +48,9 @@ class WorkspaceConfigService:
         singletons: list[SingletonRepository] = [
             SingletonRepository(name=workspace_root.name, type=SingletonType.workspace),
         ]
-        if (workspace_root / "product").is_dir():
+        if self._fs.is_dir(workspace_root / "product"):
             singletons.append(SingletonRepository(name="product", type=SingletonType.product))
-        if (workspace_root / "ai" / "harness" / ".git").exists():
+        if self._fs.exists(workspace_root / "ai" / "harness" / ".git"):
             singletons.append(SingletonRepository(name="harness", type=SingletonType.harness))
 
         project_repos: list[ProjectRepositoryConfig] = []
@@ -103,20 +122,10 @@ class WorkspaceConfigService:
             standalone_repos=standalone_repos,
         )
 
-    def _find_workspace_root(self) -> Path:
-        current = Path.cwd()
-        for directory in [current, *current.parents]:
-            if (directory / WINTER_DIR).is_dir():
-                return directory
-        raise RuntimeError(
-            f"Could not find workspace root from {current}. Expected to find a {WINTER_DIR}/ directory in a parent."
-        )
-
     def _read_config(self, path: Path) -> dict:
-        if not path.is_file():
+        if not self._fs.is_file(path):
             return {}
-        with path.open("rb") as f:
-            return tomllib.load(f)
+        return self._config_file_reader.load(path)
 
     @staticmethod
     def _validate_relative_path(value: str, label: str | None) -> None:
