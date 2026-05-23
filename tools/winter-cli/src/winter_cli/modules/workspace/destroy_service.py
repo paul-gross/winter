@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from winter_cli.config.models import WorkspaceConfig
@@ -14,6 +15,8 @@ from winter_cli.modules.workspace.internal.managed_block import (
 )
 from winter_cli.modules.workspace.models import ProjectRepository, RepoError
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
+
+logger = logging.getLogger(__name__)
 
 
 class DestroyService:
@@ -53,10 +56,12 @@ class DestroyService:
         dry_run: bool,
         reporter: IInitReporter,
     ) -> bool:
+        logger.info("destroy_env start: name=%s force=%s strict=%s dry_run=%s", name, force, strict, dry_run)
         reporter.target_started(name)
 
         env_root = self._config.workspace_root / name
         if not self._fs.is_dir(env_root):
+            logger.warning("destroy_env: env directory not found at %s", env_root)
             reporter.repo_error(name, f"env directory not found at {env_root}")
             reporter.target_completed(name, False)
             return False
@@ -73,6 +78,7 @@ class DestroyService:
                 if not self._git_repo.is_worktree_clean(wt_path):
                     dirty.append(repo.name)
             if dirty:
+                logger.warning("destroy_env: refusing — dirty worktrees in %s: %s", name, ", ".join(dirty))
                 reporter.repo_error(
                     name,
                     "refusing to destroy — dirty worktrees: " + ", ".join(dirty) + ". Re-run with --force to bypass.",

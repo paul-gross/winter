@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 
 from winter_cli.config.models import AdoptExtensions, WorkspaceConfig
@@ -17,6 +18,8 @@ from winter_cli.modules.workspace.internal.managed_block import (
     strip_block,
 )
 from winter_cli.modules.workspace.models import RepoError, StandaloneRepository
+
+logger = logging.getLogger(__name__)
 
 
 class ExtensionExcludeService:
@@ -51,7 +54,9 @@ class ExtensionExcludeService:
         Orphan blocks for extensions no longer present are stripped automatically;
         if no extensions are eligible, every winter-managed block is removed.
         """
+        logger.info("finalize_excludes start: %d repo(s)", len(repos))
         if self._config.adopt_extensions == AdoptExtensions.none:
+            logger.info("finalize_excludes: adopt_extensions=none, skipping")
             return True
 
         exclude_path = self._config.workspace_root / ".git" / "info" / "exclude"
@@ -89,6 +94,7 @@ class ExtensionExcludeService:
             self._fs.mkdir(exclude_path.parent, parents=True, exist_ok=True)
             self._fs.write_text(exclude_path, new_content)
         except OSError as exc:
+            logger.warning("finalize_excludes: write failed at %s — %s", exclude_path, exc)
             reporter.repo_error(CLAUDEMD_BLOCK_NAME, f".git/info/exclude — {exc}")
             return False
 

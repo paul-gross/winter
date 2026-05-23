@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from winter_cli.modules.workspace.extension_manifest import (
 )
 from winter_cli.modules.workspace.init_reporter import IInitReporter
 from winter_cli.modules.workspace.models import RepoError, StandaloneRepository
+
+logger = logging.getLogger(__name__)
 
 
 class ExtensionHookService:
@@ -105,7 +108,9 @@ class ExtensionHookService:
         reporter: IInitReporter,
     ) -> bool:
         """Aggregate per-extension hook results. Each extension is its own wrap site."""
+        logger.info("run %s hooks: env=%s repos=%d", hook_name, env_name, len(repos))
         if self._config.adopt_extensions == AdoptExtensions.none:
+            logger.info("%s: adopt_extensions=none, skipping", hook_name)
             return True
 
         success = True
@@ -116,6 +121,7 @@ class ExtensionHookService:
             if not self._fs.is_file(manifest_path):
                 continue
             if not self._run_one_env_hook(repo, manifest_path, hook_name, env_root, env_name, reporter):
+                logger.warning("%s failed for extension %s", hook_name, repo.name)
                 success = False
         return success
 

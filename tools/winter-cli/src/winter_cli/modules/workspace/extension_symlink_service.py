@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from winter_cli.modules.workspace.extension_manifest import (
 )
 from winter_cli.modules.workspace.init_reporter import IInitReporter
 from winter_cli.modules.workspace.models import RepoError, StandaloneRepository
+
+logger = logging.getLogger(__name__)
 
 
 class ExtensionSymlinkService:
@@ -42,6 +45,7 @@ class ExtensionSymlinkService:
         repo: StandaloneRepository,
         reporter: IInitReporter,
     ) -> bool:
+        logger.info("process symlinks: repo=%s", repo.name)
         mode = self._config.adopt_extensions
         if mode == AdoptExtensions.none:
             return True
@@ -50,6 +54,7 @@ class ExtensionSymlinkService:
         manifest_present = self._fs.is_file(manifest_path)
 
         if mode == AdoptExtensions.winter and not manifest_present:
+            logger.info("process symlinks: %s skipped (winter mode, no manifest)", repo.name)
             return True
 
         try:
@@ -90,6 +95,7 @@ class ExtensionSymlinkService:
             )
             self._prune_stale_symlinks(agents_target, manifest.prefix, set(agent_links), kind="agent")
         except (RepoError, OSError) as exc:
+            logger.warning("process symlinks: failed for %s — %s", repo.name, exc)
             reporter.repo_error(repo.name, str(exc))
             return False
 

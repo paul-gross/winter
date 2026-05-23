@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from winter_cli.modules.workspace.models import (
     CheckoutResult,
     EnvCheckoutReport,
@@ -8,6 +10,8 @@ from winter_cli.modules.workspace.models import (
     RepoCheckoutOutcome,
 )
 from winter_cli.modules.workspace.repo_repository import IWriteRepoRepository
+
+logger = logging.getLogger(__name__)
 
 
 class EnvCheckoutService:
@@ -22,6 +26,7 @@ class EnvCheckoutService:
         self._repo_repo = repo_repo
 
     def connect_env(self, env_worktrees: FeatureEnvironmentWorktrees, feature_branch: str) -> int:
+        logger.info("connect_env: env=%s feature_branch=%s", env_worktrees.environment.name, feature_branch)
         count = 0
         for wt in env_worktrees.worktrees:
             if wt.repository.pinned:
@@ -32,6 +37,7 @@ class EnvCheckoutService:
         return count
 
     def disconnect_env(self, env_worktrees: FeatureEnvironmentWorktrees) -> int:
+        logger.info("disconnect_env: env=%s", env_worktrees.environment.name)
         count = 0
         for wt in env_worktrees.worktrees:
             if wt.repository.pinned:
@@ -54,6 +60,12 @@ class EnvCheckoutService:
         Phase 2 wires upstream tracking and resets the Greek-letter branch to
         the local `origin/<feature_branch>` ref in each repo that has it.
         """
+        logger.info(
+            "checkout_env: env=%s feature_branch=%s force=%s",
+            env_worktrees.environment.name,
+            feature_branch,
+            force,
+        )
         remote_ref = f"origin/{feature_branch}"
         targets = [wt for wt in env_worktrees.worktrees if not wt.repository.pinned]
 
@@ -89,6 +101,10 @@ class EnvCheckoutService:
             passing.append(wt)
 
         if refused:
+            logger.warning(
+                "checkout_env: aborting — refused repos: %s",
+                ", ".join(o.repo_name for o in refused),
+            )
             return EnvCheckoutReport(
                 env=env_worktrees.environment.name,
                 feature_branch=feature_branch,

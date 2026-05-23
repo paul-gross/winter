@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import re
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from winter_cli.modules.workspace.extension_exclude_service import ExtensionExcl
 from winter_cli.modules.workspace.git_repository import IGitRepository
 from winter_cli.modules.workspace.init_reporter import IInitReporter
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
+
+logger = logging.getLogger(__name__)
 
 _BLOCK_BEGIN_RE = re.compile(r"^# >>> ([^/]+?) \(managed by winter\)$")
 _BLOCK_PATH_RE = re.compile(r"^/(.+?)/?$")
@@ -48,15 +51,19 @@ class PruneService:
         self._git_repo = git_repo
 
     def find_orphans(self) -> list[PruneOrphan]:
+        logger.info("find_orphans start")
         orphans: list[PruneOrphan] = []
         orphans.extend(self._find_orphan_project_clones())
         orphans.extend(self._find_orphan_standalone_clones())
         orphans.extend(self._find_broken_symlinks())
+        logger.info("find_orphans done: %d orphan(s)", len(orphans))
         return orphans
 
     def remove_orphan(self, orphan: PruneOrphan) -> None:
         if not orphan.safe_to_remove:
+            logger.warning("remove_orphan: refusing unsafe orphan %s (%s)", orphan.path, orphan.notes)
             raise RuntimeError(f"refusing to remove unsafe orphan: {orphan.path} ({orphan.notes})")
+        logger.info("remove_orphan: %s (%s)", orphan.path, orphan.kind)
         if self._fs.is_symlink(orphan.path):
             self._fs.unlink(orphan.path)
         elif self._fs.is_dir(orphan.path):
