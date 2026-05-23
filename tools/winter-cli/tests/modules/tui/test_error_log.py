@@ -8,10 +8,10 @@ def _err(
     message: str = "boom",
     *,
     subcommand: str = "fetch",
-    args: tuple[str, ...] = ("origin",),
+    cmd_args: tuple[str, ...] = ("origin",),
     cwd: str = "/tmp",
 ) -> RepoError:
-    return RepoError(message, subcommand=subcommand, args=args, cwd=cwd, exit_code=128, stderr="oops")
+    return RepoError(message, subcommand=subcommand, cmd_args=cmd_args, cwd=cwd, exit_code=128, stderr="oops")
 
 
 def test_record_appends_entry():
@@ -19,7 +19,7 @@ def test_record_appends_entry():
     entry, _ = svc.record(location="WorkspaceScreen.refresh", exc=_err())
     assert entry.location == "WorkspaceScreen.refresh"
     assert entry.subcommand == "fetch"
-    assert entry.args == ("origin",)
+    assert entry.cmd_args == ("origin",)
     assert entry.stderr == "oops"
     assert len(svc.entries()) == 1
 
@@ -36,8 +36,8 @@ def test_should_notify_dedupes_same_fingerprint():
 
 def test_should_notify_distinct_fingerprints_both_notify():
     svc = ErrorLogService(notify_ttl_seconds=60)
-    _, n1 = svc.record(location="A", exc=_err(args=("origin",)))
-    _, n2 = svc.record(location="A", exc=_err(args=("upstream",)))
+    _, n1 = svc.record(location="A", exc=_err(cmd_args=("origin",)))
+    _, n2 = svc.record(location="A", exc=_err(cmd_args=("upstream",)))
     assert n1 is True
     assert n2 is True
 

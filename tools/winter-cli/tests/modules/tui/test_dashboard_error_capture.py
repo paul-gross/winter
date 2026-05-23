@@ -19,7 +19,7 @@ from winter_cli.modules.workspace.models import RepoError
 def _err(message: str = "boom", **overrides) -> RepoError:
     defaults = {
         "subcommand": "fetch",
-        "args": ("origin",),
+        "cmd_args": ("origin",),
         "cwd": "/tmp/r",
         "exit_code": 128,
         "stderr": "connection closed",
@@ -41,7 +41,7 @@ async def test_log_screen_displays_injected_errors():
         log.clear()
         log.record(location="WorkspaceScreen.refresh", exc=_err("err A"))
         log.record(location="WorkspaceScreen.refresh", exc=_err("err A"))  # dup fingerprint
-        log.record(location="WorkspaceScreen.sync(alpha)", exc=_err("err B", args=("upstream",)))
+        log.record(location="WorkspaceScreen.sync(alpha)", exc=_err("err B", cmd_args=("upstream",)))
         await pilot.press("L")
         await pilot.pause(0.3)
         assert isinstance(app.screen, ErrorLogScreen)
@@ -96,7 +96,7 @@ async def test_refresh_swallows_repo_error_into_log():
         # Inject a failure into the read path. The worker thread catches
         # RepoError via the wrapper added in issue/7.
         def boom(*args, **kwargs):
-            raise _err("synthetic refresh failure", subcommand="status", args=())
+            raise _err("synthetic refresh failure", subcommand="status", cmd_args=())
 
         screen._workspace_repo.get_environments = boom  # type: ignore[assignment]
 

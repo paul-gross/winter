@@ -39,14 +39,14 @@ class RepoErrorFactory:
         """
         command = list(exc.command) if exc.command else []
         subcommand = command[1] if len(command) > 1 else None
-        args = tuple(str(a) for a in command[2:]) if len(command) > 2 else ()
+        cmd_args = tuple(str(a) for a in command[2:]) if len(command) > 2 else ()
         stderr_raw = exc.stderr if isinstance(exc.stderr, str) else ""
         stderr = stderr_raw.strip()
         cwd_str = str(cwd)
         err = RepoError(
             message,
             subcommand=subcommand,
-            args=args,
+            cmd_args=cmd_args,
             cwd=cwd_str,
             exit_code=getattr(exc, "status", None),
             stderr=stderr,
@@ -55,7 +55,7 @@ class RepoErrorFactory:
             "%s — git %s %s (cwd=%s exit=%s) %s",
             message,
             subcommand or "",
-            " ".join(args),
+            " ".join(cmd_args),
             cwd_str,
             err.exit_code,
             stderr,

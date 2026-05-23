@@ -70,7 +70,7 @@ def test_fetch_raises_structured_repo_error_on_missing_remote(
 
     err = ei.value
     assert err.subcommand == "fetch"
-    assert "origin" in err.args
+    assert "origin" in err.cmd_args
     assert err.cwd is not None and "demo" in err.cwd
     assert err.exit_code is not None and err.exit_code != 0
     assert err.stderr

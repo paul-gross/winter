@@ -10,7 +10,7 @@ def test_repo_error_str_includes_structured_fields():
     err = RepoError(
         "fetch failed",
         subcommand="fetch",
-        args=("origin",),
+        cmd_args=("origin",),
         cwd="/tmp/repo",
         exit_code=128,
         stderr="Could not read from remote repository.",
@@ -37,7 +37,7 @@ def test_factory_from_git_extracts_fields():
     err = factory.from_git(exc, message="fetch failed for X", cwd="/tmp/r")
     assert isinstance(err, RepoError)
     assert err.subcommand == "fetch"
-    assert err.args == ("origin",)
+    assert err.cmd_args == ("origin",)
     assert err.cwd == "/tmp/r"
     assert err.exit_code == 128
     assert "connection closed" in err.stderr

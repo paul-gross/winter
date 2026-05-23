@@ -148,7 +148,7 @@ class RepoError(Exception):
         message: str,
         *,
         subcommand: str | None = None,
-        args: tuple[str, ...] = (),
+        cmd_args: tuple[str, ...] = (),
         cwd: str | None = None,
         exit_code: int | None = None,
         stderr: str = "",
@@ -156,7 +156,7 @@ class RepoError(Exception):
         super().__init__(message)
         self.message = message
         self.subcommand = subcommand
-        self.args = tuple(args)
+        self.cmd_args = tuple(cmd_args)
         self.cwd = cwd
         self.exit_code = exit_code
         self.stderr = stderr
@@ -164,7 +164,7 @@ class RepoError(Exception):
     def __str__(self) -> str:
         parts: list[str] = [self.message]
         if self.subcommand:
-            cmd = " ".join(("git", self.subcommand, *self.args))
+            cmd = " ".join(("git", self.subcommand, *self.cmd_args))
             parts.append(f"  $ {cmd}")
         if self.cwd:
             parts.append(f"  cwd: {self.cwd}")

@@ -20,7 +20,7 @@ class ErrorLogEntry:
     location: str
     message: str
     subcommand: str | None
-    args: tuple[str, ...]
+    cmd_args: tuple[str, ...]
     cwd: str | None
     exit_code: int | None
     stderr: str
@@ -32,7 +32,7 @@ class ErrorLogEntry:
     def command_line(self) -> str:
         if not self.subcommand:
             return ""
-        return " ".join(("$ git", self.subcommand, *self.args))
+        return " ".join(("$ git", self.subcommand, *self.cmd_args))
 
 
 class ErrorLogService:
@@ -65,12 +65,12 @@ class ErrorLogService:
             location=location,
             message=exc.message,
             subcommand=exc.subcommand,
-            args=exc.args,
+            cmd_args=exc.cmd_args,
             cwd=exc.cwd,
             exit_code=exc.exit_code,
             stderr=exc.stderr,
         )
-        fingerprint = (exc.subcommand, exc.args, exc.cwd)
+        fingerprint = (exc.subcommand, exc.cmd_args, exc.cwd)
         with self._lock:
             self._entries.append(entry)
             last = self._last_notify.get(fingerprint)
