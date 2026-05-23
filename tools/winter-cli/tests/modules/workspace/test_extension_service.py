@@ -148,6 +148,70 @@ def test_process_rejects_skill_md_with_name_frontmatter(
     assert any("name: override-name" in msg for msg in error_messages)
 
 
+def test_process_skips_readme_and_docs_subdir_in_agents(
+    workspace_config: WorkspaceConfig, init_reporter: FakeInitReporter
+) -> None:
+    """`agents/README.md` and `agents/docs/` (no AGENT.md) must not get symlinked."""
+    fs = FakeFilesystem()
+    config_files: dict[Path, dict] = {}
+    ext = _seed_extension(fs, config_files)
+    agents_dir = ext.path / "agents"
+    fs.files[agents_dir / "README.md"] = "# Agent conventions\n"
+    docs_dir = agents_dir / "docs"
+    fs.directories.add(docs_dir)
+    fs.files[docs_dir / "default-principles.md"] = "# principles\n"
+    svc = _service(workspace_config, fs, config_files)
+
+    assert svc.process(ext, init_reporter) is True
+
+    agents_target = WORKSPACE_ROOT / ".claude" / "agents"
+    assert fs.is_symlink(agents_target / "my-ext-reviewer.md")
+    assert not fs.is_symlink(agents_target / "my-ext-README.md")
+    assert not fs.is_symlink(agents_target / "my-ext-docs")
+
+
+def test_process_symlinks_nested_agent_directory_with_marker(
+    workspace_config: WorkspaceConfig, init_reporter: FakeInitReporter
+) -> None:
+    """Directories carrying `AGENT.md` are nested agents and get a directory symlink."""
+    fs = FakeFilesystem()
+    config_files: dict[Path, dict] = {}
+    ext = _seed_extension(fs, config_files)
+    nested = ext.path / "agents" / "nested"
+    fs.directories.add(nested)
+    fs.files[nested / "AGENT.md"] = "---\n---\n# nested\n"
+    svc = _service(workspace_config, fs, config_files)
+
+    assert svc.process(ext, init_reporter) is True
+    assert fs.is_symlink(WORKSPACE_ROOT / ".claude" / "agents" / "my-ext-nested")
+
+
+def test_process_prunes_stale_prefixed_symlinks(
+    workspace_config: WorkspaceConfig, init_reporter: FakeInitReporter
+) -> None:
+    """A `<prefix>-*` symlink whose source entry no longer exists is removed.
+
+    Captures the historical `wf-blizzard` case: a directory symlink left
+    behind after the source `agents/blizzard/` was deleted upstream.
+    Symlinks owned by a different prefix must survive.
+    """
+    fs = FakeFilesystem()
+    config_files: dict[Path, dict] = {}
+    ext = _seed_extension(fs, config_files)
+
+    agents_target = WORKSPACE_ROOT / ".claude" / "agents"
+    fs.directories.add(agents_target)
+    fs.symlinks[agents_target / "my-ext-blizzard"] = Path("../../my-ext/agents/blizzard")
+    fs.symlinks[agents_target / "other-ext-keep.md"] = Path("../../other-ext/agents/keep.md")
+
+    svc = _service(workspace_config, fs, config_files)
+
+    assert svc.process(ext, init_reporter) is True
+    assert not fs.is_symlink(agents_target / "my-ext-blizzard")
+    assert fs.is_symlink(agents_target / "other-ext-keep.md")
+    assert fs.is_symlink(agents_target / "my-ext-reviewer.md")
+
+
 def test_finalize_excludes_writes_one_block_per_extension(
     workspace_config: WorkspaceConfig, init_reporter: FakeInitReporter
 ) -> None:

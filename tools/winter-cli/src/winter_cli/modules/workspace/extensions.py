@@ -114,25 +114,35 @@ class ExtensionService:
             self._validate_frontmatter(repo, skills_root, reporter, strict=mode == AdoptExtensions.winter)
 
             # Skills are always directories containing SKILL.md.
+            skills_target = self._config.workspace_root / ".claude" / "skills"
             skill_links = self._symlink_entries(
                 source_root=skills_root,
-                target_root=self._config.workspace_root / ".claude" / "skills",
+                target_root=skills_target,
                 prefix=manifest.prefix,
                 include_dirs=True,
                 include_files=False,
                 kind="skill",
+                require_marker_file="SKILL.md",
             )
+            self._prune_stale_symlinks(skills_target, manifest.prefix, set(skill_links), kind="skill")
 
-            # Agents can be flat .md files or directories (nested-agents convention).
+            # Agents are flat .md files (one per agent). Directories are
+            # reserved for the nested-agent convention and must carry an
+            # AGENT.md marker; bare doc directories (e.g. `agents/docs/`) and
+            # `README.md` files at the agents root are skipped.
+            agents_target = self._config.workspace_root / ".claude" / "agents"
             agent_links = self._symlink_entries(
                 source_root=agents_root,
-                target_root=self._config.workspace_root / ".claude" / "agents",
+                target_root=agents_target,
                 prefix=manifest.prefix,
                 include_dirs=True,
                 include_files=True,
                 file_suffix=".md",
                 kind="agent",
+                exclude_filenames=("README.md",),
+                require_marker_file="AGENT.md",
             )
+            self._prune_stale_symlinks(agents_target, manifest.prefix, set(agent_links), kind="agent")
         except (RepoError, OSError) as exc:
             reporter.repo_error(repo.name, str(exc))
             return False
@@ -416,12 +426,20 @@ class ExtensionService:
         include_dirs: bool,
         include_files: bool,
         file_suffix: str = "",
+        exclude_filenames: tuple[str, ...] = (),
+        require_marker_file: str | None = None,
     ) -> list[str]:
         """Create one symlink per matching entry in `source_root`.
 
         For directory entries the symlink keeps the directory name (`<prefix>-<dirname>`).
         For file entries with a matching suffix the symlink keeps the full filename
         (`<prefix>-<filename>`), so a `.md` extension is preserved.
+
+        `exclude_filenames` skips matching file entries by exact basename — used to
+        keep `README.md` out of the installed agent set. `require_marker_file`
+        restricts directory entries to those containing that marker file (e.g.
+        `SKILL.md`, `AGENT.md`), so doc-only subdirectories don't masquerade as
+        skills or nested agents.
 
         Returns the list of created/existing symlink names. Empty when `source_root`
         is None or doesn't exist. Raises `RepoError` on conflict or I/O failure.
@@ -436,11 +454,15 @@ class ExtensionService:
             if self._fs.is_dir(entry):
                 if not include_dirs:
                     continue
+                if require_marker_file is not None and not self._fs.is_file(entry / require_marker_file):
+                    continue
                 link_name = f"{prefix}-{entry.name}"
             elif self._fs.is_file(entry):
                 if not include_files:
                     continue
                 if file_suffix and not entry.name.endswith(file_suffix):
+                    continue
+                if entry.name in exclude_filenames:
                     continue
                 link_name = f"{prefix}-{entry.name}"
             else:
@@ -485,6 +507,42 @@ class ExtensionService:
         invalidate the links.
         """
         return Path(os.path.relpath(target, link_dir))
+
+    def _prune_stale_symlinks(
+        self,
+        target_root: Path,
+        prefix: str,
+        live_names: set[str],
+        kind: str,
+    ) -> None:
+        """Remove any `<prefix>-*` symlinks in `target_root` that weren't created this pass.
+
+        Catches two cases:
+          - the source entry was deleted upstream (broken symlink like the
+            historical `wf-blizzard` after the source `agents/blizzard/`
+            directory went away);
+          - the source entry still exists but is now filtered out by the
+            install pass (README.md, AGENT.md-less directories).
+
+        Only symlinks whose name starts with `f"{prefix}-"` are considered —
+        each extension owns its prefix, so this won't touch other extensions'
+        links or user-placed files. Raises `RepoError` on I/O failure.
+        """
+        if not self._fs.is_dir(target_root):
+            return
+
+        prefix_with_dash = f"{prefix}-"
+        for entry in sorted(self._fs.iterdir(target_root)):
+            if not self._fs.is_symlink(entry):
+                continue
+            if not entry.name.startswith(prefix_with_dash):
+                continue
+            if entry.name in live_names:
+                continue
+            try:
+                self._fs.unlink(entry)
+            except OSError as exc:
+                raise RepoError(f"prune stale {kind} symlink {entry.name}: {exc}") from exc
 
     # ── Workspace exclude management ──────────────────────────────────────
 
