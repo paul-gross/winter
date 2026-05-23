@@ -23,16 +23,18 @@ from winter_cli.modules.workspace.models import (
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
 from winter_cli.modules.workspace.workspace_service import WorkspaceService
 
-
-@pytest.fixture
-def workspace(tmp_path: Path) -> Workspace:
-    return Workspace(root_path=tmp_path, session_prefix="t", main_branch="main")
+WORKSPACE_ROOT = Path("/ws")
 
 
 @pytest.fixture
-def workspace_config(tmp_path: Path) -> WorkspaceConfig:
+def workspace() -> Workspace:
+    return Workspace(root_path=WORKSPACE_ROOT, session_prefix="t", main_branch="main")
+
+
+@pytest.fixture
+def workspace_config() -> WorkspaceConfig:
     return WorkspaceConfig(
-        workspace_root=tmp_path,
+        workspace_root=WORKSPACE_ROOT,
         session_prefix="t",
         main_branch="main",
         adopt_extensions=AdoptExtensions.winter,
