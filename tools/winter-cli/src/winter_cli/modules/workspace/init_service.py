@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-import git
-
 from winter_cli.config.models import WorkspaceConfig
+from winter_cli.core.filesystem import IFilesystemWriter
+from winter_cli.core.subprocess_runner import ISubprocessRunner
 from winter_cli.modules.workspace.extensions import ExtensionService
+from winter_cli.modules.workspace.git_repository import IGitRepository
 from winter_cli.modules.workspace.init_reporter import IInitReporter
 from winter_cli.modules.workspace.internal.managed_block import (
     GITIGNORE_BEGIN,
@@ -17,10 +17,10 @@ from winter_cli.modules.workspace.internal.managed_block import (
     replace_or_append_block,
 )
 from winter_cli.modules.workspace.internal.read_workspace_repository import resolve_env_index
-from winter_cli.modules.workspace.internal.repo_error_factory import RepoErrorFactory
 from winter_cli.modules.workspace.models import (
     IWorkspaceRepository,
     ProjectRepository,
+    RepoError,
     StandaloneRepository,
 )
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
@@ -62,12 +62,16 @@ class InitService:
         config: WorkspaceConfig,
         repo_factory: RepositoryFactory,
         extension_svc: ExtensionService,
-        error_factory: RepoErrorFactory,
+        fs: IFilesystemWriter,
+        subprocess_runner: ISubprocessRunner,
+        git_repo: IGitRepository,
     ) -> None:
         self._config = config
         self._repo_factory = repo_factory
         self._extension_svc = extension_svc
-        self._error_factory = error_factory
+        self._fs = fs
+        self._subprocess = subprocess_runner
+        self._git_repo = git_repo
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -76,7 +80,7 @@ class InitService:
         reporter.target_started(target)
 
         projects_dir = self._config.workspace_root / "projects"
-        projects_dir.mkdir(parents=True, exist_ok=True)
+        self._fs.mkdir(projects_dir, parents=True, exist_ok=True)
 
         success = self._write_workspace_self_exclude("projects", reporter)
 
@@ -101,7 +105,7 @@ class InitService:
         # standalones that were successfully reconciled (i.e. exist on disk now).
         # Per-repo reconcile may have failed for some, but cloned-and-present
         # extensions still belong in both managed sections.
-        present_repos = [r for r in repos if r.path.exists()]
+        present_repos = [r for r in repos if self._fs.exists(r.path)]
         if not self._extension_svc.finalize_claudemd(present_repos, reporter):
             success = False
         if not self._extension_svc.finalize_excludes(present_repos, reporter):
@@ -115,14 +119,14 @@ class InitService:
         success = True
 
         env_root = self._config.workspace_root / name
-        env_root.mkdir(parents=True, exist_ok=True)
+        self._fs.mkdir(env_root, parents=True, exist_ok=True)
 
         if not self._write_workspace_self_exclude(name, reporter):
             success = False
 
         ready_repos = []
         for repo in self._repo_factory.get_project_repos():
-            if not repo.main_path.exists():
+            if not self._fs.exists(repo.main_path):
                 reporter.repo_error(
                     repo.name,
                     f"source checkout missing at {repo.main_path}. Run `winter ws init` first.",
@@ -189,28 +193,15 @@ class InitService:
             return []
 
         first = project_repos[0]
-        if not first.main_path.exists():
+        if not self._fs.exists(first.main_path):
             return []
 
-        try:
-            r = git.Repo(str(first.main_path))
-            lines = r.git.worktree("list", "--porcelain").splitlines()
-        except git.GitCommandError as exc:
-            # If the source checkout's worktree list is unreadable, we can't
-            # know what envs exist — reconciling a subset would silently
-            # leave drift, so surface this as a hard failure of `winter ws init`.
-            raise self._error_factory.from_git(
-                exc,
-                message=f"discovering existing worktrees failed for {first.name}",
-                cwd=first.main_path,
-            ) from exc
+        worktree_paths = self._git_repo.list_worktrees(first.main_path)
 
         names: list[str] = []
         source_main = first.main_path.resolve()
-        for line in lines:
-            if not line.startswith("worktree "):
-                continue
-            worktree_path = Path(line[len("worktree ") :]).resolve()
+        for raw in worktree_paths:
+            worktree_path = raw.resolve()
             if worktree_path == source_main:
                 continue
             # worktree path is <workspace>/<name>/<repo_name>; we want <name>
@@ -230,7 +221,7 @@ class InitService:
         repo_path = repo.main_path
         label = repo.name
 
-        if not repo_path.exists():
+        if not self._fs.exists(repo_path):
             if not repo.url:
                 reporter.repo_error(label, "no `url` declared in config; cannot clone")
                 return False
@@ -256,11 +247,11 @@ class InitService:
         repo_path = repo.path
         label = repo.name
 
-        if not repo_path.exists():
+        if not self._fs.exists(repo_path):
             if not repo.url:
                 reporter.repo_error(label, "no `url` declared in config; cannot clone")
                 return False
-            repo_path.parent.mkdir(parents=True, exist_ok=True)
+            self._fs.mkdir(repo_path.parent, parents=True, exist_ok=True)
             if not self._clone(repo.url, repo.name, repo_path, reporter):
                 return False
             reporter.repo_action(label, str(repo_path), "cloned")
@@ -284,9 +275,9 @@ class InitService:
         reporter: IInitReporter,
     ) -> bool:
         try:
-            git.Repo.clone_from(url, str(repo_path))
+            self._git_repo.clone(url, repo_path)
             return True
-        except git.GitCommandError as exc:
+        except RepoError as exc:
             reporter.repo_error(name, f"clone failed — {exc}")
             return False
 
@@ -303,7 +294,7 @@ class InitService:
         location = str(worktree_path)
         label = repo.name
 
-        if not worktree_path.exists():
+        if not self._fs.exists(worktree_path):
             if not self._create_git_worktree(repo, branch_name, worktree_path, reporter):
                 return False
             reporter.repo_action(label, location, "worktree_created")
@@ -338,21 +329,15 @@ class InitService:
         desired = f"origin/{repo.main_branch}"
         changes: list[str] = []
         try:
-            r = git.Repo(str(worktree_path))
-
-            try:
-                current = r.active_branch.tracking_branch()
-            except TypeError:
-                current = None
-            if current is None or current.name != desired:
-                r.git.branch("--set-upstream-to", desired)
+            current = self._git_repo.get_tracking_branch(worktree_path)
+            if current != desired:
+                self._git_repo.set_upstream_to(worktree_path, desired)
                 changes.append(desired)
 
-            with r.config_writer() as cw:
-                if cw.get_value("push", "default", "") != "upstream":
-                    cw.set_value("push", "default", "upstream")
-                    changes.append("push.default=upstream")
-        except (git.InvalidGitRepositoryError, git.NoSuchPathError, git.GitCommandError) as exc:
+            if self._git_repo.get_push_default(worktree_path) != "upstream":
+                self._git_repo.set_push_default_upstream(worktree_path)
+                changes.append("push.default=upstream")
+        except RepoError as exc:
             reporter.repo_error(repo.name, f"configure pinned tracking — {exc}")
             return False
 
@@ -373,21 +358,13 @@ class InitService:
         reporter: IInitReporter,
     ) -> bool:
         try:
-            source = git.Repo(str(repo.main_path))
-            # If branch already exists locally, just attach the worktree to it.
-            existing_heads = {h.name for h in source.heads}
+            existing_heads = set(self._git_repo.get_local_branches(repo.main_path))
             if branch_name in existing_heads:
-                source.git.worktree("add", str(worktree_path), branch_name)
+                self._git_repo.add_worktree(repo.main_path, worktree_path, branch_name)
             else:
-                source.git.worktree(
-                    "add",
-                    str(worktree_path),
-                    "-b",
-                    branch_name,
-                    repo.main_branch,
-                )
+                self._git_repo.add_worktree(repo.main_path, worktree_path, branch_name, base_branch=repo.main_branch)
             return True
-        except git.GitCommandError as exc:
+        except RepoError as exc:
             reporter.repo_error(repo.name, f"git worktree add failed — {exc}")
             return False
 
@@ -411,13 +388,13 @@ class InitService:
         desired_lines = [begin, f"/{dir_name}/", end]
 
         exclude_path = self._config.workspace_root / ".git" / "info" / "exclude"
-        if not (self._config.workspace_root / ".git").exists():
+        if not self._fs.exists(self._config.workspace_root / ".git"):
             return True
 
         existing = ""
-        if exclude_path.exists():
+        if self._fs.exists(exclude_path):
             try:
-                existing = exclude_path.read_text()
+                existing = self._fs.read_text(exclude_path)
             except OSError as exc:
                 reporter.repo_error("winter", f"reading .git/info/exclude — {exc}")
                 return False
@@ -427,8 +404,8 @@ class InitService:
             return True
 
         try:
-            exclude_path.parent.mkdir(parents=True, exist_ok=True)
-            exclude_path.write_text(new_content)
+            self._fs.mkdir(exclude_path.parent, parents=True, exist_ok=True)
+            self._fs.write_text(exclude_path, new_content)
         except OSError as exc:
             reporter.repo_error("winter", f"writing .git/info/exclude — {exc}")
             return False
@@ -468,9 +445,9 @@ class InitService:
 
         env_path = env_root / WINTER_ENV_FILE
         existing = ""
-        if env_path.exists():
+        if self._fs.exists(env_path):
             try:
-                existing = env_path.read_text()
+                existing = self._fs.read_text(env_path)
             except OSError as exc:
                 reporter.repo_error("winter", f"reading {WINTER_ENV_FILE} — {exc}")
                 return False
@@ -485,7 +462,7 @@ class InitService:
             return True
 
         try:
-            env_path.write_text(new_content)
+            self._fs.write_text(env_path, new_content)
         except OSError as exc:
             reporter.repo_error("winter", f"writing {WINTER_ENV_FILE} — {exc}")
             return False
@@ -545,12 +522,9 @@ class InitService:
         if identity is None:
             return True
         try:
-            r = git.Repo(str(repo_path))
-            with r.config_writer(config_level="repository") as cw:
-                cw.set_value("user", "name", identity.name)
-                cw.set_value("user", "email", identity.email)
+            self._git_repo.set_user_identity(repo_path, identity.name, identity.email)
             return True
-        except (git.InvalidGitRepositoryError, git.NoSuchPathError, OSError) as exc:
+        except (RepoError, OSError) as exc:
             reporter.repo_error(repo_name, f"git identity — {exc}")
             return False
 
@@ -574,8 +548,8 @@ class InitService:
             return False
 
         existing: list[str] = []
-        if exclude_path.exists():
-            existing = exclude_path.read_text().splitlines()
+        if self._fs.exists(exclude_path):
+            existing = self._fs.read_text(exclude_path).splitlines()
 
         existing_set = {line.strip() for line in existing if line.strip()}
         appended: list[str] = []
@@ -589,33 +563,32 @@ class InitService:
         if not appended:
             return True
 
-        exclude_path.parent.mkdir(parents=True, exist_ok=True)
-        with exclude_path.open("a") as f:
-            if existing and not existing[-1].endswith("\n"):
-                f.write("\n")
-            f.write("# winter-managed\n")
-            for entry in appended:
-                f.write(entry + "\n")
+        self._fs.mkdir(exclude_path.parent, parents=True, exist_ok=True)
+        new_lines: list[str] = []
+        if existing and not existing[-1].endswith("\n"):
+            new_lines.append("")  # ensure separator before our marker
+        new_lines.append("# winter-managed")
+        new_lines.extend(appended)
+        self._fs.append_lines(exclude_path, new_lines)
 
         reporter.repo_action(repo.name, location, "excludes_updated", ", ".join(appended))
         return True
 
-    @staticmethod
-    def _exclude_path(repo_path: Path) -> Path | None:
+    def _exclude_path(self, repo_path: Path) -> Path | None:
         """Locate .git/info/exclude, following the `.git` file pointer used by worktrees."""
         git_dir = repo_path / ".git"
-        if git_dir.is_dir():
+        if self._fs.is_dir(git_dir):
             return git_dir / "info" / "exclude"
-        if git_dir.is_file():
-            contents = git_dir.read_text().strip()
+        if self._fs.is_file(git_dir):
+            contents = self._fs.read_text(git_dir).strip()
             if contents.startswith("gitdir:"):
                 resolved = Path(contents.split(":", 1)[1].strip())
                 if not resolved.is_absolute():
                     resolved = (repo_path / resolved).resolve()
                 # For worktrees, common info/ lives under the main .git directory.
                 common_dir = resolved / "commondir"
-                if common_dir.is_file():
-                    common_rel = common_dir.read_text().strip()
+                if self._fs.is_file(common_dir):
+                    common_rel = self._fs.read_text(common_dir).strip()
                     main_git = (resolved / common_rel).resolve()
                     return main_git / "info" / "exclude"
                 return resolved / "info" / "exclude"
@@ -634,23 +607,13 @@ class InitService:
         for command in repo.cmd:
             reporter.cmd_started(repo.name, command)
             try:
-                proc = subprocess.Popen(
-                    command,
-                    cwd=str(repo_path),
-                    shell=True,
-                    env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                )
+                with self._subprocess.popen(command, cwd=repo_path, env=env, shell=True) as proc:
+                    for line in proc.stdout_lines:
+                        reporter.cmd_output_line(repo.name, line)
+                    returncode = proc.wait()
             except OSError as exc:
                 reporter.repo_error(repo.name, f"`{command}` — {exc}")
                 return False
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                reporter.cmd_output_line(repo.name, line.rstrip("\n"))
-            returncode = proc.wait()
             reporter.cmd_completed(repo.name, command, returncode)
             if returncode != 0:
                 reporter.repo_error(

@@ -159,7 +159,9 @@ class Container(containers.DeclarativeContainer):
         config=workspace_config,
         repo_factory=repo_factory,
         extension_svc=extension_svc,
-        error_factory=repo_error_factory,
+        fs=fs,
+        subprocess_runner=subprocess_runner,
+        git_repo=git_repo,
     )
 
     destroy_svc = providers.Factory(
