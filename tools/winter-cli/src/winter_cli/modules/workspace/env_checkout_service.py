@@ -18,8 +18,14 @@ class EnvCheckoutService:
     """Connect / disconnect / checkout for the feature branch of an env's worktrees.
 
     `connect_env` and `disconnect_env` wire (or unwire) the per-worktree upstream
-    tracking. `checkout_env` is the two-phase, all-or-nothing adoption of a
-    remote feature branch into every non-pinned worktree in the env.
+    tracking. `checkout_env` is the two-phase adoption of a remote feature branch
+    into every non-pinned worktree in the env. Phase 1 is a non-destructive
+    safety check that aborts the entire run if any repo refuses (so a refusal
+    blocks Phase 2 globally — no `git reset` executes in that case). Phase 2
+    then runs the destructive `set_upstream` / `set_push_default` / `hard_reset`
+    sequence serially across the passing repos; if a Phase 2 git op raises
+    mid-loop, earlier repos have already been mutated and the exception
+    propagates with no rollback.
     """
 
     def __init__(self, repo_repo: IWriteRepoRepository) -> None:
@@ -52,13 +58,18 @@ class EnvCheckoutService:
         feature_branch: str,
         force: bool,
     ) -> EnvCheckoutReport:
-        """Adopt `origin/<feature_branch>` into every non-pinned worktree repo, all-or-nothing.
+        """Adopt `origin/<feature_branch>` into every non-pinned worktree repo.
 
         Phase 1 classifies each repo locally (no network): dirty / divergent
         / missing-ref / clean. If any repo refuses safety in non-force mode,
         Phase 2 is skipped — `git reset --hard` runs in no repo. Otherwise
         Phase 2 wires upstream tracking and resets the Greek-letter branch to
         the local `origin/<feature_branch>` ref in each repo that has it.
+
+        Phase 2 is not atomic across repos: if a git op raises mid-loop, repos
+        processed earlier are already mutated and the exception propagates
+        with no rollback. Callers that need a clean restart must capture the
+        per-repo HEADs before calling and reset manually.
         """
         logger.info(
             "checkout_env: env=%s feature_branch=%s force=%s",
