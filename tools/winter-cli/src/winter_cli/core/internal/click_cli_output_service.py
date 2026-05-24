@@ -5,7 +5,7 @@ from typing import Any
 
 import click
 
-from winter_cli.core.cli_output_service import Cell
+from winter_cli.core.cli_output_service import Cell, ICliOutputService
 
 
 class ClickCliOutputService:
@@ -144,3 +144,7 @@ class ClickCliOutputService:
             else:
                 parts.append(text)
         return "".join(parts)
+
+
+def _conforms_click_cli_output_service(x: ClickCliOutputService) -> ICliOutputService:
+    return x

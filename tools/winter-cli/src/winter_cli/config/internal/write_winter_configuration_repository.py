@@ -10,6 +10,7 @@ from winter_cli.config.models import (
     StandaloneRepositoryConfig,
     WorkspaceConfig,
 )
+from winter_cli.config.winter_configuration_repository import IWriteWinterConfigurationRepository
 from winter_cli.config.workspace import CONFIG_FILE, LOCAL_CONFIG_FILE, WINTER_DIR
 from winter_cli.core.filesystem import IFilesystemWriter
 
@@ -102,3 +103,9 @@ class WriteWinterConfigurationRepository:
         cut = max(stripped.rfind("/"), stripped.rfind(":"))
         candidate = stripped[cut + 1 :] if cut != -1 else stripped
         return candidate.removesuffix(".git")
+
+
+def _conforms_write_winter_configuration_repository(
+    x: WriteWinterConfigurationRepository,
+) -> IWriteWinterConfigurationRepository:
+    return x

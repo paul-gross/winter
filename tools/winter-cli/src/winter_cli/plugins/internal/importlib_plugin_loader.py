@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+from winter_cli.plugins.plugin_loader import IPluginLoader
+
 
 class ImportlibPluginLoader:
     """Adapter that loads a plugin module via `importlib.util.spec_from_file_location`.
@@ -27,3 +29,7 @@ class ImportlibPluginLoader:
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         return module
+
+
+def _conforms_importlib_plugin_loader(x: ImportlibPluginLoader) -> IPluginLoader:
+    return x

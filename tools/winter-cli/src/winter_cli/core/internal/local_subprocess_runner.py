@@ -5,7 +5,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
-from winter_cli.core.subprocess_runner import IStreamingProcess, SubprocessResult
+from winter_cli.core.subprocess_runner import IStreamingProcess, ISubprocessRunner, SubprocessResult
 
 
 class _StreamingProcess:
@@ -93,3 +93,7 @@ class LocalSubprocessRunner:
         shell: bool = False,
     ) -> AbstractContextManager[IStreamingProcess]:
         return self._popen_cm(cmd, cwd, env, shell)
+
+
+def _conforms_local_subprocess_runner(x: LocalSubprocessRunner) -> ISubprocessRunner:
+    return x

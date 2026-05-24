@@ -10,6 +10,7 @@ from winter_cli.modules.workspace.models import (
     ProjectRepository,
     Workspace,
 )
+from winter_cli.modules.workspace.workspace_repository import IReadWorkspaceRepository
 
 
 class ReadWorkspaceRepository:
@@ -114,3 +115,7 @@ class ReadWorkspaceRepository:
                 return None
             return merge[len("refs/heads/") :]
         return None
+
+
+def _conforms_read_workspace_repository(x: ReadWorkspaceRepository) -> IReadWorkspaceRepository:
+    return x

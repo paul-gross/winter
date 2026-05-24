@@ -4,6 +4,7 @@ from pathlib import Path
 
 import git
 
+from winter_cli.modules.workspace.git_repository import IGitRepository
 from winter_cli.modules.workspace.internal.repo_error_factory import RepoErrorFactory
 
 
@@ -139,3 +140,7 @@ class GitPythonRepository:
         except (git.InvalidGitRepositoryError, git.NoSuchPathError, git.GitCommandError):
             return False
         return not output.strip()
+
+
+def _conforms_gitpython_repository(x: GitPythonRepository) -> IGitRepository:
+    return x

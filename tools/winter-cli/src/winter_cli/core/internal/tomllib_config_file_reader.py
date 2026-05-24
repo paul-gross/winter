@@ -3,7 +3,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from winter_cli.core.config_file import ConfigFileReadError
+from winter_cli.core.config_file import ConfigFileReadError, IConfigFileReader
 
 
 class TomllibConfigFileReader:
@@ -21,3 +21,7 @@ class TomllibConfigFileReader:
                 return tomllib.load(f)
         except (OSError, tomllib.TOMLDecodeError) as exc:
             raise ConfigFileReadError(f"reading {path} — {exc}") from exc
+
+
+def _conforms_tomllib_config_file_reader(x: TomllibConfigFileReader) -> IConfigFileReader:
+    return x

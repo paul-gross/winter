@@ -94,3 +94,11 @@ class JsonFetchReporter:
                 "error": error,
             }
         )
+
+
+def _conforms_stream_fetch_reporter(x: StreamFetchReporter) -> IFetchReporter:
+    return x
+
+
+def _conforms_json_fetch_reporter(x: JsonFetchReporter) -> IFetchReporter:
+    return x

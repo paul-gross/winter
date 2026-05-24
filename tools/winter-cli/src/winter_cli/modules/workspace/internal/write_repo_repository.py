@@ -16,6 +16,7 @@ from winter_cli.modules.workspace.models import (
     StandaloneRepository,
     SyncResult,
 )
+from winter_cli.modules.workspace.repo_repository import IWriteRepoRepository
 
 logger = logging.getLogger(__name__)
 
@@ -332,3 +333,7 @@ class WriteRepoRepository(ReadRepoRepository):
                 message=f"tracking-ahead probe failed for {repo.name}",
                 cwd=repo.path,
             ) from exc
+
+
+def _conforms_write_repo_repository(x: WriteRepoRepository) -> IWriteRepoRepository:
+    return x

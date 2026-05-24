@@ -143,3 +143,11 @@ class JsonReporter:
                 "returncode": returncode,
             }
         )
+
+
+def _conforms_stream_reporter(x: StreamReporter) -> IInitReporter:
+    return x
+
+
+def _conforms_json_reporter(x: JsonReporter) -> IInitReporter:
+    return x

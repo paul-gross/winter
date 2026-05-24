@@ -4,6 +4,8 @@ import re
 
 import click
 
+from winter_cli.core.cli_input_validation_service import ICliInputValidationService
+
 
 class ClickCliInputValidationService:
     """Click-backed ICliInputValidationService — rejects invalid CLI inputs via click.ClickException."""
@@ -23,3 +25,9 @@ class ClickCliInputValidationService:
                 f"Invalid git URL: {url!r}. Expected http(s)://host/path, "
                 f"ssh://user@host/path, git://host/path, or user@host:path."
             )
+
+
+def _conforms_click_cli_input_validation_service(
+    x: ClickCliInputValidationService,
+) -> ICliInputValidationService:
+    return x

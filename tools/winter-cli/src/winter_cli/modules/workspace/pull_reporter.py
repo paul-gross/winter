@@ -113,3 +113,11 @@ class JsonPullReporter:
 
     def env_skipped(self, env: str, reason: str) -> None:
         self._emit({"type": "env_skipped", "env": env, "reason": reason})
+
+
+def _conforms_stream_pull_reporter(x: StreamPullReporter) -> IPullReporter:
+    return x
+
+
+def _conforms_json_pull_reporter(x: JsonPullReporter) -> IPullReporter:
+    return x

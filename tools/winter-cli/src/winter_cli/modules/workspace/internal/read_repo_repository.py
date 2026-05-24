@@ -17,6 +17,7 @@ from winter_cli.modules.workspace.models import (
     StandaloneRepoStatus,
     Workspace,
 )
+from winter_cli.modules.workspace.repo_repository import IReadRepoRepository
 
 logger = logging.getLogger(__name__)
 
@@ -297,3 +298,10 @@ class ReadRepoRepository:
             tracking_behind=tracking_behind,
             tracking_ref_present=tracking_ref_present,
         )
+
+
+# Typecheck-time conformance sentinel — Pyright rejects this return if
+# ReadRepoRepository drifts from IReadRepoRepository. See
+# winter-harness:/python/repository-pattern.md.
+def _conforms_read_repo_repository(x: ReadRepoRepository) -> IReadRepoRepository:
+    return x

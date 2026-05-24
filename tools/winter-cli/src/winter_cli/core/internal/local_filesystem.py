@@ -5,6 +5,8 @@ import shutil
 from collections.abc import Iterable
 from pathlib import Path
 
+from winter_cli.core.filesystem import IFilesystemWriter
+
 
 class LocalFilesystem:
     """Local-disk adapter for IFilesystemReader and IFilesystemWriter.
@@ -75,3 +77,9 @@ class LocalFilesystem:
     @staticmethod
     def rmtree(path: Path) -> None:
         shutil.rmtree(path)
+
+
+# Returning IFilesystemWriter pins both seams: IFilesystemReader is a supertype,
+# so a Writer-conforming adapter trivially conforms to Reader too.
+def _conforms_local_filesystem(x: LocalFilesystem) -> IFilesystemWriter:
+    return x
