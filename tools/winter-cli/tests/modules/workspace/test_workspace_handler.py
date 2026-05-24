@@ -31,6 +31,7 @@ def _make_handler(fetch_report: FetchReport) -> WorkspaceHandler:
         env_status_svc=MagicMock(),
         workspace_sync_svc=workspace_sync_svc,
         workspace_push_svc=MagicMock(),
+        workspace_merge_svc=MagicMock(),
         env_checkout_svc=MagicMock(),
         workspace_repo=MagicMock(),
         repo_repo=MagicMock(),

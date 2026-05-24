@@ -9,9 +9,12 @@ from winter_cli.modules.workspace.internal.read_repo_repository import ReadRepoR
 from winter_cli.modules.workspace.internal.repo_error_factory import RepoErrorFactory
 from winter_cli.modules.workspace.models import (
     FeatureWorktree,
+    MergeMode,
+    MergeResult,
     ProjectRepository,
     PullMode,
     RepoError,
+    RepoMergeOutcome,
     RepoSyncOutcome,
     StandaloneRepository,
     SyncResult,
@@ -54,6 +57,46 @@ class WriteRepoRepository(ReadRepoRepository):
             git.Repo(str(worktree.path)),
             worktree.repository.name,
             target_ref,
+            mode,
+            autostash,
+        )
+
+    def merge_ref(
+        self,
+        worktree: FeatureWorktree,
+        source_ref: str,
+        mode: MergeMode,
+        autostash: bool,
+    ) -> RepoMergeOutcome:
+        """Merge `source_ref` into the worktree's branch — pull-style semantics.
+
+        Mirrors `integrate`'s mode handling so merge's failure modes match
+        pull's: conflicts (or autostash failures) abort and report diverged
+        rather than leaving an in-progress merge. The only signal merge
+        adds is `skipped_missing_ref` — pull's source ref is always the
+        tracked upstream, so it can't be missing; merge takes an arbitrary
+        ref, so a typo or per-repo absence is a real case.
+        """
+        return self._merge(
+            git.Repo(str(worktree.path)),
+            worktree.repository.name,
+            source_ref,
+            mode,
+            autostash,
+        )
+
+    def merge_ref_standalone(
+        self,
+        repo: StandaloneRepository,
+        source_ref: str,
+        mode: MergeMode,
+        autostash: bool,
+    ) -> RepoMergeOutcome:
+        """Standalone counterpart to `merge_ref` — same modes and outcome shape."""
+        return self._merge(
+            git.Repo(str(repo.path)),
+            repo.name,
+            source_ref,
             mode,
             autostash,
         )
@@ -275,6 +318,123 @@ class WriteRepoRepository(ReadRepoRepository):
         except git.GitCommandError:
             self._abort(r.git.rebase)
             return self._diverged_outcome(r, repo_name, target_ref)
+
+    def _merge(
+        self,
+        r: git.Repo,
+        repo_name: str,
+        source_ref: str,
+        mode: MergeMode,
+        autostash: bool,
+    ) -> RepoMergeOutcome:
+        if not self._has_ref(r, source_ref):
+            return RepoMergeOutcome(
+                repo_name=repo_name,
+                result=MergeResult.skipped_missing_ref,
+                error=f"source ref not found: {source_ref}",
+            )
+        head_before = r.head.commit.hexsha
+        if mode == MergeMode.ff_only:
+            return self._merge_ff_only(r, repo_name, source_ref, autostash, head_before)
+        if mode == MergeMode.no_ff:
+            return self._merge_no_ff(r, repo_name, source_ref, autostash)
+        if mode == MergeMode.merge:
+            return self._merge_ff_or_commit(r, repo_name, source_ref, autostash, head_before)
+        raise ValueError(f"unknown MergeMode: {mode}")
+
+    def _merge_ff_only(
+        self,
+        r: git.Repo,
+        repo_name: str,
+        source_ref: str,
+        autostash: bool,
+        head_before: str,
+    ) -> RepoMergeOutcome:
+        try:
+            r.git.merge(*_autostash_args(autostash), "--ff-only", source_ref)
+        except git.GitCommandError:
+            return self._diverged_merge_outcome(r, repo_name, source_ref)
+        head_after = r.head.commit.hexsha
+        if head_before == head_after:
+            return RepoMergeOutcome(repo_name=repo_name, result=MergeResult.up_to_date)
+        return RepoMergeOutcome(repo_name=repo_name, result=MergeResult.fast_forwarded)
+
+    def _merge_ff_or_commit(
+        self,
+        r: git.Repo,
+        repo_name: str,
+        source_ref: str,
+        autostash: bool,
+        head_before: str,
+    ) -> RepoMergeOutcome:
+        """`--merge` mode: ff when possible, 3-way merge commit when ff fails.
+
+        Mirrors `_ff_or_merge` (pull's `--merge`): conflicts / autostash
+        failures abort and report diverged, no in-progress merge left over.
+        """
+        ff = self._merge_ff_only(r, repo_name, source_ref, autostash, head_before)
+        if ff.result != MergeResult.diverged:
+            return ff
+        try:
+            r.git.merge(*_autostash_args(autostash), source_ref)
+            return RepoMergeOutcome(repo_name=repo_name, result=MergeResult.merged)
+        except git.GitCommandError:
+            self._abort(r.git.merge)
+            return self._diverged_merge_outcome(r, repo_name, source_ref)
+
+    def _merge_no_ff(
+        self,
+        r: git.Repo,
+        repo_name: str,
+        source_ref: str,
+        autostash: bool,
+    ) -> RepoMergeOutcome:
+        # Short-circuit when source is fully reachable from HEAD — git treats
+        # this as "already up to date" and exits 0 without creating a merge
+        # commit, which would otherwise mislabel as MergeResult.merged. The
+        # check is `behind == 0` (no commits to bring in), not also
+        # `ahead == 0`: HEAD may have its own commits past source and still
+        # have source fully merged in.
+        try:
+            behind = int(r.git.rev_list("--count", f"HEAD..{source_ref}"))
+        except git.GitCommandError:
+            behind = 0
+        if behind == 0:
+            return RepoMergeOutcome(repo_name=repo_name, result=MergeResult.up_to_date)
+        try:
+            r.git.merge(*_autostash_args(autostash), "--no-ff", source_ref)
+            return RepoMergeOutcome(repo_name=repo_name, result=MergeResult.merged)
+        except git.GitCommandError:
+            self._abort(r.git.merge)
+            return self._diverged_merge_outcome(r, repo_name, source_ref)
+
+    def _diverged_merge_outcome(self, r: git.Repo, repo_name: str, source_ref: str) -> RepoMergeOutcome:
+        ahead = 0
+        behind = 0
+        try:
+            ahead = int(r.git.rev_list("--count", f"{source_ref}..HEAD"))
+            behind = int(r.git.rev_list("--count", f"HEAD..{source_ref}"))
+        except git.GitCommandError as exc:
+            logger.warning(
+                "diverged ahead/behind probe failed for %s vs %s: %s",
+                repo_name,
+                source_ref,
+                exc.stderr.strip() if isinstance(exc.stderr, str) else exc,
+            )
+        return RepoMergeOutcome(
+            repo_name=repo_name,
+            result=MergeResult.diverged,
+            ahead=ahead,
+            behind=behind,
+        )
+
+    @staticmethod
+    def _has_ref(r: git.Repo, ref: str) -> bool:
+        try:
+            r.git.rev_parse("--verify", "--quiet", f"{ref}^{{commit}}")
+            return True
+        except git.GitCommandError:
+            return False
 
     def _diverged_outcome(self, r: git.Repo, repo_name: str, target_ref: str) -> RepoSyncOutcome:
         ahead = 0

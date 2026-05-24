@@ -46,10 +46,12 @@ from winter_cli.modules.workspace.internal.gitpython_repository import GitPython
 from winter_cli.modules.workspace.internal.read_workspace_repository import ReadWorkspaceRepository
 from winter_cli.modules.workspace.internal.repo_error_factory import RepoErrorFactory
 from winter_cli.modules.workspace.internal.write_repo_repository import WriteRepoRepository
+from winter_cli.modules.workspace.merge_reporter import JsonMergeReporter, StreamMergeReporter
 from winter_cli.modules.workspace.prune_service import PruneService
 from winter_cli.modules.workspace.pull_reporter import JsonPullReporter, StreamPullReporter
 from winter_cli.modules.workspace.reporter_factory import ReporterFactory
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
+from winter_cli.modules.workspace.workspace_merge_service import WorkspaceMergeService
 from winter_cli.modules.workspace.workspace_push_service import WorkspacePushService
 from winter_cli.modules.workspace.workspace_sync_service import WorkspaceSyncService
 from winter_cli.plugins.internal.importlib_plugin_loader import ImportlibPluginLoader
@@ -167,6 +169,16 @@ class Container(containers.DeclarativeContainer):
         workspace=workspace,
     )
 
+    workspace_merge_svc = providers.Factory(
+        WorkspaceMergeService,
+        env_status_svc=env_status_svc,
+        worktree_repo=worktree_repo,
+        repo_repo=repo_repo,
+        repo_factory=repo_factory,
+        workspace=workspace,
+        git_ops=git_ops_svc,
+    )
+
     env_checkout_svc = providers.Factory(
         EnvCheckoutService,
         repo_repo=repo_repo,
@@ -267,6 +279,16 @@ class Container(containers.DeclarativeContainer):
         click=providers.Object(click),
     )
 
+    stream_merge_reporter = providers.Factory(
+        StreamMergeReporter,
+        click=providers.Object(click),
+    )
+
+    json_merge_reporter = providers.Factory(
+        JsonMergeReporter,
+        click=providers.Object(click),
+    )
+
     reporter_factory = providers.Singleton(
         ReporterFactory,
         stream_init_reporter=stream_reporter.provider,
@@ -275,6 +297,8 @@ class Container(containers.DeclarativeContainer):
         json_fetch_reporter=json_fetch_reporter.provider,
         stream_pull_reporter=stream_pull_reporter.provider,
         json_pull_reporter=json_pull_reporter.provider,
+        stream_merge_reporter=stream_merge_reporter.provider,
+        json_merge_reporter=json_merge_reporter.provider,
     )
 
     workspace_handler = providers.Factory(
@@ -282,6 +306,7 @@ class Container(containers.DeclarativeContainer):
         env_status_svc=env_status_svc,
         workspace_sync_svc=workspace_sync_svc,
         workspace_push_svc=workspace_push_svc,
+        workspace_merge_svc=workspace_merge_svc,
         env_checkout_svc=env_checkout_svc,
         workspace_repo=worktree_repo,
         repo_repo=repo_repo,

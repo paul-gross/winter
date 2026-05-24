@@ -34,6 +34,7 @@ Greek letters (`alpha`, `beta`, …) are the suggested convention for feature en
 | `winter ws sync` | `winter ws sync ENV [--json]` | Fetch all repos, ff-only merge `origin/main` (falls back to merge), then fast-forward source checkouts |
 | `winter ws fetch` | `winter ws fetch [PATTERNS...] [--standalone\|--all] [--json]` | Fetch refs from `origin` for project worktrees matched by PATTERNS |
 | `winter ws pull` | `winter ws pull [PATTERNS...] [--standalone\|--all] [--ff-only\|--merge\|--rebase] [--autostash] [--json]` | Fetch + ff-only integrate (default) project worktrees matched by PATTERNS |
+| `winter ws merge` | `winter ws merge SOURCE_REF [PATTERNS...] [--standalone\|--all] [--ff-only\|--merge\|--no-ff] [--autostash] [--exclude-pinned\|--only-pinned] [--json]` | Merge an arbitrary SOURCE_REF (env name, branch, `origin/...`) into project worktrees matched by PATTERNS |
 | `winter ws push` | `winter ws push [PATTERNS...] [--standalone\|--all] [--include-pinned\|--only-pinned] [--json]` | Push project worktrees matched by PATTERNS to their tracked upstream |
 | `winter ws connect` | `winter ws connect ENV FEATURE_BRANCH [--json]` | Connect a feature environment to a remote feature branch |
 | `winter ws disconnect` | `winter ws disconnect ENV [--json]` | Disconnect a feature environment from its feature branch |
@@ -41,9 +42,9 @@ Greek letters (`alpha`, `beta`, …) are the suggested convention for feature en
 | `winter ws index` | `winter ws index NAME [--json]` | Print the port-offset index for a feature environment name (Greek = 1..24, other = hashed 26..281) |
 | `winter ws prune` | `winter ws prune [--dry-run\|--force] [--json]` | Remove disk state for repos no longer in the workspace config (orphan project clones, orphan standalone clones, broken `.claude/` symlinks). Refuses repos with uncommitted changes or attached worktrees |
 
-### `fetch` / `pull` / `push` patterns and scope
+### `fetch` / `pull` / `push` / `merge` patterns and scope
 
-All three commands accept any number of segment-aware glob `PATTERNS` over `<env>/<repo>` (no patterns = `*/*`). A bare env name is treated as `<env>/*`. Standalone repos are reached via `--standalone` / `--all` and ignore `PATTERNS` — to operate on a single standalone repo, use raw git.
+All four commands accept any number of segment-aware glob `PATTERNS` over `<env>/<repo>` (no patterns = `*/*`). A bare env name is treated as `<env>/*`. Standalone repos are reached via `--standalone` / `--all` and ignore `PATTERNS` — to operate on a single standalone repo, use raw git. `merge` takes a required `SOURCE_REF` as its first positional, then patterns trail; the other three take patterns only.
 
 | Invocation | Operates on |
 |------------|-------------|
@@ -56,17 +57,15 @@ All three commands accept any number of segment-aware glob `PATTERNS` over `<env
 | `winter ws <cmd> --all` | project worktrees + every standalone repo |
 | `winter ws <cmd> '*/winter' --all` | every env's `winter` worktree + every standalone repo |
 
-`fetch` and `pull` always include both pinned and non-pinned worktrees in the matched set. `push` excludes pinned worktrees by default (see Pinned-scope flags below).
+Pinned-scope behavior per command:
 
-Pinned-scope flags (`push` only — `fetch`/`pull` always include pinned):
+| Command | _(default)_ | Opt-in / opt-out flags |
+|---------|-------------|------------------------|
+| `fetch` / `pull` | both | n/a — always include both |
+| `push` | non-pinned only | `--include-pinned` (+ pinned), `--only-pinned` (pinned only) |
+| `merge` | both | `--exclude-pinned` (non-pinned only), `--only-pinned` (pinned only) |
 
-| Flag | Effect |
-|------|--------|
-| _(default)_ | non-pinned worktrees only |
-| `--include-pinned` | non-pinned + pinned |
-| `--only-pinned` | pinned only |
-
-Mutex rules: `--include-pinned` xor `--only-pinned` (push only); `--standalone` xor `--all`; `--standalone` rejects PATTERNS, and on `push` also rejects `--include-pinned` / `--only-pinned`.
+Mutex rules: pinned-scope flags are mutually exclusive within a command (`--include-pinned` xor `--only-pinned` for push; `--exclude-pinned` xor `--only-pinned` for merge); `--standalone` xor `--all`; `--standalone` rejects PATTERNS, and on `push`/`merge` also rejects the pinned-scope flags.
 
 Pattern syntax: `*` matches any chars within a segment (does not cross `/`); `?` matches one char. Quote patterns in your shell to prevent expansion.
 
@@ -86,7 +85,42 @@ Pattern syntax: `*` matches any chars within a segment (does not cross `/`); `?`
 
 `push` excludes pinned worktrees by default because pinned repos track the main branch and aren't part of the feature-push flow. Use `--include-pinned` when you've landed commits on a pinned repo's main branch and want to ship them, or `--only-pinned` to ship just those without touching feature branches.
 
-**`sync` vs `pull`.** `sync` always targets `origin/main` and falls back to a merge commit when ff-only fails (so source checkouts stay aligned even when the env has drifted). `pull` always targets the *tracked* upstream — the feature branch for non-pinned worktrees, main for pinned, custom branches for standalone repos — and is ff-only by default. Use `sync` to bring main into a feature env; use `pull` to grab remote commits made on the feature branch.
+**`sync` vs `pull`.** `sync` always targets `origin/main` and falls back to a merge commit when ff-only fails (so source checkouts stay aligned even when the env has drifted). `pull` always targets the *tracked* upstream — the feature branch for non-pinned worktrees, main for pinned, custom branches for standalone repos — and is ff-only by default. See the `merge` section for how those compare to `merge` too.
+
+### `merge` — fold an arbitrary ref into matched worktrees
+
+`merge` is a sibling of `pull` with an explicit source ref. Read `pull` for the shared behavior (patterns, scope flags, autostash semantics, abort-on-conflict reporting); the deltas are:
+
+- `SOURCE_REF` is an explicit positional arg, applied verbatim per repo. `pull` uses each worktree's tracked upstream.
+- `--no-ff` replaces `--rebase` in the mode trio — force a merge commit even when fast-forward is possible (matches `git merge --no-ff`). `--ff-only` (default) and `--merge` behave exactly as in `pull`.
+- No fetch. `pull` fetches first; `merge` doesn't, because `SOURCE_REF` is often a local branch. Run `winter ws fetch` first if you need fresh refs.
+- Pinned worktrees are included by default (`pull` always includes them; `push` excludes by default). Opt out with `--exclude-pinned` or restrict to pinned with `--only-pinned`.
+
+```bash
+winter ws merge alpha gamma            # merge alpha into gamma's project worktrees (== 'gamma/*')
+winter ws merge master gamma           # merge master into gamma's project worktrees
+winter ws merge origin/master gamma    # explicit remote ref also accepted
+winter ws merge master '*/winter'      # merge master into every env's winter worktree
+winter ws merge master --all           # merge master into every env's worktrees + every standalone
+```
+
+**Per-repo outcomes** (literal CLI output):
+
+| Outcome | Meaning |
+|---------|---------|
+| `up-to-date` | Source ref already reachable from HEAD; nothing to do |
+| `fast-forwarded` | HEAD advanced to source ref without a merge commit |
+| `merged (merge commit created)` | A merge commit was created (only under `--merge` or `--no-ff`) |
+| `diverged: +N/-N` | `--ff-only` refusal, or a conflict during `--merge`/`--no-ff` that aborted the merge |
+| `skipped: source ref not found` | The source ref doesn't resolve in this repo |
+
+Exit code is `0` when every selected repo merged cleanly (`up-to-date`, `fast-forwarded`, or `merged (merge commit created)`), and `1` if any repo diverged or had a missing source ref. Cross-repo atomicity is not provided — if one repo merges cleanly and another diverges, the clean merge stays. Conflicts that abort don't leave a merge in progress; use raw `git reset --hard ORIG_HEAD` per repo if you want to undo a fast-forward or merge commit.
+
+**When to use `merge` vs `pull` vs `sync`:**
+
+- `merge` — the source ref isn't the worktree's tracked upstream (env-to-env, explicit branch).
+- `pull` — integrate the tracked upstream (feature branch for non-pinned, main for pinned). Fetches first.
+- `sync` — fetch + ff-or-merge against `origin/main` plus source-checkout fast-forward.
 
 ### `destroy` — tear down a feature env
 
@@ -164,7 +198,7 @@ Fetch / pull / push silently retry up to 3 times with jittered exponential backo
 
 ## Drift warnings
 
-Operations that iterate repos (`ws list`, `ws status`, `ws sync`, `ws fetch`, `ws pull`, `ws push`, `ws connect`, `ws disconnect`, `ws diff`, `repo list`) warn to stderr when the config and filesystem disagree:
+Operations that iterate repos (`ws list`, `ws status`, `ws sync`, `ws fetch`, `ws pull`, `ws push`, `ws merge`, `ws connect`, `ws disconnect`, `ws diff`, `repo list`) warn to stderr when the config and filesystem disagree:
 
 - **Missing:** a declared project repo has no directory under `projects/` — run `winter ws init`
 - **Undeclared:** a directory under `projects/` is not in the config — add it to `.winter/config.toml` or remove it
@@ -202,6 +236,14 @@ winter ws pull alpha --autostash   # stash dirty tree first, restore after
 ```bash
 winter ws init alpha                       # ensures alpha/ exists
 winter ws connect alpha feature/my-feature
+```
+
+### Fold one env into another, or merge main without fetch
+```bash
+winter ws merge alpha gamma                # merge alpha into gamma's worktrees
+winter ws merge master gamma --merge       # merge master with 3-way fallback on divergence
+winter ws fetch gamma                      # if you need a fresh origin/master first
+winter ws merge origin/master gamma        # then merge the freshly-fetched ref
 ```
 
 ### Push completed work

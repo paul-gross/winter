@@ -19,6 +19,7 @@ from winter_cli.modules.workspace.models import (
     EnvCheckoutReport,
     FeatureEnvironmentOverview,
     FeatureEnvironmentStatus,
+    MergeMode,
     PinnedScope,
     PullMode,
     PushReport,
@@ -31,6 +32,7 @@ from winter_cli.modules.workspace.prune_service import PruneOrphan, PruneService
 from winter_cli.modules.workspace.repo_repository import IReadRepoRepository
 from winter_cli.modules.workspace.reporter_factory import ReporterFactory
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
+from winter_cli.modules.workspace.workspace_merge_service import WorkspaceMergeService
 from winter_cli.modules.workspace.workspace_push_service import WorkspacePushService
 from winter_cli.modules.workspace.workspace_repository import IReadWorkspaceRepository
 from winter_cli.modules.workspace.workspace_sync_service import WorkspaceSyncService
@@ -99,6 +101,17 @@ class EnvPullParams:
 
 
 @dataclasses.dataclass
+class EnvMergeParams:
+    source_ref: str
+    patterns: list[str]
+    scope: RepoScope
+    mode: MergeMode
+    autostash: bool
+    pinned_scope: PinnedScope
+    output_json: bool
+
+
+@dataclasses.dataclass
 class EnvDiffParams:
     env: str
     mode: DiffMode
@@ -126,6 +139,7 @@ class WorkspaceHandler:
         env_status_svc: EnvStatusService,
         workspace_sync_svc: WorkspaceSyncService,
         workspace_push_svc: WorkspacePushService,
+        workspace_merge_svc: WorkspaceMergeService,
         env_checkout_svc: EnvCheckoutService,
         workspace_repo: IReadWorkspaceRepository,
         repo_repo: IReadRepoRepository,
@@ -139,6 +153,7 @@ class WorkspaceHandler:
         self._env_status_svc = env_status_svc
         self._workspace_sync_svc = workspace_sync_svc
         self._workspace_push_svc = workspace_push_svc
+        self._workspace_merge_svc = workspace_merge_svc
         self._env_checkout_svc = env_checkout_svc
         self._workspace_repo = workspace_repo
         self._repo_repo = repo_repo
@@ -372,6 +387,31 @@ class WorkspaceHandler:
         if not report.envs and not report.standalone and not report.skipped:
             click.echo(out.style("Nothing to pull", "dim"))
             return
+
+    def merge(self, params: EnvMergeParams) -> None:
+        self._drift_warning_svc.raise_warning()
+        reporter = self._reporter_factory.get_merge_reporter(params.output_json)
+        report = self._workspace_merge_svc.merge_all(
+            source_ref=params.source_ref,
+            scope=params.scope,
+            patterns=params.patterns,
+            mode=params.mode,
+            autostash=params.autostash,
+            pinned_scope=params.pinned_scope,
+            reporter=reporter,
+        )
+
+        if params.output_json:
+            if not report.success:
+                sys.exit(1)
+            return
+
+        out = self._cli_output_svc
+        if not report.envs and not report.standalone:
+            click.echo(out.style("Nothing to merge", "dim"))
+            return
+        if not report.success:
+            sys.exit(1)
 
     def push(self, params: EnvPushParams) -> None:
         self._drift_warning_svc.raise_warning()

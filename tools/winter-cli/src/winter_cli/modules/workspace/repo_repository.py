@@ -6,9 +6,11 @@ from typing import Protocol
 from winter_cli.modules.workspace.models import (
     DiffMode,
     FeatureWorktree,
+    MergeMode,
     ProjectRepository,
     PullMode,
     RepoDiffResult,
+    RepoMergeOutcome,
     RepoStatus,
     RepoSyncOutcome,
     StandaloneRepository,
@@ -34,6 +36,20 @@ class IWriteRepoRepository(IReadRepoRepository, Protocol):
         mode: PullMode,
         autostash: bool,
     ) -> RepoSyncOutcome: ...
+    def merge_ref(
+        self,
+        worktree: FeatureWorktree,
+        source_ref: str,
+        mode: MergeMode,
+        autostash: bool,
+    ) -> RepoMergeOutcome: ...
+    def merge_ref_standalone(
+        self,
+        repo: StandaloneRepository,
+        source_ref: str,
+        mode: MergeMode,
+        autostash: bool,
+    ) -> RepoMergeOutcome: ...
     def sync_ff_only(self, repo: ProjectRepository) -> None: ...
     def set_upstream(self, worktree: FeatureWorktree, remote_branch: str) -> None: ...
     def unset_upstream(self, worktree: FeatureWorktree) -> None: ...

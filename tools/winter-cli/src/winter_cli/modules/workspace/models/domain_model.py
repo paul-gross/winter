@@ -110,6 +110,24 @@ class PullMode(enum.Enum):
     rebase = "rebase"
 
 
+class MergeMode(enum.Enum):
+    """How `winter ws merge` integrates the source ref into the worktree's branch.
+
+    Mirrors `PullMode` with `--no-ff` added in place of `--rebase` (rebase
+    against an arbitrary source ref isn't a meaningful merge operation).
+
+    `ff_only` (default) refuses to integrate when the branches have
+    diverged — never produces a merge commit. `merge` falls back to a
+    3-way merge commit when ff-only fails. `no_ff` always creates a
+    merge commit even when fast-forward is possible (mirrors
+    `git merge --no-ff`).
+    """
+
+    ff_only = "ff_only"
+    merge = "merge"
+    no_ff = "no_ff"
+
+
 class PinnedScope(enum.Enum):
     """Whether `winter ws push` includes pinned project worktrees.
 

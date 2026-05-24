@@ -251,6 +251,68 @@ class PullReport:
         return not self.skipped
 
 
+class MergeResult(enum.Enum):
+    """Per-repo outcome of `winter ws merge`.
+
+    Mirrors `SyncResult` for the cases pull already covers (fast-forward,
+    up-to-date, merge commit, divergence) and adds `skipped_missing_ref`
+    for the merge-specific case where the source ref doesn't resolve in
+    a given repo. Conflicts are reported as `diverged` — the in-progress
+    merge is aborted, matching `pull --merge`'s conflict handling.
+    """
+
+    fast_forwarded = "fast_forwarded"
+    up_to_date = "up_to_date"
+    merged = "merged"
+    diverged = "diverged"
+    skipped_missing_ref = "skipped-missing-ref"
+
+
+@dataclasses.dataclass
+class RepoMergeOutcome:
+    """Result of merging one repo — final state plus ahead/behind context."""
+
+    repo_name: str
+    result: MergeResult
+    ahead: int = 0
+    behind: int = 0
+    error: str | None = None
+
+
+_CLEAN_MERGE_RESULTS: tuple[MergeResult, ...] = (
+    MergeResult.fast_forwarded,
+    MergeResult.up_to_date,
+    MergeResult.merged,
+)
+
+
+@dataclasses.dataclass
+class EnvMergeReport:
+    """Per-env merge outcomes (one env's selected worktrees)."""
+
+    env: str
+    repos: list[RepoMergeOutcome]
+
+    @property
+    def success(self) -> bool:
+        return all(o.result in _CLEAN_MERGE_RESULTS for o in self.repos)
+
+
+@dataclasses.dataclass
+class MergeReport:
+    """Top-level merge report — per-env outcomes plus standalone outcomes."""
+
+    source_ref: str
+    envs: list[EnvMergeReport]
+    standalone: list[RepoMergeOutcome] = dataclasses.field(default_factory=list)
+
+    @property
+    def success(self) -> bool:
+        if any(not env.success for env in self.envs):
+            return False
+        return all(o.result in _CLEAN_MERGE_RESULTS for o in self.standalone)
+
+
 @dataclasses.dataclass
 class RepoPushOutcome:
     """Result of pushing one repo — name, push status, commits delivered, error if any."""

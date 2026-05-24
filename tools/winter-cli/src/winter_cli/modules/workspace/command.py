@@ -12,6 +12,7 @@ from winter_cli.modules.workspace.handlers import (
     EnvFetchParams,
     EnvIndexParams,
     EnvListParams,
+    EnvMergeParams,
     EnvPullParams,
     EnvPushParams,
     EnvStatusParams,
@@ -22,7 +23,7 @@ from winter_cli.modules.workspace.handlers import (
     RepoRemoveParams,
     WorkspacePruneParams,
 )
-from winter_cli.modules.workspace.models import DiffMode, PinnedScope, PullMode, RepoScope
+from winter_cli.modules.workspace.models import DiffMode, MergeMode, PinnedScope, PullMode, RepoScope
 
 
 def _resolve_scope(standalone: bool, all_flag: bool) -> RepoScope:
@@ -44,6 +45,27 @@ def _resolve_pull_mode(ff_only: bool, merge: bool, rebase: bool) -> PullMode:
     if rebase:
         return PullMode.rebase
     return PullMode.ff_only
+
+
+def _resolve_merge_mode(ff_only: bool, merge: bool, no_ff: bool) -> MergeMode:
+    chosen = [name for name, flag in (("--ff-only", ff_only), ("--merge", merge), ("--no-ff", no_ff)) if flag]
+    if len(chosen) > 1:
+        raise click.ClickException(f"{', '.join(chosen)} are mutually exclusive")
+    if merge:
+        return MergeMode.merge
+    if no_ff:
+        return MergeMode.no_ff
+    return MergeMode.ff_only
+
+
+def _resolve_merge_pinned_scope(exclude_pinned: bool, only_pinned: bool) -> PinnedScope:
+    if exclude_pinned and only_pinned:
+        raise click.ClickException("--exclude-pinned and --only-pinned are mutually exclusive")
+    if only_pinned:
+        return PinnedScope.only
+    if exclude_pinned:
+        return PinnedScope.exclude
+    return PinnedScope.include
 
 
 def _resolve_pinned_scope(include_pinned: bool, only_pinned: bool) -> PinnedScope:
@@ -359,6 +381,132 @@ def ws_pull(
             scope=scope,
             mode=mode,
             autostash=autostash,
+            output_json=output_json,
+        )
+    )
+
+
+@ws_group.command("merge")
+@click.argument("source_ref")
+@click.argument("patterns", nargs=-1)
+@click.option(
+    "--standalone",
+    is_flag=True,
+    default=False,
+    help="Merge SOURCE_REF into standalone repos only (PATTERNS are not accepted).",
+)
+@click.option(
+    "--all",
+    "all_flag",
+    is_flag=True,
+    default=False,
+    help="Also merge into every standalone repo, in addition to pattern-matched project worktrees.",
+)
+@click.option(
+    "--ff-only",
+    "ff_only",
+    is_flag=True,
+    default=False,
+    help="Refuse to integrate diverged branches (default).",
+)
+@click.option(
+    "--merge",
+    "merge_flag",
+    is_flag=True,
+    default=False,
+    help="Fall back to a 3-way merge commit when ff-only fails.",
+)
+@click.option(
+    "--no-ff",
+    "no_ff",
+    is_flag=True,
+    default=False,
+    help="Always create a merge commit, even when fast-forward is possible.",
+)
+@click.option(
+    "--autostash",
+    is_flag=True,
+    default=False,
+    help="Stash dirty working tree before merging, restore after.",
+)
+@click.option(
+    "--exclude-pinned",
+    "exclude_pinned",
+    is_flag=True,
+    default=False,
+    help="Exclude pinned project worktrees from the merge set.",
+)
+@click.option(
+    "--only-pinned",
+    "only_pinned",
+    is_flag=True,
+    default=False,
+    help="Merge only pinned project worktrees (excludes non-pinned).",
+)
+@click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON.")
+@click.pass_context
+def ws_merge(
+    ctx: click.Context,
+    source_ref: str,
+    patterns: tuple[str, ...],
+    standalone: bool,
+    all_flag: bool,
+    ff_only: bool,
+    merge_flag: bool,
+    no_ff: bool,
+    autostash: bool,
+    exclude_pinned: bool,
+    only_pinned: bool,
+    output_json: bool,
+):
+    """Merge SOURCE_REF into project worktrees matched by PATTERNS (ff-only by default).
+
+    SOURCE_REF is the same string applied to every selected repo — typically
+    an env name (`alpha`), the workspace main branch (`master`), or an
+    explicit remote ref (`origin/master`). Each PATTERN is a segment-aware
+    glob over `<env>/<repo>`; bare env names (no `/`) are treated as
+    `<env>/*`. Pinned worktrees are included by default. Standalone repos
+    are reached via --standalone / --all.
+
+    Diverged repos are reported and left untouched unless --merge or --no-ff
+    is given (mutually exclusive). Conflicts during a fallback merge abort
+    and report diverged — no in-progress merge is left for manual
+    resolution. No fetch happens here — run `winter ws fetch` first if you
+    need fresh refs.
+
+    \b
+      winter ws merge alpha                       # merge branch alpha into every env's every repo
+      winter ws merge alpha gamma                 # merge alpha into gamma's project worktrees (== 'gamma/*')
+      winter ws merge alpha gamma/winter          # merge alpha into one specific worktree
+      winter ws merge master '*/winter'           # merge master into every env's winter worktree
+      winter ws merge origin/master gamma --merge # merge with 3-way fallback on divergence
+      winter ws merge master gamma --no-ff        # force a merge commit even if ff is possible
+      winter ws merge alpha --autostash gamma     # stash dirty tree first, restore after
+      winter ws merge alpha gamma --exclude-pinned   # skip pinned worktrees in gamma
+      winter ws merge master --standalone         # merge master into standalone repos only
+      winter ws merge master --all                # merge master into project worktrees + standalones
+    """
+    if standalone and patterns:
+        raise click.ClickException("PATTERNS cannot be combined with --standalone")
+    if standalone and (exclude_pinned or only_pinned):
+        raise click.ClickException(
+            "--exclude-pinned / --only-pinned cannot be combined with --standalone (standalone repos aren't pinned)"
+        )
+    scope = _resolve_scope(standalone, all_flag)
+    mode = _resolve_merge_mode(ff_only, merge_flag, no_ff)
+    pinned_scope = _resolve_merge_pinned_scope(exclude_pinned, only_pinned)
+    for pattern in patterns:
+        _validate_pattern(pattern)
+    container = cli_ctx(ctx).container
+    handler = container.workspace_handler()
+    handler.merge(
+        EnvMergeParams(
+            source_ref=source_ref,
+            patterns=list(patterns),
+            scope=scope,
+            mode=mode,
+            autostash=autostash,
+            pinned_scope=pinned_scope,
             output_json=output_json,
         )
     )
