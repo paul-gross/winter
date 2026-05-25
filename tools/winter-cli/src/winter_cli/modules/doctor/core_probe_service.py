@@ -60,6 +60,9 @@ class CoreProbeService:
         results.extend(self._probe_project_repos(project_repos))
         results.extend(self._probe_standalone_repos())
         results.extend(self._probe_envs(project_repos))
+        claude_symlinks = self._probe_claude_symlinks()
+        if claude_symlinks is not None:
+            results.append(claude_symlinks)
         return results
 
     # ── git ───────────────────────────────────────────────────────────────
@@ -248,6 +251,49 @@ class CoreProbeService:
             name=label,
             status=ProbeStatus.pass_,
             message=f"{len(project_repos)} worktrees consistent",
+        )
+
+    # ── .claude/{agents,skills} symlink health ───────────────────────────
+
+    def _probe_claude_symlinks(self) -> ProbeResult | None:
+        """Detect broken `.claude/{agents,skills}/*` symlinks left by extension renames.
+
+        `ExtensionSymlinkService._prune_stale_symlinks` heals these on the next
+        `winter ws init`, but until then a stale link silently shadows a renamed
+        agent or skill — the failure surfaces only when something tries to spawn
+        the missing target. Returns None when neither directory exists so the
+        probe stays quiet on workspaces that never adopted extensions.
+        """
+        claude_root = self._config.workspace_root / ".claude"
+        candidates = (claude_root / "agents", claude_root / "skills")
+        any_dir_present = False
+        orphans: list[str] = []
+        for directory in candidates:
+            if not self._fs.is_dir(directory):
+                continue
+            any_dir_present = True
+            for entry in self._fs.iterdir(directory):
+                if not self._fs.is_symlink(entry):
+                    continue
+                # exists() follows symlinks — a broken link reports False.
+                if self._fs.exists(entry):
+                    continue
+                orphans.append(str(entry.relative_to(self._config.workspace_root)))
+        if not any_dir_present:
+            return None
+        if orphans:
+            return ProbeResult(
+                source=CORE_SOURCE,
+                name=".claude symlinks",
+                status=ProbeStatus.fail,
+                message=f"orphaned symlink(s): {', '.join(sorted(orphans))}",
+                remediation="Run `winter ws init` to prune stale extension symlinks.",
+            )
+        return ProbeResult(
+            source=CORE_SOURCE,
+            name=".claude symlinks",
+            status=ProbeStatus.pass_,
+            message="no orphaned symlinks",
         )
 
     def _read_branch(self, worktree_path: Path) -> str | None:
