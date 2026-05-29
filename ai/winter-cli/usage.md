@@ -40,6 +40,7 @@ Greek letters (`alpha`, `beta`, …) are the suggested convention for feature en
 | `winter ws diff` | `winter ws diff ENV [--staged\|--branch] [--repo REPO] [--json]` | Unified diff across all repos in a feature environment |
 | `winter ws index` | `winter ws index NAME [--json]` | Print the port-offset index for a feature environment name (Greek = 1..24, other = hashed 26..281) |
 | `winter ws prune` | `winter ws prune [--dry-run\|--force] [--json]` | Remove disk state for repos no longer in the workspace config (orphan project clones, orphan standalone clones, broken `.claude/` symlinks). Refuses repos with uncommitted changes or attached worktrees |
+| `winter ws worktrees` | `winter ws worktrees [--json]` | List every existing feature-environment worktree and standalone repo as a flat table or JSON array — intended for editor integrations (e.g. Neovim fuzzy-finder `cd` picker). Omits entries whose directory does not exist on disk |
 
 ### `fetch` / `pull` / `push` / `merge` patterns and scope
 

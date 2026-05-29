@@ -16,6 +16,7 @@ from winter_cli.modules.workspace.handlers import (
     EnvPullParams,
     EnvPushParams,
     EnvStatusParams,
+    EnvWorktreesParams,
     InitParams,
     RepoAddParams,
     RepoListParams,
@@ -169,6 +170,35 @@ def ws_list(ctx: click.Context, output_json: bool):
     container = cli_ctx(ctx).container
     handler = container.workspace_handler()
     handler.list(EnvListParams(output_json=output_json))
+
+
+@ws_group.command("worktrees")
+@click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON.")
+@click.option(
+    "--status",
+    "with_status",
+    is_flag=True,
+    default=False,
+    help="Include per-repo git status (ahead/behind/dirty). Slower — does git work per repo.",
+)
+@click.pass_context
+def ws_worktrees(ctx: click.Context, output_json: bool, with_status: bool):
+    """List feature-environment <env>/<repo> worktrees and standalone repos.
+
+    Emits all existing feature-environment worktrees across every env, followed
+    by all standalone repositories. Singleton repos (workspace, product, harness)
+    are not included. Entries whose directory does not exist on disk are omitted.
+    Intended for use by editor integrations (e.g. a Neovim fuzzy-finder plugin)
+    to enumerate locations for `cd`.
+
+    \b
+      winter ws worktrees                    # human-readable table
+      winter ws worktrees --json             # JSON array for machine consumption
+      winter ws worktrees --json --status    # JSON with ahead/behind/dirty per repo
+    """
+    container = cli_ctx(ctx).container
+    handler = container.workspace_handler()
+    handler.worktrees(EnvWorktreesParams(output_json=output_json, with_status=with_status))
 
 
 @ws_group.command("status")

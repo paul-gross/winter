@@ -127,6 +127,25 @@ class WorkspacePruneParams:
     output_json: bool
 
 
+@dataclasses.dataclass
+class EnvWorktreesParams:
+    output_json: bool
+    with_status: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class WorktreeLocation:
+    kind: str
+    env: str | None
+    repo: str | None
+    name: str | None
+    label: str
+    path: str
+    ahead: int | None = None
+    behind: int | None = None
+    dirty: int | None = None
+
+
 class WorkspaceHandler:
     def __init__(
         self,
@@ -387,6 +406,102 @@ class WorkspaceHandler:
             _echo_json({"name": params.name, "index": idx})
             return
         click.echo(idx)
+
+    def worktrees(self, params: EnvWorktreesParams) -> None:
+        project_repos = self._repo_factory.get_project_repos()
+        environments = self._workspace_repo.get_environments(self._workspace, project_repos)
+        standalone_repos = self._repo_factory.get_standalone_repos()
+
+        locations: list[WorktreeLocation] = []
+
+        for env in environments:
+            env_worktrees = self._env_status_svc.get_feature_environment_worktrees(env, project_repos)
+
+            # Build a repo-name → status lookup when --status is requested.
+            status_by_repo: dict[str, WorktreeRepoStatus] = {}
+            if params.with_status:
+                repo_statuses = self._env_status_svc.get_worktree_repo_statuses(env_worktrees)
+                status_by_repo = {rs.worktree.repository.name: rs for rs in repo_statuses}
+
+            for wt in env_worktrees.worktrees:
+                if wt.path.exists() and wt.path.is_dir():
+                    if params.with_status:
+                        rs = status_by_repo.get(wt.repository.name)
+                        ahead: int | None = rs.ahead if rs is not None else None
+                        behind: int | None = rs.behind if rs is not None else None
+                        dirty: int | None = rs.dirty_count if rs is not None else None
+                        locations.append(
+                            WorktreeLocation(
+                                kind="worktree",
+                                env=wt.environment.name,
+                                repo=wt.repository.name,
+                                name=None,
+                                label=f"{wt.environment.name}/{wt.repository.name}",
+                                path=str(wt.path),
+                                ahead=ahead,
+                                behind=behind,
+                                dirty=dirty,
+                            )
+                        )
+                    else:
+                        locations.append(
+                            WorktreeLocation(
+                                kind="worktree",
+                                env=wt.environment.name,
+                                repo=wt.repository.name,
+                                name=None,
+                                label=f"{wt.environment.name}/{wt.repository.name}",
+                                path=str(wt.path),
+                            )
+                        )
+
+        for standalone in standalone_repos:
+            if standalone.path.exists() and standalone.path.is_dir():
+                if params.with_status:
+                    # Standalone repos have no env feature-branch comparison for
+                    # ahead/behind. Dirty count is not available without new git
+                    # plumbing, so best-effort: set all three to null.
+                    locations.append(
+                        WorktreeLocation(
+                            kind="standalone",
+                            env=None,
+                            repo=None,
+                            name=standalone.name,
+                            label=standalone.name,
+                            path=str(standalone.path),
+                            ahead=None,
+                            behind=None,
+                            dirty=None,
+                        )
+                    )
+                else:
+                    locations.append(
+                        WorktreeLocation(
+                            kind="standalone",
+                            env=None,
+                            repo=None,
+                            name=standalone.name,
+                            label=standalone.name,
+                            path=str(standalone.path),
+                        )
+                    )
+
+        if params.output_json:
+            _echo_json([_worktree_location_to_dict(loc, params.with_status) for loc in locations])
+            return
+
+        rows: list[list[str | Cell]] = []
+        if params.with_status:
+            for loc in locations:
+                status_str = _format_worktree_status(loc)
+                rows.append([loc.label, loc.kind, loc.path, status_str])
+            for line in self._cli_output_svc.render_table(rows, headers=["LABEL", "KIND", "PATH", "STATUS"]):
+                click.echo(line)
+        else:
+            for loc in locations:
+                rows.append([loc.label, loc.kind, loc.path])
+            for line in self._cli_output_svc.render_table(rows, headers=["LABEL", "KIND", "PATH"]):
+                click.echo(line)
 
     def prune(self, params: WorkspacePruneParams) -> None:
         orphans = self._prune_svc.find_orphans()
@@ -727,6 +842,45 @@ class WorkspaceHandler:
         if not segments:
             return Cell.of("·", "dim")
         return Cell.compose(segments)
+
+
+def _worktree_location_to_dict(loc: WorktreeLocation, with_status: bool) -> dict[str, Any]:
+    """Serialize a WorktreeLocation to a dict.
+
+    When with_status is False the three status keys (ahead/behind/dirty) are
+    completely absent — not present-as-null — so the no-status JSON shape is
+    byte-for-byte stable for consumers that key on field presence.
+    """
+    d: dict[str, Any] = {
+        "kind": loc.kind,
+        "env": loc.env,
+        "repo": loc.repo,
+        "name": loc.name,
+        "label": loc.label,
+        "path": loc.path,
+    }
+    if with_status:
+        d["ahead"] = loc.ahead
+        d["behind"] = loc.behind
+        d["dirty"] = loc.dirty
+    return d
+
+
+def _format_worktree_status(loc: WorktreeLocation) -> str:
+    """Render a short status string for the human table STATUS column."""
+    ahead = loc.ahead
+    behind = loc.behind
+    dirty = loc.dirty if loc.dirty is not None else 0
+    if ahead is None and behind is None and dirty == 0:
+        return "="
+    parts: list[str] = []
+    if ahead is not None:
+        parts.append(f"+{ahead}")
+    if behind is not None:
+        parts.append(f"-{behind}")
+    if dirty:
+        parts.append(f"[+{dirty}]")
+    return " ".join(parts) if parts else "="
 
 
 def _to_dict(obj: Any) -> Any:
