@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import importlib
+from collections.abc import Callable
+from typing import Any
+
 import click
 from dependency_injector import containers, providers
 
@@ -15,24 +19,12 @@ from winter_cli.core.internal.click_cli_output_service import ClickCliOutputServ
 from winter_cli.core.internal.local_filesystem import LocalFilesystem
 from winter_cli.core.internal.local_subprocess_runner import LocalSubprocessRunner
 from winter_cli.core.internal.tomllib_config_file_reader import TomllibConfigFileReader
-from winter_cli.modules.doctor.core_probe_service import CoreProbeService
-from winter_cli.modules.doctor.doctor_reporter import JsonDoctorReporter, StreamDoctorReporter
-from winter_cli.modules.doctor.doctor_service import DoctorService
-from winter_cli.modules.doctor.extension_probe_service import ExtensionProbeService
-from winter_cli.modules.doctor.handler import DoctorHandler
-from winter_cli.modules.doctor.workspace_probe_service import WorkspaceProbeService
-from winter_cli.modules.lint.extension_lint_service import ExtensionLintService
-from winter_cli.modules.lint.handler import LintHandler
-from winter_cli.modules.lint.lint_reporter import JsonLintReporter, StreamLintReporter
-from winter_cli.modules.lint.lint_service import LintService
-from winter_cli.modules.lint.scope_resolver import LintScopeResolver
-from winter_cli.modules.lint.workspace_lint_service import WorkspaceLintService
-from winter_cli.modules.tui.error_log import ErrorLogService
-from winter_cli.modules.tui.keybindings import KeybindingResolver
-from winter_cli.modules.tui.screens.error_log import ErrorLogScreen
-from winter_cli.modules.tui.screens.standalone_detail import StandaloneDetailScreen
-from winter_cli.modules.tui.screens.workspace import WorkspaceScreen
-from winter_cli.modules.tui.screens.worktree_detail import WorktreeDetailScreen
+
+# NB: the doctor, lint, and tui (textual) command trees are deliberately NOT
+# imported at module top — see `_lazy` below. They are pulled in on first
+# provider resolution so the hot `winter ws` path (which instantiates this
+# container on every invocation) never pays for the textual / probe trees it
+# doesn't touch.
 from winter_cli.modules.workspace.destroy_service import DestroyService
 from winter_cli.modules.workspace.drift import DriftWarningService
 from winter_cli.modules.workspace.env_checkout_service import EnvCheckoutService
@@ -64,6 +56,28 @@ from winter_cli.modules.workspace.workspace_push_service import WorkspacePushSer
 from winter_cli.modules.workspace.workspace_sync_service import WorkspaceSyncService
 from winter_cli.plugins.internal.importlib_plugin_loader import ImportlibPluginLoader
 from winter_cli.plugins.loader import PluginRegistry
+
+
+def _lazy(target: str) -> Callable[..., Any]:
+    """Build a provider `provides` callable that imports its class on first use.
+
+    `target` is a `"module:attr"` reference. The returned callable forwards
+    `*args, **kwargs` (the provider's injected dependencies) to the resolved
+    class, importing the module only the first time the provider is resolved.
+    This keeps the doctor / lint / tui (textual) trees out of the module-load
+    import graph, so building `Container()` on the hot `winter ws` path doesn't
+    drag them in — they load only when their command (doctor / lint / dashboard)
+    actually resolves a provider that needs them.
+    """
+    resolved: list[Callable[..., Any]] = []
+
+    def make(*args: Any, **kwargs: Any) -> Any:
+        if not resolved:
+            module_name, attr = target.split(":", 1)
+            resolved.append(getattr(importlib.import_module(module_name), attr))
+        return resolved[0](*args, **kwargs)
+
+    return make
 
 
 class Container(containers.DeclarativeContainer):
@@ -349,7 +363,7 @@ class Container(containers.DeclarativeContainer):
     )
 
     core_probe_svc = providers.Factory(
-        CoreProbeService,
+        _lazy("winter_cli.modules.doctor.core_probe_service:CoreProbeService"),
         config=workspace_config,
         fs=fs,
         subprocess_runner=subprocess_runner,
@@ -360,14 +374,14 @@ class Container(containers.DeclarativeContainer):
     )
 
     workspace_probe_svc = providers.Factory(
-        WorkspaceProbeService,
+        _lazy("winter_cli.modules.doctor.workspace_probe_service:WorkspaceProbeService"),
         config=workspace_config,
         fs=fs,
         subprocess_runner=subprocess_runner,
     )
 
     extension_probe_svc = providers.Factory(
-        ExtensionProbeService,
+        _lazy("winter_cli.modules.doctor.extension_probe_service:ExtensionProbeService"),
         config=workspace_config,
         fs=fs,
         subprocess_runner=subprocess_runner,
@@ -375,7 +389,7 @@ class Container(containers.DeclarativeContainer):
     )
 
     doctor_svc = providers.Factory(
-        DoctorService,
+        _lazy("winter_cli.modules.doctor.doctor_service:DoctorService"),
         core_probe_svc=core_probe_svc,
         workspace_probe_svc=workspace_probe_svc,
         extension_probe_svc=extension_probe_svc,
@@ -383,17 +397,17 @@ class Container(containers.DeclarativeContainer):
     )
 
     stream_doctor_reporter = providers.Factory(
-        StreamDoctorReporter,
+        _lazy("winter_cli.modules.doctor.doctor_reporter:StreamDoctorReporter"),
         click=providers.Object(click),
     )
 
     json_doctor_reporter = providers.Factory(
-        JsonDoctorReporter,
+        _lazy("winter_cli.modules.doctor.doctor_reporter:JsonDoctorReporter"),
         click=providers.Object(click),
     )
 
     doctor_handler = providers.Factory(
-        DoctorHandler,
+        _lazy("winter_cli.modules.doctor.handler:DoctorHandler"),
         doctor_service=doctor_svc,
         stream_reporter=stream_doctor_reporter,
         json_reporter=json_doctor_reporter,
@@ -402,14 +416,14 @@ class Container(containers.DeclarativeContainer):
     # ── lint: dispatcher to extension-contributed convention checks ─────────
 
     workspace_lint_svc = providers.Factory(
-        WorkspaceLintService,
+        _lazy("winter_cli.modules.lint.workspace_lint_service:WorkspaceLintService"),
         config=workspace_config,
         fs=fs,
         subprocess_runner=subprocess_runner,
     )
 
     extension_lint_svc = providers.Factory(
-        ExtensionLintService,
+        _lazy("winter_cli.modules.lint.extension_lint_service:ExtensionLintService"),
         config=workspace_config,
         fs=fs,
         subprocess_runner=subprocess_runner,
@@ -417,7 +431,7 @@ class Container(containers.DeclarativeContainer):
     )
 
     lint_scope_resolver = providers.Factory(
-        LintScopeResolver,
+        _lazy("winter_cli.modules.lint.scope_resolver:LintScopeResolver"),
         config=workspace_config,
         repo_factory=repo_factory,
         worktree_repo=worktree_repo,
@@ -426,24 +440,24 @@ class Container(containers.DeclarativeContainer):
     )
 
     lint_svc = providers.Factory(
-        LintService,
+        _lazy("winter_cli.modules.lint.lint_service:LintService"),
         workspace_lint_svc=workspace_lint_svc,
         extension_lint_svc=extension_lint_svc,
         repo_factory=repo_factory,
     )
 
     stream_lint_reporter = providers.Factory(
-        StreamLintReporter,
+        _lazy("winter_cli.modules.lint.lint_reporter:StreamLintReporter"),
         click=providers.Object(click),
     )
 
     json_lint_reporter = providers.Factory(
-        JsonLintReporter,
+        _lazy("winter_cli.modules.lint.lint_reporter:JsonLintReporter"),
         click=providers.Object(click),
     )
 
     lint_handler = providers.Factory(
-        LintHandler,
+        _lazy("winter_cli.modules.lint.handler:LintHandler"),
         lint_service=lint_svc,
         scope_resolver=lint_scope_resolver,
         stream_reporter=stream_lint_reporter,
@@ -453,17 +467,17 @@ class Container(containers.DeclarativeContainer):
     # Session-scoped log buffer for RepoErrors captured during dashboard
     # polling and actions. Singleton so navigating between screens preserves
     # the entries within a single dashboard session.
-    error_log_svc = providers.Singleton(ErrorLogService)
+    error_log_svc = providers.Singleton(_lazy("winter_cli.modules.tui.error_log:ErrorLogService"))
 
     # Resolves `[keybindings]` overrides onto each screen's action defaults and
     # owns the chord-sequence timeout. Singleton — config is immutable per run.
     keybinding_resolver = providers.Singleton(
-        KeybindingResolver,
+        _lazy("winter_cli.modules.tui.keybindings:KeybindingResolver"),
         config=workspace_config.provided.keybindings,
     )
 
     workspace_screen = providers.Factory(
-        WorkspaceScreen,
+        _lazy("winter_cli.modules.tui.screens.workspace:WorkspaceScreen"),
         env_status_svc=env_status_svc,
         workspace_repo=worktree_repo,
         repo_repo=repo_repo,
@@ -475,7 +489,7 @@ class Container(containers.DeclarativeContainer):
     )
 
     worktree_detail_screen = providers.Factory(
-        WorktreeDetailScreen,
+        _lazy("winter_cli.modules.tui.screens.worktree_detail:WorktreeDetailScreen"),
         env_status_svc=env_status_svc,
         workspace_repo=worktree_repo,
         repo_repo=repo_repo,
@@ -487,7 +501,7 @@ class Container(containers.DeclarativeContainer):
     )
 
     standalone_detail_screen = providers.Factory(
-        StandaloneDetailScreen,
+        _lazy("winter_cli.modules.tui.screens.standalone_detail:StandaloneDetailScreen"),
         repo_repo=repo_repo,
         repo_factory=repo_factory,
         workspace=workspace,
@@ -497,6 +511,6 @@ class Container(containers.DeclarativeContainer):
     )
 
     error_log_screen = providers.Factory(
-        ErrorLogScreen,
+        _lazy("winter_cli.modules.tui.screens.error_log:ErrorLogScreen"),
         error_log=error_log_svc,
     )

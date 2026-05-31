@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 import click
 
@@ -22,6 +23,14 @@ from winter_cli.modules.workspace.workspace_repository import IReadWorkspaceRepo
 from winter_cli.plugins.types import IEnvironmentDecorator, IWorktreeRepoDecorator
 
 logger = logging.getLogger(__name__)
+
+# Fan-out width for the per-worktree status reads in `get_worktree_repo_statuses`.
+# These are *local* git reads (each opens its own repo and shells out), so —
+# unlike the SSH-capped remote ops bounded by `GitOpsService.PARALLELISM` — they
+# are not throttled by the host and a wider pool just maps onto more concurrent
+# `git` subprocesses. Bounded so a workspace with many repos doesn't spawn an
+# unbounded subprocess herd.
+STATUS_PARALLELISM: int = 8
 
 
 class EnvStatusService:
@@ -78,29 +87,41 @@ class EnvStatusService:
         keeps one broken repo from hanging the whole dashboard refresh.
         """
         env = env_worktrees.environment
+        worktrees = env_worktrees.worktrees
 
+        # Fan the per-worktree status reads out across a bounded thread pool —
+        # each `get_worktree_status` opens its own git repo and shells out to
+        # `git`, so the work is subprocess/IO-bound and threads parallelize it
+        # without contending on the GIL. Futures are collected back in worktree
+        # order, and exceptions are re-raised at `.result()` time, so both the
+        # output ordering and the error semantics below are identical to the
+        # former serial loop (the first failing worktree in order propagates,
+        # or is reported and skipped, exactly as before).
         wt_repo_statuses: list[WorktreeRepoStatus] = []
-        for wt in env_worktrees.worktrees:
-            try:
-                rs = self._repo_repo.get_worktree_status(wt)
-            except RepoError as exc:
-                if on_repo_error is None:
-                    raise
-                on_repo_error(wt, exc)
-                continue
-            wt_repo_statuses.append(
-                WorktreeRepoStatus(
-                    worktree=wt,
-                    branch=rs.branch,
-                    ahead=rs.ahead,
-                    behind=rs.behind,
-                    dirty_count=len(rs.dirty_files),
-                    tracking_branch=rs.tracking_branch,
-                    tracking_ahead=rs.tracking_ahead,
-                    tracking_behind=rs.tracking_behind,
-                    tracking_ref_present=rs.tracking_ref_present,
+        if worktrees:
+            with ThreadPoolExecutor(max_workers=min(len(worktrees), STATUS_PARALLELISM)) as pool:
+                futures = [pool.submit(self._repo_repo.get_worktree_status, wt) for wt in worktrees]
+            for wt, future in zip(worktrees, futures, strict=True):
+                try:
+                    rs = future.result()
+                except RepoError as exc:
+                    if on_repo_error is None:
+                        raise
+                    on_repo_error(wt, exc)
+                    continue
+                wt_repo_statuses.append(
+                    WorktreeRepoStatus(
+                        worktree=wt,
+                        branch=rs.branch,
+                        ahead=rs.ahead,
+                        behind=rs.behind,
+                        dirty_count=len(rs.dirty_files),
+                        tracking_branch=rs.tracking_branch,
+                        tracking_ahead=rs.tracking_ahead,
+                        tracking_behind=rs.tracking_behind,
+                        tracking_ref_present=rs.tracking_ref_present,
+                    )
                 )
-            )
 
         if worktree_repo_decorators:
             for decorator in worktree_repo_decorators:
