@@ -19,6 +19,7 @@ from winter_cli.modules.workspace.models import RepoError
 
 
 @click.group()
+@click.version_option(package_name="winter-cli", message="%(prog)s, version %(version)s")
 @click.option("--source-override", default=None, hidden=True)
 @click.pass_context
 def _cli_group(ctx: click.Context, source_override: str | None):

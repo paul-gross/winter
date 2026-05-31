@@ -8,6 +8,10 @@ Command reference for agents executing `winter` commands. For installation and c
 
 **Use raw git** for single-repo operations — staging files, committing, resolving conflicts, interactive rebase, branch inspection. The CLI doesn't replace git for per-repo work.
 
+## Root flags
+
+`winter --version` prints the installed CLI version (sourced from package metadata, so it tracks the running source) and exits 0. `winter --help` lists every command and root flag.
+
 ## `winter ws init` — reconcile the workspace against the config
 
 One idempotent command with three modes. Safe to re-run any time.
