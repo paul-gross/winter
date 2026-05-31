@@ -168,3 +168,57 @@ def test_load_returns_empty_when_config_files_absent() -> None:
     assert config.workspace_root == WORKSPACE_ROOT
     assert config.main_branch == "main"  # default
     assert config.project_repos == []
+
+
+def test_keybindings_default_when_absent() -> None:
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(fs, {config_path: {}})
+
+    kb = svc.load().keybindings
+    assert kb.leader == "\\"
+    assert kb.timeoutlen == 1000
+    assert kb.bindings == {}
+
+
+def test_keybindings_parsed_from_table() -> None:
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "keybindings": {
+                    "leader": ",",
+                    "timeoutlen": 400,
+                    "bindings": {
+                        "workspace.refresh": "g",
+                        "worktree.open_detail": "o",
+                    },
+                },
+            },
+        },
+    )
+
+    kb = svc.load().keybindings
+    assert kb.leader == ","
+    assert kb.timeoutlen == 400
+    assert kb.bindings == {"workspace.refresh": "g", "worktree.open_detail": "o"}
+
+
+def test_keybindings_overlay_overrides_per_key() -> None:
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    local_path = WORKSPACE_ROOT / WINTER_DIR / LOCAL_CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: "", local_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {"keybindings": {"timeoutlen": 1000, "bindings": {"workspace.refresh": "g"}}},
+            local_path: {"keybindings": {"bindings": {"workspace.refresh": "R"}}},
+        },
+    )
+
+    kb = svc.load().keybindings
+    # Per-machine overlay wins for the overridden id.
+    assert kb.bindings["workspace.refresh"] == "R"
+    assert kb.timeoutlen == 1000

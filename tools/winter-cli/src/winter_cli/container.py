@@ -28,6 +28,7 @@ from winter_cli.modules.lint.lint_service import LintService
 from winter_cli.modules.lint.scope_resolver import LintScopeResolver
 from winter_cli.modules.lint.workspace_lint_service import WorkspaceLintService
 from winter_cli.modules.tui.error_log import ErrorLogService
+from winter_cli.modules.tui.keybindings import KeybindingResolver
 from winter_cli.modules.tui.screens.error_log import ErrorLogScreen
 from winter_cli.modules.tui.screens.standalone_detail import StandaloneDetailScreen
 from winter_cli.modules.tui.screens.workspace import WorkspaceScreen
@@ -454,6 +455,13 @@ class Container(containers.DeclarativeContainer):
     # the entries within a single dashboard session.
     error_log_svc = providers.Singleton(ErrorLogService)
 
+    # Resolves `[keybindings]` overrides onto each screen's action defaults and
+    # owns the chord-sequence timeout. Singleton — config is immutable per run.
+    keybinding_resolver = providers.Singleton(
+        KeybindingResolver,
+        config=workspace_config.provided.keybindings,
+    )
+
     workspace_screen = providers.Factory(
         WorkspaceScreen,
         env_status_svc=env_status_svc,
@@ -463,6 +471,7 @@ class Container(containers.DeclarativeContainer):
         workspace=workspace,
         plugin_registry=plugin_registry,
         error_log=error_log_svc,
+        keybinding_resolver=keybinding_resolver,
     )
 
     worktree_detail_screen = providers.Factory(
@@ -474,6 +483,7 @@ class Container(containers.DeclarativeContainer):
         workspace=workspace,
         plugin_registry=plugin_registry,
         error_log=error_log_svc,
+        keybinding_resolver=keybinding_resolver,
     )
 
     standalone_detail_screen = providers.Factory(
@@ -483,6 +493,7 @@ class Container(containers.DeclarativeContainer):
         workspace=workspace,
         plugin_registry=plugin_registry,
         error_log=error_log_svc,
+        keybinding_resolver=keybinding_resolver,
     )
 
     error_log_screen = providers.Factory(

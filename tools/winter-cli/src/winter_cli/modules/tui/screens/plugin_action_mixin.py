@@ -1,28 +1,28 @@
 """Shared plugin-action plumbing for dashboard screens.
 
-Every screen that surfaces plugin `TuiAction`s repeats the same three pieces:
-bind each action's key to a `plugin_<name>` binding, resolve the dynamic
-`action_plugin_<name>` attribute the Textual binding dispatch looks up, and log a
-`RepoError` to the session log + toast without crashing. This mixin owns those
-three; the per-scope context resolution (which differs by screen — a worktree
-screen has a focused repo, the workspace screen reads its grid) stays on each
-screen as `_run_plugin_action`.
+Every screen that surfaces plugin `TuiAction`s repeats the same two pieces:
+resolve the dynamic `action_plugin_<name>` attribute the Textual binding dispatch
+looks up, and log a `RepoError` to the session log + toast without crashing. This
+mixin owns those two; the per-scope context resolution (which differs by screen —
+a worktree screen has a focused repo, the workspace screen reads its grid) stays
+on each screen as `_run_plugin_action`.
+
+Binding plugin action *keys* is no longer done here: keys (built-in and plugin)
+are resolved from config and installed by `KeybindingMixin._install_keybindings`,
+with plugin `TuiAction`s adapted via `keybindings.actions.plugin_action_bindings`.
 
 Host requirements (a Textual `Screen` subclass provides all of these):
   - `self._plugin_registry` — the `PluginRegistry`
   - `self._error_log` — the `ErrorLogService`
-  - `self.app`, `self._bindings` — from Textual
+  - `self.app` — from Textual
   - `_run_plugin_action(self, action_name: str) -> None` — the screen's dispatcher
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 from winter_cli.modules.tui.error_log import ErrorLogService
 from winter_cli.modules.workspace.models import RepoError
 from winter_cli.plugins.loader import PluginRegistry
-from winter_cli.plugins.types import ActionScope
 
 
 class PluginActionMixin:
@@ -30,12 +30,6 @@ class PluginActionMixin:
 
     _plugin_registry: PluginRegistry
     _error_log: ErrorLogService
-
-    def _bind_plugin_actions(self, scopes: Iterable[ActionScope] = tuple(ActionScope)) -> None:
-        """Bind every contributed action in `scopes` to a `plugin_<name>` keybinding."""
-        for scope in scopes:
-            for action in self._plugin_registry.actions_for_scope(scope):
-                self._bindings.bind(action.key, f"plugin_{action.name}", action.description)  # type: ignore[attr-defined]
 
     def _capture_error(self, location: str, exc: RepoError) -> None:
         """Log a RepoError to the session log and toast (deduped) without crashing.

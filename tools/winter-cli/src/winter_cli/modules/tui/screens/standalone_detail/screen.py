@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import contextlib
-from typing import ClassVar, cast
+from typing import cast
 
 from textual import work
-from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Static
 
 from winter_cli.modules.tui.error_log import ErrorLogService
+from winter_cli.modules.tui.keybindings import KeybindingMixin, KeybindingResolver, plugin_action_bindings
+from winter_cli.modules.tui.keybindings.actions import STANDALONE_DETAIL_ACTIONS
 from winter_cli.modules.tui.screens.plugin_action_mixin import PluginActionMixin
 from winter_cli.modules.tui.widgets.refresh_status import RefreshStatus
 from winter_cli.modules.tui.widgets.repo_detail_view import PanelOutcome, RepoDetailView, render_detail_panels
@@ -25,20 +26,17 @@ from winter_cli.plugins.loader import PluginRegistry
 from winter_cli.plugins.types import ActionScope, DetailPanelContext, StandaloneRepoContext, WorkspaceContext
 
 
-class StandaloneDetailScreen(PluginActionMixin, Screen):
+class StandaloneDetailScreen(KeybindingMixin, PluginActionMixin, Screen):
     """Detail view for one standalone repository.
 
     The single-repo subset of `WorktreeDetailScreen`: no multi-repo table (a
     standalone is one repo), just the shared `RepoDetailView` body — branch,
     tracking status, dirty files, recent commits, and any contributed
     `IDetailPanel` tabs. Reached by pressing Enter on a standalone row.
-    """
 
-    BINDINGS: ClassVar[list[Binding]] = [
-        Binding("r", "refresh", "Refresh"),
-        Binding("L", "open_log", "Log"),
-        Binding("q", "back", "Back"),
-    ]
+    Bindings are installed in on_mount from config-resolved action ids
+    (keybindings.actions.STANDALONE_DETAIL_ACTIONS), not hardcoded here.
+    """
 
     def __init__(
         self,
@@ -48,6 +46,7 @@ class StandaloneDetailScreen(PluginActionMixin, Screen):
         workspace: Workspace,
         plugin_registry: PluginRegistry,
         error_log: ErrorLogService,
+        keybinding_resolver: KeybindingResolver,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -57,6 +56,7 @@ class StandaloneDetailScreen(PluginActionMixin, Screen):
         self._workspace = workspace
         self._plugin_registry = plugin_registry
         self._error_log = error_log
+        self._keybinding_resolver = keybinding_resolver
         self._detail_panels = list(plugin_registry.detail_panels)
         # Retained for parity with WorktreeDetailScreen and as a test/observability
         # hook on the last-rendered status; not read by the screen itself.
@@ -74,7 +74,12 @@ class StandaloneDetailScreen(PluginActionMixin, Screen):
         # Only workspace- and standalone-scoped actions have a resolvable
         # context here; feature-env / feature-worktree actions don't apply to a
         # standalone repo, so we don't advertise their keys.
-        self._bind_plugin_actions((ActionScope.workspace, ActionScope.standalone_repository))
+        plugin_bindings = plugin_action_bindings(
+            self._plugin_registry,
+            (ActionScope.workspace, ActionScope.standalone_repository),
+        )
+        for message in self._install_keybindings([*STANDALONE_DETAIL_ACTIONS, *plugin_bindings]):
+            self.app.notify(message, title="keybindings", severity="error", timeout=8)
 
         self._refresh_data()
         self.set_interval(30, self._refresh_data)

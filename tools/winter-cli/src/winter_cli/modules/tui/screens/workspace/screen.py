@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import contextlib
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, cast
 
 from textual import work
-from textual.binding import Binding
 from textual.containers import Center, Horizontal, Middle
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, LoadingIndicator, Static
 
 from winter_cli.modules.tui.error_log import ErrorLogService
+from winter_cli.modules.tui.keybindings import (
+    KeybindingMixin,
+    KeybindingResolver,
+    all_builtin_action_ids,
+    plugin_action_bindings,
+)
+from winter_cli.modules.tui.keybindings.actions import PLUGIN_ID_PREFIX, WORKSPACE_ACTIONS
 from winter_cli.modules.tui.screens.plugin_action_mixin import PluginActionMixin
 from winter_cli.modules.tui.screens.workspace.feature_worktrees import FeatureWorktreesGrid
 from winter_cli.modules.tui.screens.workspace.standalone_repos import StandaloneReposTable
@@ -39,14 +45,10 @@ if TYPE_CHECKING:
     from winter_cli.modules.tui.app import WinterDashboardApp
 
 
-class WorkspaceScreen(PluginActionMixin, Screen):
-    BINDINGS: ClassVar[list[Binding]] = [
-        Binding("r", "refresh", "Refresh"),
-        Binding("L", "open_log", "Log"),
-        Binding("q", "quit", "Quit"),
-        Binding("ctrl+k", "jump_prev", "Jump prev", show=False),
-        Binding("ctrl+j", "jump_next", "Jump next", show=False),
-    ]
+class WorkspaceScreen(KeybindingMixin, PluginActionMixin, Screen):
+    # Bindings are installed in on_mount from config-resolved action ids
+    # (see winter_cli.modules.tui.keybindings.actions.WORKSPACE_ACTIONS), not
+    # hardcoded here, so users can remap them via `[keybindings]`.
 
     def __init__(
         self,
@@ -57,6 +59,7 @@ class WorkspaceScreen(PluginActionMixin, Screen):
         workspace: Workspace,
         plugin_registry: PluginRegistry,
         error_log: ErrorLogService,
+        keybinding_resolver: KeybindingResolver,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -67,6 +70,7 @@ class WorkspaceScreen(PluginActionMixin, Screen):
         self._workspace = workspace
         self._plugin_registry = plugin_registry
         self._error_log = error_log
+        self._keybinding_resolver = keybinding_resolver
         self._env_worktrees: dict[str, FeatureEnvironmentWorktrees] = {}
 
     def compose(self):
@@ -101,10 +105,29 @@ class WorkspaceScreen(PluginActionMixin, Screen):
         self.query_one("#services").display = False
         self.query_one("#status-bar").display = False
 
-        self._bind_plugin_actions()
+        self._install_dashboard_keybindings()
 
         self._refresh_data()
         self.set_interval(30, self._refresh_data)
+
+    def _install_dashboard_keybindings(self) -> None:
+        """Resolve built-in + plugin action keys from config and install them.
+
+        The workspace screen owns the global unknown-action-id check: it is the
+        only screen that sees every scope's plugin actions, so it validates the
+        whole `[keybindings]` table against the union of known ids here.
+        """
+        plugin_bindings = plugin_action_bindings(self._plugin_registry, tuple(ActionScope))
+        actions = [*WORKSPACE_ACTIONS, *plugin_bindings]
+        errors = self._install_keybindings(actions)
+
+        known_ids = all_builtin_action_ids() | {
+            f"{PLUGIN_ID_PREFIX}{a.name}" for a in self._plugin_registry.tui_actions
+        }
+        errors += self._keybinding_resolver.unknown_id_errors(known_ids)
+
+        for message in errors:
+            self.app.notify(message, title="keybindings", severity="error", timeout=8)
 
     @work(thread=True)
     def _refresh_data(self) -> None:
@@ -212,12 +235,7 @@ class WorkspaceScreen(PluginActionMixin, Screen):
             chain[-1].focus()
 
     def on_data_table_cell_selected(self, event: FeatureWorktreesGrid.CellSelected) -> None:
-        grid = self.query_one("#grid", FeatureWorktreesGrid)
-        name = grid.get_selected_worktree()
-        if name is not None:
-            repo_name = grid.get_selected_repo()
-            app = cast("WinterDashboardApp", self.app)
-            app.push_screen(app.screen_factory.worktree_detail_screen(name, focused_repo=repo_name))
+        self._open_feature_detail()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         # The feature grid is cursor_type="cell" (CellSelected, above); only the
@@ -225,6 +243,29 @@ class WorkspaceScreen(PluginActionMixin, Screen):
         # a standalone row drills into its single-repo detail view.
         if event.data_table.id != "singletons":
             return
+        self._open_standalone_detail()
+
+    def action_open_detail(self) -> None:
+        """Drill into the focused row's detail view (the `worktree.open_detail` id).
+
+        Routes to whichever table holds focus, so a remapped key behaves like
+        Enter does on either the feature grid or the standalone table.
+        """
+        focused = self.focused
+        if focused is not None and focused.id == "singletons":
+            self._open_standalone_detail()
+        else:
+            self._open_feature_detail()
+
+    def _open_feature_detail(self) -> None:
+        grid = self.query_one("#grid", FeatureWorktreesGrid)
+        name = grid.get_selected_worktree()
+        if name is not None:
+            repo_name = grid.get_selected_repo()
+            app = cast("WinterDashboardApp", self.app)
+            app.push_screen(app.screen_factory.worktree_detail_screen(name, focused_repo=repo_name))
+
+    def _open_standalone_detail(self) -> None:
         repo_name = self.query_one("#singletons", StandaloneReposTable).get_selected_repo()
         if repo_name is not None:
             app = cast("WinterDashboardApp", self.app)

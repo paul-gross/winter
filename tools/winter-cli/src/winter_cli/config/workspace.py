@@ -5,6 +5,7 @@ from pathlib import Path
 from winter_cli.config.models import (
     AdoptExtensions,
     GitIdentity,
+    KeybindingsConfig,
     ProjectRepositoryConfig,
     SingletonRepository,
     SingletonType,
@@ -100,6 +101,8 @@ class WorkspaceConfigService:
             GitIdentity(name=user["name"], email=user["email"]) if user.get("name") and user.get("email") else None
         )
 
+        keybindings = self._parse_keybindings(merged.get("keybindings"))
+
         main_branch = merged.get("main_branch") or "main"
 
         adopt_value = merged.get("adopt_extensions", "winter")
@@ -122,7 +125,28 @@ class WorkspaceConfigService:
             standalone_repos=standalone_repos,
             doctor=merged.get("doctor") if isinstance(merged.get("doctor"), str) else None,
             lint=merged.get("lint") if isinstance(merged.get("lint"), str) else None,
+            keybindings=keybindings,
         )
+
+    @staticmethod
+    def _parse_keybindings(raw: object) -> KeybindingsConfig:
+        """Build a KeybindingsConfig from the `[keybindings]` table.
+
+        Action-id -> key-spec entries live in the `[keybindings.bindings]`
+        sub-table so dotted ids (`workspace.sync`) stay flat string keys rather
+        than splitting into nested TOML tables. `leader` and `timeoutlen` are
+        scalar siblings.
+        """
+        if not isinstance(raw, dict):
+            return KeybindingsConfig()
+        bindings_raw = raw.get("bindings")
+        bindings = {str(k): str(v) for k, v in bindings_raw.items()} if isinstance(bindings_raw, dict) else {}
+        kwargs: dict = {"bindings": bindings}
+        if isinstance(raw.get("leader"), str):
+            kwargs["leader"] = raw["leader"]
+        if isinstance(raw.get("timeoutlen"), int) and not isinstance(raw.get("timeoutlen"), bool):
+            kwargs["timeoutlen"] = raw["timeoutlen"]
+        return KeybindingsConfig(**kwargs)
 
     def _read_config(self, path: Path) -> dict:
         if not self._fs.is_file(path):

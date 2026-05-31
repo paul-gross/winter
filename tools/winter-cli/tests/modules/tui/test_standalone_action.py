@@ -13,6 +13,8 @@ from typing import Any, cast
 import pytest
 from textual.app import App, ComposeResult
 
+from winter_cli.config.models import KeybindingsConfig
+from winter_cli.modules.tui.keybindings import KeybindingResolver
 from winter_cli.modules.tui.screens.workspace.screen import WorkspaceScreen
 from winter_cli.modules.tui.screens.workspace.standalone_repos import StandaloneReposTable
 from winter_cli.modules.workspace.models.domain_model import StandaloneRepository, Workspace
@@ -120,6 +122,7 @@ def _make_screen(actions: list[TuiAction]) -> WorkspaceScreen:
         workspace=_WORKSPACE,
         plugin_registry=cast(Any, _FakePluginRegistry(actions)),
         error_log=cast(Any, None),
+        keybinding_resolver=KeybindingResolver(KeybindingsConfig()),
     )
 
 

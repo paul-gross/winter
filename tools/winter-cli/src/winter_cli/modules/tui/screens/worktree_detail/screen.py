@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import contextlib
-from typing import ClassVar, cast
+from typing import cast
 
 from rich.text import Text
 from textual import work
-from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Static
 
 from winter_cli.modules.tui.error_log import ErrorLogService
+from winter_cli.modules.tui.keybindings import KeybindingMixin, KeybindingResolver, plugin_action_bindings
+from winter_cli.modules.tui.keybindings.actions import WORKTREE_DETAIL_ACTIONS
 from winter_cli.modules.tui.screens.plugin_action_mixin import PluginActionMixin
 from winter_cli.modules.tui.screens.workspace.repo_status import render_repo_cell
 from winter_cli.modules.tui.widgets.refresh_status import RefreshStatus
@@ -36,16 +37,9 @@ from winter_cli.plugins.types import (
 )
 
 
-class WorktreeDetailScreen(PluginActionMixin, Screen):
-    BINDINGS: ClassVar[list[Binding]] = [
-        Binding("r", "refresh", "Refresh"),
-        Binding("L", "open_log", "Log"),
-        Binding("h", "cursor_left", "Left", show=False),
-        Binding("j", "cursor_down", "Down", show=False),
-        Binding("k", "cursor_up", "Up", show=False),
-        Binding("l", "cursor_right", "Right", show=False),
-        Binding("q", "back", "Back"),
-    ]
+class WorktreeDetailScreen(KeybindingMixin, PluginActionMixin, Screen):
+    # Bindings are installed in on_mount from config-resolved action ids
+    # (keybindings.actions.WORKTREE_DETAIL_ACTIONS), not hardcoded here.
 
     def __init__(
         self,
@@ -57,6 +51,7 @@ class WorktreeDetailScreen(PluginActionMixin, Screen):
         workspace: Workspace,
         plugin_registry: PluginRegistry,
         error_log: ErrorLogService,
+        keybinding_resolver: KeybindingResolver,
         focused_repo: str | None = None,
         **kwargs,
     ) -> None:
@@ -69,6 +64,7 @@ class WorktreeDetailScreen(PluginActionMixin, Screen):
         self._workspace = workspace
         self._plugin_registry = plugin_registry
         self._error_log = error_log
+        self._keybinding_resolver = keybinding_resolver
         self._detail_panels = list(plugin_registry.detail_panels)
         self._env_status: FeatureEnvironmentStatus | None = None
         self._repo_statuses: list[WorktreeRepoStatus] = []
@@ -90,7 +86,9 @@ class WorktreeDetailScreen(PluginActionMixin, Screen):
         table = self.query_one("#detail-repos", DataTable)
         table.cursor_type = "row"
 
-        self._bind_plugin_actions()
+        plugin_bindings = plugin_action_bindings(self._plugin_registry, tuple(ActionScope))
+        for message in self._install_keybindings([*WORKTREE_DETAIL_ACTIONS, *plugin_bindings]):
+            self.app.notify(message, title="keybindings", severity="error", timeout=8)
 
         self._refresh_data()
         self.set_interval(30, self._refresh_data)

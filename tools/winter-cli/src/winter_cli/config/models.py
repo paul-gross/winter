@@ -119,6 +119,26 @@ class StandaloneRepositoryConfig(BaseModel):
     """Shell commands run idempotently after clone."""
 
 
+class KeybindingsConfig(BaseModel):
+    """Dashboard keybinding overrides from the `[keybindings]` config table.
+
+    `bindings` maps stable action ids (e.g. `workspace.refresh`,
+    `worktree.open_detail`, `app.quit`, `plugin.<name>`) to Neovim-inspired key
+    specs; absent ids fall back to their hardcoded defaults. `leader` is the
+    token `<leader>` expands to, and `timeoutlen` is the inter-key deadline (ms)
+    for multi-key chord sequences, mirroring Neovim's option of the same name.
+    """
+
+    leader: str = "\\"
+    """Key spec that `<leader>` expands to (default backslash, Neovim's default)."""
+
+    timeoutlen: int = 1000
+    """Milliseconds to wait for the next key of a pending chord sequence."""
+
+    bindings: dict[str, str] = Field(default_factory=dict)
+    """Map of action id -> key spec. Absent ids keep their hardcoded default."""
+
+
 class WorkspaceConfig(BaseModel):
     """Immutable configuration snapshot for the current workspace."""
 
@@ -167,3 +187,6 @@ class WorkspaceConfig(BaseModel):
     set, the script runs before extension checks and emits one NDJSON finding
     per stdout line (optionally with `file`/`line`). Hosts ecosystem-general
     checks the workspace owns but no single extension does."""
+
+    keybindings: KeybindingsConfig = Field(default_factory=KeybindingsConfig)
+    """Dashboard keybinding overrides from the `[keybindings]` table."""

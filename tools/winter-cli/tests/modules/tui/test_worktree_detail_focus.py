@@ -15,6 +15,8 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import DataTable
 
+from winter_cli.config.models import KeybindingsConfig
+from winter_cli.modules.tui.keybindings import KeybindingResolver
 from winter_cli.modules.tui.screens.workspace.feature_worktrees import FeatureWorktreesGrid
 from winter_cli.modules.tui.screens.worktree_detail.screen import WorktreeDetailScreen
 from winter_cli.modules.workspace.models.domain_model import (
@@ -197,6 +199,7 @@ def _make_detail_screen(focused_repo: str | None, detail_panels: tuple = ()) -> 
         workspace=_WORKSPACE,
         plugin_registry=cast(Any, _FakePluginRegistry(detail_panels)),
         error_log=cast(Any, None),
+        keybinding_resolver=KeybindingResolver(KeybindingsConfig()),
         focused_repo=focused_repo,
     )
 

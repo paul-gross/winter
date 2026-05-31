@@ -22,6 +22,8 @@ from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Static, TabbedContent
 
+from winter_cli.config.models import KeybindingsConfig
+from winter_cli.modules.tui.keybindings import KeybindingResolver
 from winter_cli.modules.tui.screens.standalone_detail import StandaloneDetailScreen
 from winter_cli.modules.tui.screens.workspace.screen import WorkspaceScreen
 from winter_cli.modules.tui.screens.workspace.standalone_repos import StandaloneReposTable
@@ -260,6 +262,7 @@ def _make_standalone_screen(panels: list[Any]) -> StandaloneDetailScreen:
         workspace=_WORKSPACE,
         plugin_registry=cast(Any, _FakePluginRegistry(panels)),
         error_log=cast(Any, None),
+        keybinding_resolver=KeybindingResolver(KeybindingsConfig()),
     )
 
 
@@ -357,6 +360,7 @@ def _make_workspace_screen() -> WorkspaceScreen:
         workspace=_WORKSPACE,
         plugin_registry=cast(Any, _WsPluginRegistry()),
         error_log=cast(Any, None),
+        keybinding_resolver=KeybindingResolver(KeybindingsConfig()),
     )
 
 

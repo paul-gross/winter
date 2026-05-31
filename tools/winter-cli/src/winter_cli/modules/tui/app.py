@@ -16,8 +16,11 @@ class WinterDashboardApp(App):
 
     TITLE = "Winter Dashboard"
 
+    # The user-facing quit key is the rebindable `app.quit` action, installed on
+    # the workspace screen from `[keybindings]` (default `q`). ctrl+c stays as a
+    # non-rebindable hard escape hatch so a bad keymap can never strand the user.
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("q", "quit", "Quit"),
+        Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
     ]
 
     def __init__(self, container: Container, source_override: str | None = None, **kwargs) -> None:
