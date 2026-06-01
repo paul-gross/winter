@@ -47,10 +47,13 @@ class ActionBinding:
 
 # `app.quit` is offered on the workspace screen (the only screen where quitting,
 # rather than going back, is the q action). Detail screens bind their own back.
+# Its Textual target is the `app.`-namespaced `app.quit`, not a bare `quit`:
+# bindings install on the screen, and Textual dispatches a bare action against
+# the screen namespace, which has no `action_quit` (that method lives on App).
 WORKSPACE_ACTIONS: tuple[ActionBinding, ...] = (
     ActionBinding("workspace.refresh", "r", "refresh", "Refresh"),
     ActionBinding("workspace.open_log", "L", "open_log", "Log"),
-    ActionBinding("app.quit", "q", "quit", "Quit"),
+    ActionBinding("app.quit", "q", "app.quit", "Quit"),
     # Lives on the workspace screen (the grid's row → detail drill-in) but keeps
     # the issue's `worktree.open_detail` id since it opens a worktree's detail.
     ActionBinding("worktree.open_detail", "<enter>", "open_detail", "Open", show=False),

@@ -14,7 +14,7 @@ from textual.screen import Screen
 
 from winter_cli.config.models import KeybindingsConfig
 from winter_cli.modules.tui.keybindings import KeybindingMixin, KeybindingResolver
-from winter_cli.modules.tui.keybindings.actions import ActionBinding
+from winter_cli.modules.tui.keybindings.actions import WORKSPACE_ACTIONS, ActionBinding
 
 # Built-in-style actions under test: a single key, a modifier chord, and the
 # rebindable open-detail action (default Enter).
@@ -132,6 +132,45 @@ async def test_sequence_completes_before_timeout() -> None:
         await pilot.press("s")
         await pilot.pause()
         assert app.kb_screen.fired == ["sync"]
+
+
+def _action_binding(action_id: str) -> ActionBinding:
+    return next(ab for ab in WORKSPACE_ACTIONS if ab.action_id == action_id)
+
+
+@pytest.mark.asyncio
+async def test_app_quit_dispatches_to_app_namespace() -> None:
+    # `app.quit` installs on the workspace screen, but `action_quit` lives only on
+    # App. Its Textual target must be the `app.`-namespaced `app.quit` so dispatch
+    # reaches the App; a bare `quit` would resolve against the screen (no
+    # `action_quit`) and silently do nothing — the q-no-longer-quits regression.
+    quit_binding = _action_binding("app.quit")
+
+    class _QuitScreen(KeybindingMixin, Screen):
+        def __init__(self, resolver: KeybindingResolver) -> None:
+            super().__init__()
+            self._keybinding_resolver = resolver
+
+        def on_mount(self) -> None:
+            self._install_keybindings([quit_binding])
+
+    class _QuitApp(App):
+        def __init__(self, resolver: KeybindingResolver) -> None:
+            super().__init__()
+            self.kb_screen = _QuitScreen(resolver)
+            self.quit_fired = False
+
+        def on_mount(self) -> None:
+            self.push_screen(self.kb_screen)
+
+        async def action_quit(self) -> None:  # type: ignore[override]
+            self.quit_fired = True
+
+    app = _QuitApp(_resolver())
+    async with app.run_test() as pilot:
+        await pilot.press(quit_binding.default)
+        await pilot.pause()
+        assert app.quit_fired is True
 
 
 @pytest.mark.asyncio
