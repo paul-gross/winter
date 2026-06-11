@@ -287,12 +287,7 @@ class WorkspaceHandler:
         rows: list[list[str | Cell]] = []
         row_styles: list[str | None] = []
         for outcome in report.repos:
-            if outcome.result == CheckoutResult.reset:
-                style = "green"
-            elif outcome.result == CheckoutResult.skip_missing_ref:
-                style = "dim"
-            else:
-                style = "red"
+            style = "green" if outcome.result in (CheckoutResult.reset_feature, CheckoutResult.reset_main) else "red"
             rows.append([outcome.repo_name, outcome.result.value])
             row_styles.append(style)
 
@@ -306,11 +301,11 @@ class WorkspaceHandler:
                 f"Re-run with {out.style('--force', 'bold')} to bypass."
             )
         else:
-            reset_count = sum(1 for o in report.repos if o.result == CheckoutResult.reset)
-            skip_count = sum(1 for o in report.repos if o.result == CheckoutResult.skip_missing_ref)
-            details = [f"{reset_count} reset"]
-            if skip_count:
-                details.append(f"{skip_count} skipped")
+            feature_count = sum(1 for o in report.repos if o.result == CheckoutResult.reset_feature)
+            main_count = sum(1 for o in report.repos if o.result == CheckoutResult.reset_main)
+            details = [f"{feature_count} to feature"]
+            if main_count:
+                details.append(f"{main_count} from main")
             click.echo(
                 f"\n{out.style('✓', 'green')} Checked out "
                 f"{out.style(report.env, 'bold')} → "

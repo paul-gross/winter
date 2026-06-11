@@ -21,11 +21,11 @@ class EnvCheckoutService:
     tracking. `checkout_env` is the two-phase adoption of a remote feature branch
     into every non-pinned worktree in the env. Phase 1 is a non-destructive
     safety check that aborts the entire run if any repo refuses (so a refusal
-    blocks Phase 2 globally — no `git reset` executes in that case). Phase 2
-    then runs the destructive `set_upstream` / `set_push_default` / `hard_reset`
-    sequence serially across the passing repos; if a Phase 2 git op raises
-    mid-loop, earlier repos have already been mutated and the exception
-    propagates with no rollback.
+    blocks Phase 2 globally — no connect and no `git reset` executes in that
+    case). Phase 2 then runs the destructive `set_upstream` / `set_push_default`
+    / `hard_reset` sequence serially across every non-pinned repo; if a Phase 2
+    git op raises mid-loop, earlier repos have already been mutated and the
+    exception propagates with no rollback.
     """
 
     def __init__(self, repo_repo: IWriteRepoRepository) -> None:
@@ -60,11 +60,15 @@ class EnvCheckoutService:
     ) -> EnvCheckoutReport:
         """Adopt `origin/<feature_branch>` into every non-pinned worktree repo.
 
-        Phase 1 classifies each repo locally (no network): dirty / divergent
-        / missing-ref / clean. If any repo refuses safety in non-force mode,
-        Phase 2 is skipped — `git reset --hard` runs in no repo. Otherwise
-        Phase 2 wires upstream tracking and resets the Greek-letter branch to
-        the local `origin/<feature_branch>` ref in each repo that has it.
+        No network — operates on local refs (run `winter ws fetch` first for
+        fresh ones). Phase 1 classifies each repo locally: dirty, or
+        *abandonment* (HEAD carries commits not on the branch the env is
+        moving away from — its own current upstream). If any repo refuses in
+        non-force mode, Phase 2 is skipped — no connect, no reset anywhere.
+        Otherwise Phase 2 connects every non-pinned repo to
+        `origin/<feature_branch>` and hard-resets it to that ref where it
+        exists, or to the repo's `origin/<main_branch>` where the feature ref
+        is absent (a new branch started from main, created on first push).
 
         Phase 2 is not atomic across repos: if a git op raises mid-loop, repos
         processed earlier are already mutated and the exception propagates
@@ -77,39 +81,20 @@ class EnvCheckoutService:
             feature_branch,
             force,
         )
-        remote_ref = f"origin/{feature_branch}"
+        feature_ref = f"origin/{feature_branch}"
         targets = [wt for wt in env_worktrees.worktrees if not wt.repository.pinned]
 
-        passing: list[FeatureWorktree] = []
+        # Phase 1 — safety classification (local, no network). Skipped under
+        # --force. Compares against each repo's *own* upstream, not the target.
         refused: list[RepoCheckoutOutcome] = []
-        skipped: list[RepoCheckoutOutcome] = []
-        for wt in targets:
-            if not self._repo_repo.has_local_ref(wt, remote_ref):
-                skipped.append(
-                    RepoCheckoutOutcome(
-                        repo_name=wt.repository.name,
-                        result=CheckoutResult.skip_missing_ref,
-                    )
-                )
-                continue
-            if not force:
+        if not force:
+            for wt in targets:
                 if self._repo_repo.is_worktree_dirty(wt):
-                    refused.append(
-                        RepoCheckoutOutcome(
-                            repo_name=wt.repository.name,
-                            result=CheckoutResult.refused_dirty,
-                        )
-                    )
+                    refused.append(RepoCheckoutOutcome(wt.repository.name, CheckoutResult.refused_dirty))
                     continue
-                if self._repo_repo.count_commits_not_in(wt, remote_ref) > 0:
-                    refused.append(
-                        RepoCheckoutOutcome(
-                            repo_name=wt.repository.name,
-                            result=CheckoutResult.refused_divergent,
-                        )
-                    )
-                    continue
-            passing.append(wt)
+                safety_ref = self._abandonment_safety_ref(wt)
+                if self._repo_repo.count_commits_not_in(wt, safety_ref) > 0:
+                    refused.append(RepoCheckoutOutcome(wt.repository.name, CheckoutResult.refused_abandonment))
 
         if refused:
             logger.warning(
@@ -120,27 +105,40 @@ class EnvCheckoutService:
                 env=env_worktrees.environment.name,
                 feature_branch=feature_branch,
                 aborted=True,
-                repos=refused + skipped,
+                repos=refused,
             )
 
-        applied: list[RepoCheckoutOutcome] = []
-        for wt in passing:
-            self._repo_repo.set_upstream(wt, remote_ref)
+        # Phase 2 — connect every non-pinned repo, then reset to the feature
+        # ref where present or to main where the feature branch doesn't exist
+        # yet.
+        outcomes: list[RepoCheckoutOutcome] = []
+        for wt in targets:
+            self._repo_repo.set_upstream(wt, feature_ref)
             self._repo_repo.set_push_default(wt)
-            self._repo_repo.hard_reset(wt, remote_ref)
-            applied.append(
-                RepoCheckoutOutcome(
-                    repo_name=wt.repository.name,
-                    result=CheckoutResult.reset,
-                )
-            )
+            if self._repo_repo.has_local_ref(wt, feature_ref):
+                self._repo_repo.hard_reset(wt, feature_ref)
+                outcomes.append(RepoCheckoutOutcome(wt.repository.name, CheckoutResult.reset_feature))
+            else:
+                self._repo_repo.hard_reset(wt, f"origin/{wt.repository.main_branch}")
+                outcomes.append(RepoCheckoutOutcome(wt.repository.name, CheckoutResult.reset_main))
 
-        repo_order = [wt.repository.name for wt in targets]
-        outcomes = applied + skipped
-        outcomes.sort(key=lambda o: repo_order.index(o.repo_name))
         return EnvCheckoutReport(
             env=env_worktrees.environment.name,
             feature_branch=feature_branch,
             aborted=False,
             repos=outcomes,
         )
+
+    def _abandonment_safety_ref(self, wt: FeatureWorktree) -> str:
+        """The ref a checkout would abandon work relative to.
+
+        The worktree's own current upstream when it resolves locally, else the
+        repo's `origin/<main_branch>`. Comparing against the branch the env is
+        moving *away from* (not the target) is what makes the guard protect
+        unpushed local commits. The fallback covers a disconnected env or a
+        never-pushed upstream whose ref isn't in the local object store.
+        """
+        upstream = self._repo_repo.get_worktree_upstream(wt)
+        if upstream is not None and self._repo_repo.has_local_ref(wt, upstream):
+            return upstream
+        return f"origin/{wt.repository.main_branch}"

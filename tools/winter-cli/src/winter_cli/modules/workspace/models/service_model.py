@@ -176,12 +176,19 @@ class EnvSyncReport:
 
 
 class CheckoutResult(enum.Enum):
-    """Per-repo outcome of `winter ws checkout`."""
+    """Per-repo outcome of `winter ws checkout`.
 
-    reset = "reset"
-    skip_missing_ref = "skip-missing-ref"
+    `reset_feature` / `reset_main` are the two success shapes: the worktree was
+    connected to `origin/<feature-branch>` and hard-reset either to that ref
+    (when it exists locally) or to `origin/<main-branch>` (when the feature ref
+    is absent — a brand-new branch started from main). `refused_dirty` /
+    `refused_abandonment` are the Phase 1 safety refusals.
+    """
+
+    reset_feature = "reset-feature"
+    reset_main = "reset-main"
     refused_dirty = "refused-dirty"
-    refused_divergent = "refused-divergent"
+    refused_abandonment = "refused-abandonment"
 
 
 @dataclasses.dataclass
@@ -197,10 +204,10 @@ class EnvCheckoutReport:
     """All-or-nothing report from `winter ws checkout`.
 
     `aborted` is True when at least one repo refused safety in Phase 1 — in that
-    case no `git reset --hard` ran in any repo, and `repos` contains only the
-    refusals and any skip-missing-ref findings (would-be-reset repos are not
-    listed because nothing happened to them). When `aborted` is False, every
-    non-pinned repo has a `reset` or `skip-missing-ref` outcome.
+    case no connect and no `git reset --hard` ran in any repo, and `repos`
+    contains only the refusals (would-be-reset repos are not listed because
+    nothing happened to them). When `aborted` is False, every non-pinned repo
+    was connected and has a `reset_feature` or `reset_main` outcome.
     """
 
     env: str

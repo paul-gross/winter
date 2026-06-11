@@ -240,22 +240,24 @@ def ws_disconnect(ctx: click.Context, env: str, output_json: bool):
 @ws_group.command("checkout")
 @click.argument("env")
 @click.argument("feature_branch")
-@click.option("--force", is_flag=True, default=False, help="Bypass dirty / divergent safety checks.")
+@click.option("--force", is_flag=True, default=False, help="Bypass dirty / abandonment safety checks.")
 @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON.")
 @click.pass_context
 def ws_checkout(ctx: click.Context, env: str, feature_branch: str, force: bool, output_json: bool):
     """Adopt a remote feature branch into ENV, all-or-nothing across every repo.
 
-    Sets upstream tracking and resets each project repo's Greek-letter worktree
-    branch to the local `origin/FEATURE_BRANCH` ref. No network — run
-    `winter ws fetch` first if you need fresh remote-tracking refs.
+    Connects every non-pinned project worktree to `origin/FEATURE_BRANCH` and
+    resets each to it — or to the repo's `origin/<main>` when FEATURE_BRANCH
+    doesn't exist yet (a new branch started from main, created on first push).
+    No network — run `winter ws fetch` first if you want fresh remote-tracking
+    refs.
 
-    Phase 1 checks each repo for: working tree dirty (staged or unstaged),
-    commits not present on `origin/FEATURE_BRANCH`, and whether the ref exists
-    locally. If any repo is dirty or divergent (and --force is not set), the
-    whole command refuses with a per-repo report — no `git reset --hard` runs
-    anywhere. Repos missing the local remote-tracking ref are reported as
-    skipped (no destructive side effect) regardless of --force.
+    Phase 1 checks each repo for: working tree dirty (staged or unstaged), and
+    *abandonment* — commits on the worktree's branch that aren't on the branch
+    it's moving away from (its own current upstream, falling back to
+    `origin/<main>` when unconnected). If any repo is dirty or would abandon
+    work (and --force is not set), the whole command refuses with a per-repo
+    report — no connect and no `git reset --hard` runs anywhere.
     """
     container = cli_ctx(ctx).container
     handler = container.workspace_handler()

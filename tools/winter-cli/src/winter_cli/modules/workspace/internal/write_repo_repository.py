@@ -222,6 +222,11 @@ class WriteRepoRepository(ReadRepoRepository):
                     cwd=worktree.path,
                 ) from exc
 
+    def get_worktree_upstream(self, worktree: FeatureWorktree) -> str | None:
+        """The worktree branch's current upstream (e.g. `origin/feature-123`), or None. No network."""
+        with git.Repo(str(worktree.path)) as r:
+            return self._tracking_branch_name(r)
+
     def set_push_default(self, worktree: FeatureWorktree) -> None:
         with git.Repo(str(worktree.path)) as r, r.config_writer() as cw:
             cw.set_value("push", "default", "upstream")

@@ -188,3 +188,27 @@ def test_unset_upstream_is_idempotent_when_no_upstream(
     repo.unset_upstream(wt)
 
     r.git.branch.assert_not_called()
+
+
+def test_get_worktree_upstream_returns_tracking_branch_name(
+    monkeypatch: pytest.MonkeyPatch, repo: WriteRepoRepository
+) -> None:
+    git_mock = _fake_git_repo(monkeypatch)
+    r = git_mock.Repo.return_value
+    tb = MagicMock()
+    tb.name = "origin/feature-123"
+    r.active_branch.tracking_branch.return_value = tb
+    wt = _wt(_REPO_PATH)
+
+    assert repo.get_worktree_upstream(wt) == "origin/feature-123"
+
+
+def test_get_worktree_upstream_returns_none_when_unset(
+    monkeypatch: pytest.MonkeyPatch, repo: WriteRepoRepository
+) -> None:
+    git_mock = _fake_git_repo(monkeypatch)
+    r = git_mock.Repo.return_value
+    r.active_branch.tracking_branch.return_value = None
+    wt = _wt(_REPO_PATH)
+
+    assert repo.get_worktree_upstream(wt) is None
