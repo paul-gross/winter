@@ -181,14 +181,22 @@ class CheckoutResult(enum.Enum):
     `reset_feature` / `reset_main` are the two success shapes: the worktree was
     connected to `origin/<feature-branch>` and hard-reset either to that ref
     (when it exists locally) or to `origin/<main-branch>` (when the feature ref
-    is absent — a brand-new branch started from main). `refused_dirty` /
-    `refused_abandonment` are the Phase 1 safety refusals.
+    is absent — a brand-new branch started from main, opted into with `--new`).
+    The rest are Phase 1 refusals. `refused_dirty` / `refused_abandonment` are
+    the safety gate, bypassable with `--force`. The two ref-resolution refusals
+    are *not* bypassed by `--force`: `refused_unknown_branch` means the feature
+    ref resolved in no repo and `--new` wasn't given (more likely a typo or a
+    missing `winter ws fetch` than a new branch); `refused_missing_ref` means
+    neither the feature ref nor `origin/<main-branch>` resolves in that repo,
+    so there is nothing to reset to.
     """
 
     reset_feature = "reset-feature"
     reset_main = "reset-main"
     refused_dirty = "refused-dirty"
     refused_abandonment = "refused-abandonment"
+    refused_unknown_branch = "refused-unknown-branch"
+    refused_missing_ref = "refused-missing-ref"
 
 
 @dataclasses.dataclass
@@ -203,11 +211,12 @@ class RepoCheckoutOutcome:
 class EnvCheckoutReport:
     """All-or-nothing report from `winter ws checkout`.
 
-    `aborted` is True when at least one repo refused safety in Phase 1 — in that
-    case no connect and no `git reset --hard` ran in any repo, and `repos`
-    contains only the refusals (would-be-reset repos are not listed because
-    nothing happened to them). When `aborted` is False, every non-pinned repo
-    was connected and has a `reset_feature` or `reset_main` outcome.
+    `aborted` is True when at least one repo refused in Phase 1 (safety gate or
+    ref resolution) — in that case no connect and no `git reset --hard` ran in
+    any repo, and `repos` contains only the refusals (would-be-reset repos are
+    not listed because nothing happened to them). When `aborted` is False,
+    every non-pinned repo was connected and has a `reset_feature` or
+    `reset_main` outcome.
     """
 
     env: str

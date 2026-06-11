@@ -125,14 +125,15 @@ git -C ./projects/<repo-name> worktree remove ../../<name>/<repo-name>
 
 ```bash
 winter ws checkout <name> <feature-branch>           # all-or-nothing connect + reset across every non-pinned repo
+winter ws checkout <name> <feature-branch> --new     # start a branch that doesn't exist yet (reset to origin/<main>)
 winter ws checkout <name> <feature-branch> --force   # bypass dirty / abandonment safety checks
 ```
 
 **No network** — like `git checkout`, it operates on the remote-tracking refs you already have; run `winter ws fetch` first if you want them fresh.
 
-Connects every non-pinned worktree to `origin/<feature-branch>`, then hard-resets each to it where the ref exists locally, or to the repo's `origin/<main-branch>` where it doesn't (a new branch started from main, created on first push — so `checkout` works for a not-yet-pushed feature too).
+Connects every non-pinned worktree to `origin/<feature-branch>`, then hard-resets each to it where the ref exists locally, or to the repo's `origin/<main-branch>` where it doesn't (a new branch started from main, created on first push — so `checkout` works for a not-yet-pushed feature too). Starting a branch that exists in **no** repo requires `--new`: without it the whole command refuses (`refused-unknown-branch`), because a ref the local store has never seen is more likely a typo or a missing `winter ws fetch` than a new branch. Separately, any single repo where neither the feature ref nor `origin/<main-branch>` resolves refuses (`refused-missing-ref`) — a per-repo check that fires even when the branch resolves in other repos, since that repo has nothing to reset to; one refusal still aborts the whole run. Neither refusal is bypassed by `--force`.
 
-Phase 1 checks each repo for a dirty working tree and for **abandonment** — commits on the worktree's branch that aren't on the branch it's moving *away from* (its own current upstream, falling back to `origin/<main-branch>` when unconnected). If any repo is dirty or would abandon work (and `--force` is not set), the **whole command refuses with a per-repo report** — no connect and no `git reset --hard` runs anywhere. The comparison is against each repo's *own* upstream, not the target — the guard protects your unpushed commits, not the target's contents.
+Phase 1 also checks each repo for a dirty working tree and for **abandonment** — commits on the worktree's branch that aren't on the branch it's moving *away from* (its own current upstream, falling back to `origin/<main-branch>` when unconnected). If any repo is dirty or would abandon work (and `--force` is not set), the **whole command refuses with a per-repo report** — no connect and no `git reset --hard` runs anywhere. The comparison is against each repo's *own* upstream, not the target — the guard protects your unpushed commits, not the target's contents.
 
 ## Pushing completed work
 

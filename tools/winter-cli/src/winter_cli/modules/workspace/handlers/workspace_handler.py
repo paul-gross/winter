@@ -68,6 +68,7 @@ class EnvCheckoutParams:
     env: str
     feature_branch: str
     force: bool
+    new: bool
     output_json: bool
 
 
@@ -270,6 +271,7 @@ class WorkspaceHandler:
             env_worktrees,
             params.feature_branch,
             params.force,
+            new=params.new,
         )
 
         if params.output_json:
@@ -295,10 +297,20 @@ class WorkspaceHandler:
             click.echo(line)
 
         if report.aborted:
+            kinds = {o.result for o in report.repos}
+            if kinds == {CheckoutResult.refused_unknown_branch}:
+                hint = (
+                    f"origin/{report.feature_branch} doesn't resolve in any repo. "
+                    f"Run {out.style('winter ws fetch', 'bold')} first if the branch exists on the remote, "
+                    f"or re-run with {out.style('--new', 'bold')} to start it from each repo's origin/<main>."
+                )
+            elif CheckoutResult.refused_missing_ref in kinds:
+                hint = f"Some repos have no local ref to reset to — run {out.style('winter ws fetch', 'bold')} first."
+            else:
+                hint = f"Re-run with {out.style('--force', 'bold')} to bypass."
             click.echo(
                 f"\n{out.style('✗', 'red')} {out.style(report.env, 'bold')} "
-                f"not checked out — safety gate refused (no changes made). "
-                f"Re-run with {out.style('--force', 'bold')} to bypass."
+                f"not checked out — refused (no changes made). {hint}"
             )
         else:
             feature_count = sum(1 for o in report.repos if o.result == CheckoutResult.reset_feature)

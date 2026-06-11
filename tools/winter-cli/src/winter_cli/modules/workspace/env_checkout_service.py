@@ -57,14 +57,21 @@ class EnvCheckoutService:
         env_worktrees: FeatureEnvironmentWorktrees,
         feature_branch: str,
         force: bool,
+        new: bool = False,
     ) -> EnvCheckoutReport:
         """Adopt `origin/<feature_branch>` into every non-pinned worktree repo.
 
         No network — operates on local refs (run `winter ws fetch` first for
-        fresh ones). Phase 1 classifies each repo locally: dirty, or
-        *abandonment* (HEAD carries commits not on the branch the env is
-        moving away from — its own current upstream). If any repo refuses in
-        non-force mode, Phase 2 is skipped — no connect, no reset anywhere.
+        fresh ones). Phase 1 classifies each repo locally. Two ref-resolution
+        guards run regardless of `force`: a feature ref that resolves in *no*
+        repo refuses unless `new` is set (a branch the local store has never
+        seen is more likely a typo or a missing fetch than a deliberate new
+        branch), and a repo where neither the feature ref nor
+        `origin/<main_branch>` resolves refuses (Phase 2 would have nothing to
+        reset it to). The safety classification — dirty, or *abandonment*
+        (HEAD carries commits not on the branch the env is moving away from —
+        its own current upstream) — is skipped under `force`. If any repo
+        refuses, Phase 2 is skipped — no connect, no reset anywhere.
         Otherwise Phase 2 connects every non-pinned repo to
         `origin/<feature_branch>` and hard-resets it to that ref where it
         exists, or to the repo's `origin/<main_branch>` where the feature ref
@@ -76,25 +83,47 @@ class EnvCheckoutService:
         per-repo HEADs before calling and reset manually.
         """
         logger.info(
-            "checkout_env: env=%s feature_branch=%s force=%s",
+            "checkout_env: env=%s feature_branch=%s force=%s new=%s",
             env_worktrees.environment.name,
             feature_branch,
             force,
+            new,
         )
         feature_ref = f"origin/{feature_branch}"
         targets = [wt for wt in env_worktrees.worktrees if not wt.repository.pinned]
+        have_feature_ref = {wt.repository.name: self._repo_repo.has_local_ref(wt, feature_ref) for wt in targets}
 
-        # Phase 1 — safety classification (local, no network). Skipped under
-        # --force. Compares against each repo's *own* upstream, not the target.
         refused: list[RepoCheckoutOutcome] = []
-        if not force:
+        if targets and not new and not any(have_feature_ref.values()):
+            # Phase 1 — ref-resolution guard (local, no network; not bypassed
+            # by --force): the feature ref resolves nowhere, which is more
+            # likely a typo or a missing `winter ws fetch` than a new branch.
+            # --new is the explicit opt-in for starting one from main.
+            refused = [RepoCheckoutOutcome(wt.repository.name, CheckoutResult.refused_unknown_branch) for wt in targets]
+        else:
+            # Ref-resolution guard, per repo (also not bypassed by --force): a
+            # repo where neither the feature ref nor origin/<main> resolves
+            # has nothing for Phase 2 to reset to — refusing up front beats
+            # raising mid-loop after earlier repos were already mutated.
             for wt in targets:
-                if self._repo_repo.is_worktree_dirty(wt):
-                    refused.append(RepoCheckoutOutcome(wt.repository.name, CheckoutResult.refused_dirty))
-                    continue
-                safety_ref = self._abandonment_safety_ref(wt)
-                if self._repo_repo.count_commits_not_in(wt, safety_ref) > 0:
-                    refused.append(RepoCheckoutOutcome(wt.repository.name, CheckoutResult.refused_abandonment))
+                if not have_feature_ref[wt.repository.name] and not self._repo_repo.has_local_ref(
+                    wt, f"origin/{wt.repository.main_branch}"
+                ):
+                    refused.append(RepoCheckoutOutcome(wt.repository.name, CheckoutResult.refused_missing_ref))
+            refused_names = {o.repo_name for o in refused}
+
+            # Phase 1 — safety classification (local, no network). Skipped under
+            # --force. Compares against each repo's *own* upstream, not the target.
+            if not force:
+                for wt in targets:
+                    if wt.repository.name in refused_names:
+                        continue
+                    if self._repo_repo.is_worktree_dirty(wt):
+                        refused.append(RepoCheckoutOutcome(wt.repository.name, CheckoutResult.refused_dirty))
+                        continue
+                    safety_ref = self._abandonment_safety_ref(wt)
+                    if self._repo_repo.count_commits_not_in(wt, safety_ref) > 0:
+                        refused.append(RepoCheckoutOutcome(wt.repository.name, CheckoutResult.refused_abandonment))
 
         if refused:
             logger.warning(
@@ -115,7 +144,7 @@ class EnvCheckoutService:
         for wt in targets:
             self._repo_repo.set_upstream(wt, feature_ref)
             self._repo_repo.set_push_default(wt)
-            if self._repo_repo.has_local_ref(wt, feature_ref):
+            if have_feature_ref[wt.repository.name]:
                 self._repo_repo.hard_reset(wt, feature_ref)
                 outcomes.append(RepoCheckoutOutcome(wt.repository.name, CheckoutResult.reset_feature))
             else:

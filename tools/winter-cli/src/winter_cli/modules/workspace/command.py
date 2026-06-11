@@ -241,23 +241,37 @@ def ws_disconnect(ctx: click.Context, env: str, output_json: bool):
 @click.argument("env")
 @click.argument("feature_branch")
 @click.option("--force", is_flag=True, default=False, help="Bypass dirty / abandonment safety checks.")
+@click.option(
+    "--new",
+    "new",
+    is_flag=True,
+    default=False,
+    help="FEATURE_BRANCH doesn't exist yet: start it from main (required when the ref resolves in no repo).",
+)
 @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON.")
 @click.pass_context
-def ws_checkout(ctx: click.Context, env: str, feature_branch: str, force: bool, output_json: bool):
+def ws_checkout(ctx: click.Context, env: str, feature_branch: str, force: bool, new: bool, output_json: bool):
     """Adopt a remote feature branch into ENV, all-or-nothing across every repo.
 
     Connects every non-pinned project worktree to `origin/FEATURE_BRANCH` and
     resets each to it — or to the repo's `origin/<main>` when FEATURE_BRANCH
-    doesn't exist yet (a new branch started from main, created on first push).
-    No network — run `winter ws fetch` first if you want fresh remote-tracking
-    refs.
+    doesn't exist there (a new branch started from main, created on first
+    push). No network — run `winter ws fetch` first if you want fresh
+    remote-tracking refs.
 
-    Phase 1 checks each repo for: working tree dirty (staged or unstaged), and
-    *abandonment* — commits on the worktree's branch that aren't on the branch
-    it's moving away from (its own current upstream, falling back to
-    `origin/<main>` when unconnected). If any repo is dirty or would abandon
-    work (and --force is not set), the whole command refuses with a per-repo
-    report — no connect and no `git reset --hard` runs anywhere.
+    When `origin/FEATURE_BRANCH` resolves in *no* repo, the command refuses
+    unless --new is given — a branch the local store has never seen is more
+    likely a typo or a missing `winter ws fetch` than a new branch. A repo
+    where neither the feature ref nor `origin/<main>` resolves always refuses
+    (nothing to reset to). Neither refusal is bypassed by --force.
+
+    Phase 1 also checks each repo for: working tree dirty (staged or
+    unstaged), and *abandonment* — commits on the worktree's branch that
+    aren't on the branch it's moving away from (its own current upstream,
+    falling back to `origin/<main>` when unconnected). If any repo is dirty
+    or would abandon work (and --force is not set), the whole command refuses
+    with a per-repo report — no connect and no `git reset --hard` runs
+    anywhere.
     """
     container = cli_ctx(ctx).container
     handler = container.workspace_handler()
@@ -266,6 +280,7 @@ def ws_checkout(ctx: click.Context, env: str, feature_branch: str, force: bool, 
             env=env,
             feature_branch=feature_branch,
             force=force,
+            new=new,
             output_json=output_json,
         )
     )

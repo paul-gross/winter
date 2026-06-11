@@ -160,12 +160,12 @@ def test_checkout_env_resets_clean_repos_with_present_ref(
 def test_checkout_env_connects_and_resets_to_main_when_feature_ref_missing(
     workspace: Workspace, service: EnvCheckoutService, fake_repo_repo: FakeWriteRepoRepository
 ) -> None:
-    """A not-yet-pushed feature branch: connect every repo anyway, reset to origin/<main>."""
+    """A not-yet-pushed feature branch, opted into with --new: connect every repo, reset to origin/<main>."""
     repos = [ProjectRepository(name="r1", main_path=workspace.root_path / "r1", main_branch="trunk")]
     fake_repo_repo.missing_refs.add(("r1", "origin/feature/new"))
     env_wts = _env_worktrees(workspace, repos)
 
-    report = service.checkout_env(env_wts, feature_branch="feature/new", force=False)
+    report = service.checkout_env(env_wts, feature_branch="feature/new", force=False, new=True)
 
     assert report.aborted is False
     assert [(o.repo_name, o.result) for o in report.repos] == [("r1", CheckoutResult.reset_main)]
@@ -173,6 +173,82 @@ def test_checkout_env_connects_and_resets_to_main_when_feature_ref_missing(
     assert fake_repo_repo.set_upstream_calls == [("r1", "origin/feature/new")]
     # ...but reset to the repo's main branch.
     assert fake_repo_repo.hard_reset_calls == [("r1", "origin/trunk")]
+
+
+def test_checkout_env_refuses_unknown_branch_without_new(
+    workspace: Workspace, service: EnvCheckoutService, fake_repo_repo: FakeWriteRepoRepository
+) -> None:
+    """Feature ref resolving in no repo without --new → refused_unknown_branch for every repo, abort."""
+    repos = [
+        ProjectRepository(name="r1", main_path=workspace.root_path / "r1", main_branch="main"),
+        ProjectRepository(name="r2", main_path=workspace.root_path / "r2", main_branch="main"),
+    ]
+    fake_repo_repo.missing_refs.add(("r1", "origin/feature/typo"))
+    fake_repo_repo.missing_refs.add(("r2", "origin/feature/typo"))
+    env_wts = _env_worktrees(workspace, repos)
+
+    report = service.checkout_env(env_wts, feature_branch="feature/typo", force=False)
+
+    assert report.aborted is True
+    assert [(o.repo_name, o.result) for o in report.repos] == [
+        ("r1", CheckoutResult.refused_unknown_branch),
+        ("r2", CheckoutResult.refused_unknown_branch),
+    ]
+    assert fake_repo_repo.set_upstream_calls == []
+    assert fake_repo_repo.hard_reset_calls == []
+
+
+def test_checkout_env_unknown_branch_guard_is_not_bypassed_by_force(
+    workspace: Workspace, service: EnvCheckoutService, fake_repo_repo: FakeWriteRepoRepository
+) -> None:
+    """--force bypasses the safety gate, not the typo guard — only --new authorizes a nowhere-ref."""
+    repos = [ProjectRepository(name="r1", main_path=workspace.root_path / "r1", main_branch="main")]
+    fake_repo_repo.missing_refs.add(("r1", "origin/feature/typo"))
+    env_wts = _env_worktrees(workspace, repos)
+
+    report = service.checkout_env(env_wts, feature_branch="feature/typo", force=True)
+
+    assert report.aborted is True
+    assert [(o.repo_name, o.result) for o in report.repos] == [("r1", CheckoutResult.refused_unknown_branch)]
+    assert fake_repo_repo.hard_reset_calls == []
+
+
+def test_checkout_env_mixed_ref_presence_needs_no_new_flag(
+    workspace: Workspace, service: EnvCheckoutService, fake_repo_repo: FakeWriteRepoRepository
+) -> None:
+    """Ref present in at least one repo → no --new needed; absent repos reset to origin/<main>."""
+    repos = [
+        ProjectRepository(name="r1", main_path=workspace.root_path / "r1", main_branch="main"),
+        ProjectRepository(name="r2", main_path=workspace.root_path / "r2", main_branch="main"),
+    ]
+    fake_repo_repo.missing_refs.add(("r2", "origin/feature/widget"))
+    env_wts = _env_worktrees(workspace, repos)
+
+    report = service.checkout_env(env_wts, feature_branch="feature/widget", force=False)
+
+    assert report.aborted is False
+    assert [(o.repo_name, o.result) for o in report.repos] == [
+        ("r1", CheckoutResult.reset_feature),
+        ("r2", CheckoutResult.reset_main),
+    ]
+    assert fake_repo_repo.hard_reset_calls == [("r1", "origin/feature/widget"), ("r2", "origin/main")]
+
+
+def test_checkout_env_refuses_repo_with_no_ref_to_reset_to(
+    workspace: Workspace, service: EnvCheckoutService, fake_repo_repo: FakeWriteRepoRepository
+) -> None:
+    """Neither the feature ref nor origin/<main> resolves → refused_missing_ref, even with --force and --new."""
+    repos = [ProjectRepository(name="r1", main_path=workspace.root_path / "r1", main_branch="main")]
+    fake_repo_repo.missing_refs.add(("r1", "origin/feature/new"))
+    fake_repo_repo.missing_refs.add(("r1", "origin/main"))
+    env_wts = _env_worktrees(workspace, repos)
+
+    report = service.checkout_env(env_wts, feature_branch="feature/new", force=True, new=True)
+
+    assert report.aborted is True
+    assert [(o.repo_name, o.result) for o in report.repos] == [("r1", CheckoutResult.refused_missing_ref)]
+    assert fake_repo_repo.set_upstream_calls == []
+    assert fake_repo_repo.hard_reset_calls == []
 
 
 def test_checkout_env_refuses_abandonment_against_own_upstream(

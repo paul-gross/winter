@@ -32,7 +32,7 @@ Greek letters (`alpha`, `beta`, …) are the suggested convention for feature en
 |---------|-------|---------|
 | `winter ws init` | `winter ws init [TARGET] [--all] [--json]` | Reconcile source checkouts or a feature environment |
 | `winter ws destroy` | `winter ws destroy ENV [--force\|--strict\|--dry-run] [--json]` | Tear down a feature env: fire `on_env_destroy` hooks, then remove every per-repo worktree and the env directory |
-| `winter ws checkout` | `winter ws checkout ENV FEATURE_BRANCH [--force] [--json]` | Connect every non-pinned worktree in ENV to FEATURE_BRANCH and reset to it (or to `origin/<main>` when it doesn't exist yet), all-or-nothing (no network — run `winter ws fetch` first if needed) |
+| `winter ws checkout` | `winter ws checkout ENV FEATURE_BRANCH [--new] [--force] [--json]` | Connect every non-pinned worktree in ENV to FEATURE_BRANCH and reset to it (or to `origin/<main>` where it doesn't exist — requires `--new` when it exists in no repo), all-or-nothing (no network — run `winter ws fetch` first if needed) |
 | `winter ws list` | `winter ws list [--json]` | List all feature environments |
 | `winter ws status` | `winter ws status [ENV] [--json]` | Git status across all repos in a feature environment |
 | `winter ws fetch` | `winter ws fetch [PATTERNS...] [--standalone\|--all] [--json]` | Fetch refs from `origin` for project worktrees matched by PATTERNS, and fast-forward each matched source checkout's local main |
@@ -146,9 +146,11 @@ Use `--dry-run` to preview the plan with no side effects.
 
 ### `checkout` — adopt a remote feature branch into an env
 
-`winter ws checkout ENV FEATURE_BRANCH` connects every non-pinned project worktree to `origin/FEATURE_BRANCH` and hard-resets each to it — or to the repo's `origin/<main>` when `FEATURE_BRANCH` doesn't exist locally yet (a new branch started from main, created on first push). **No network** — like `git checkout` it operates on the remote-tracking refs you already have; run `winter ws fetch` first if you want them fresh.
+`winter ws checkout ENV FEATURE_BRANCH` connects every non-pinned project worktree to `origin/FEATURE_BRANCH` and hard-resets each to it — or to the repo's `origin/<main>` when `FEATURE_BRANCH` doesn't exist locally there (a new branch started from main, created on first push). **No network** — like `git checkout` it operates on the remote-tracking refs you already have; run `winter ws fetch` first if you want them fresh.
 
-Phase 1 checks each repo for a dirty working tree and for **abandonment** — commits on the worktree's branch that aren't on the branch it's moving *away from* (its own current upstream, e.g. `origin/feature-123`, falling back to `origin/<main>` when the worktree isn't connected). **If any repo is dirty or would abandon work (and `--force` is not set), the whole command refuses with a per-repo report — no connect and no `git reset --hard` runs anywhere.** Note the comparison is against each repo's *own* upstream, not the target `FEATURE_BRANCH` — the guard protects your unpushed commits, not the target's contents.
+Starting a branch that doesn't exist anywhere requires `--new`: when `origin/FEATURE_BRANCH` resolves in **no** repo, the whole command refuses (`refused-unknown-branch`) — a ref the local store has never seen is more likely a typo or a missing `winter ws fetch` than a deliberate new branch. Separately, any single repo where neither the feature ref nor `origin/<main>` resolves refuses (`refused-missing-ref`) — a per-repo check that fires even when the branch resolves in other repos, since that repo has nothing to reset to; one refusal still aborts the whole run. Neither ref-resolution refusal is bypassed by `--force`.
+
+Phase 1 also checks each repo for a dirty working tree and for **abandonment** — commits on the worktree's branch that aren't on the branch it's moving *away from* (its own current upstream, e.g. `origin/feature-123`, falling back to `origin/<main>` when the worktree isn't connected). **If any repo is dirty or would abandon work (and `--force` is not set), the whole command refuses with a per-repo report — no connect and no `git reset --hard` runs anywhere.** Note the comparison is against each repo's *own* upstream, not the target `FEATURE_BRANCH` — the guard protects your unpushed commits, not the target's contents.
 
 ### `prune` — remove orphaned disk state
 
@@ -365,6 +367,11 @@ winter ws connect alpha feature/other-feature
 ```bash
 winter ws fetch alpha                              # refresh origin refs first
 winter ws checkout alpha feature/existing-branch   # connect + reset every non-pinned worktree to origin/feature/existing-branch
+```
+
+### Start a brand-new feature branch
+```bash
+winter ws checkout alpha feature/new-branch --new   # connect to the not-yet-pushed branch, reset every non-pinned worktree to origin/<main>
 ```
 
 ### Tear down a feature environment
