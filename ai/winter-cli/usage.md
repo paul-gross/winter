@@ -48,17 +48,19 @@ Greek letters (`alpha`, `beta`, …) are the suggested convention for feature en
 
 ### `fetch` / `pull` / `push` / `merge` patterns and scope
 
-All four commands accept any number of segment-aware glob `PATTERNS` over `<env>/<repo>` (no patterns = `*/*`). A bare env name is treated as `<env>/*`. Standalone repos are reached via `--standalone` / `--all` and ignore `PATTERNS` — to operate on a single standalone repo, use raw git. `merge` takes a required `SOURCE_REF` as its first positional, then patterns trail; the other three take patterns only.
+All four commands accept any number of segment-aware glob `PATTERNS` over `<env>/<repo>`. A bare env name is treated as `<env>/*`. Standalone repos are reached via `--standalone` / `--all` and ignore `PATTERNS` — to operate on a single standalone repo, use raw git. `merge` takes a required `SOURCE_REF` as its first positional, then patterns trail; the other three take patterns only.
+
+`fetch` / `pull` / `push` default to `*/*` when no patterns are given (operate on every env's project worktrees). **`merge` is the exception**: it requires an explicit pattern whenever project worktrees are in scope — bare `winter ws merge <ref>` (and `winter ws merge <ref> --all`) are rejected, because silently folding `SOURCE_REF` into every worktree is rarely intended. Pass `'*/*'` to opt into that fan-out on purpose. The table rows below assume `merge` carries an explicit pattern; the `<cmd>` and `<cmd> --all` rows (no pattern) apply to `fetch` / `pull` / `push` only.
 
 | Invocation | Operates on |
 |------------|-------------|
-| `winter ws <cmd>` | every env's project worktrees |
+| `winter ws <cmd>` | every env's project worktrees (not `merge` — see above) |
 | `winter ws <cmd> alpha` | `alpha`'s project worktrees (== `alpha/*`) |
 | `winter ws <cmd> alpha/winter` | one specific worktree |
 | `winter ws <cmd> '*/winter'` | every env's `winter` worktree |
 | `winter ws <cmd> 'alpha/*' 'beta/*'` | `alpha` + `beta` worktrees |
 | `winter ws <cmd> --standalone` | every standalone repo (no project worktrees) |
-| `winter ws <cmd> --all` | project worktrees + every standalone repo |
+| `winter ws <cmd> --all` | project worktrees + every standalone repo (`merge` needs an explicit pattern, e.g. `'*/*' --all`) |
 | `winter ws <cmd> '*/winter' --all` | every env's `winter` worktree + every standalone repo |
 
 Pinned-scope behavior per command:
@@ -105,8 +107,10 @@ winter ws merge alpha gamma            # merge alpha into gamma's project worktr
 winter ws merge master gamma           # merge master into gamma's project worktrees
 winter ws merge origin/master gamma    # explicit remote ref also accepted
 winter ws merge master '*/winter'      # merge master into every env's winter worktree
-winter ws merge master --all           # merge master into every env's worktrees + every standalone
+winter ws merge master '*/*' --all     # merge master into every env's worktrees + every standalone
 ```
+
+A target `PATTERN` is required whenever project worktrees are in scope — there is no implicit "all worktrees" default. `winter ws merge alpha` with no pattern is rejected; pass `'*/*'` to fan a source ref across every env's every worktree on purpose.
 
 **Per-repo outcomes** (literal CLI output):
 

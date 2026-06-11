@@ -80,14 +80,17 @@ class WorkspaceMergeService:
         """Merge `source_ref` into worktrees matched by `patterns`, and/or standalone repos.
 
         `patterns` filters project worktrees by segment-aware glob over
-        `<env>/<repo>` (empty list ⇒ `*/*`). `pinned_scope` controls
+        `<env>/<repo>`. An empty list matches *no* project worktrees —
+        there is no implicit "all worktrees" fan-out; callers wanting every
+        env's every worktree pass `*/*` explicitly (the `ws merge` command
+        rejects an empty pattern up front). `pinned_scope` controls
         whether pinned project worktrees are included (default), excluded,
         or operated on alone. Standalone repos (when in scope) are
         included regardless of `pinned_scope` — they don't carry the pin
         flag. Per-repo events fire on `reporter` as each merge finishes,
         in completion order.
         """
-        patterns = patterns or ["*/*"]
+        patterns = patterns or []
         project_repos = self._repo_factory.get_project_repos()
         envs = self._select_envs(scope, project_repos)
         standalone_repos = self._repo_factory.get_standalone_repos() if scope.includes_standalone else []

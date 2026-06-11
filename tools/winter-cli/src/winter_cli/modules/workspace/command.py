@@ -491,10 +491,12 @@ def ws_merge(
 
     SOURCE_REF is the same string applied to every selected repo — typically
     an env name (`alpha`), the workspace main branch (`master`), or an
-    explicit remote ref (`origin/master`). Each PATTERN is a segment-aware
-    glob over `<env>/<repo>`; bare env names (no `/`) are treated as
-    `<env>/*`. Pinned worktrees are included by default. Standalone repos
-    are reached via --standalone / --all.
+    explicit remote ref (`origin/master`). At least one target PATTERN is
+    required when project worktrees are in scope — there is no implicit
+    "all worktrees" default; pass '*/*' to mean every env's every worktree.
+    Each PATTERN is a segment-aware glob over `<env>/<repo>`; bare env names
+    (no `/`) are treated as `<env>/*`. Pinned worktrees are included by
+    default. Standalone repos are reached via --standalone / --all.
 
     Diverged repos are reported and left untouched unless --merge or --no-ff
     is given (mutually exclusive). Conflicts during a fallback merge abort
@@ -503,16 +505,16 @@ def ws_merge(
     need fresh refs.
 
     \b
-      winter ws merge alpha                       # merge branch alpha into every env's every repo
       winter ws merge alpha gamma                 # merge alpha into gamma's project worktrees (== 'gamma/*')
       winter ws merge alpha gamma/winter          # merge alpha into one specific worktree
+      winter ws merge master '*/*'                # merge master into every env's every worktree (explicit)
       winter ws merge master '*/winter'           # merge master into every env's winter worktree
       winter ws merge origin/master gamma --merge # merge with 3-way fallback on divergence
       winter ws merge master gamma --no-ff        # force a merge commit even if ff is possible
-      winter ws merge alpha --autostash gamma     # stash dirty tree first, restore after
+      winter ws merge alpha gamma --autostash     # stash dirty tree first, restore after
       winter ws merge alpha gamma --exclude-pinned   # skip pinned worktrees in gamma
       winter ws merge master --standalone         # merge master into standalone repos only
-      winter ws merge master --all                # merge master into project worktrees + standalones
+      winter ws merge master '*/*' --all          # merge master into every worktree + every standalone
     """
     if standalone and patterns:
         raise click.ClickException("PATTERNS cannot be combined with --standalone")
@@ -521,6 +523,11 @@ def ws_merge(
             "--exclude-pinned / --only-pinned cannot be combined with --standalone (standalone repos aren't pinned)"
         )
     scope = _resolve_scope(standalone, all_flag)
+    if scope.includes_project and not patterns:
+        raise click.ClickException(
+            "a target PATTERN is required — refusing to merge SOURCE_REF into every env's every worktree. "
+            "Pass an explicit target (e.g. `gamma`, `gamma/winter`, or '*/*' to mean every worktree)."
+        )
     mode = _resolve_merge_mode(ff_only, merge_flag, no_ff)
     pinned_scope = _resolve_merge_pinned_scope(exclude_pinned, only_pinned)
     for pattern in patterns:

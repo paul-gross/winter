@@ -231,6 +231,37 @@ def test_merge_all_returns_empty_report_when_no_worktrees_materialized(
     assert reporter.repo_events == []
 
 
+def test_merge_all_empty_patterns_matches_no_project_worktrees(
+    workspace: Workspace, workspace_config: WorkspaceConfig, materialize_paths: Any
+) -> None:
+    """Regression: empty patterns must NOT fan the source ref into every worktree.
+
+    Guards the `winter ws merge alpha` footgun — with project worktrees on
+    disk and no target pattern, nothing is merged (the command layer rejects
+    the empty pattern; the service stays safe regardless by matching nothing
+    rather than defaulting to `*/*`).
+    """
+    workspace_repo = _FakeWorkspaceRepo(env_names=["alpha", "gamma"])
+    repo_repo = _RecordingRepoRepo(worktree_outcomes={})
+    for env in ("alpha", "gamma"):
+        materialize_paths({workspace.root_path / env / "demo", workspace.root_path / env / "other"})
+    svc = _make_service(workspace, workspace_config, workspace_repo, repo_repo)
+
+    report = svc.merge_all(
+        source_ref="alpha",
+        scope=RepoScope.project,
+        patterns=[],
+        mode=MergeMode.ff_only,
+        autostash=False,
+        pinned_scope=PinnedScope.include,
+        reporter=_RecordingReporter(),
+    )
+
+    assert repo_repo.merge_calls == []
+    assert report.envs == []
+    assert report.success is True
+
+
 # --- happy path: patterns + standalones --------------------------------------
 
 
