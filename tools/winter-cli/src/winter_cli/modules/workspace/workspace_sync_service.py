@@ -38,11 +38,20 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass
 class _PullTarget:
-    """Per-worktree integration target resolved up-front for fan-out."""
+    """Per-worktree integration target resolved up-front for fan-out.
+
+    `target_ref` is the explicit ref a pinned worktree integrates from
+    (`origin/<main_branch>`). For a non-pinned worktree it is None — the
+    integration ref is that worktree's *own* tracking branch, resolved
+    per-worktree at integrate time (a missing upstream becomes a
+    `no_upstream` skip). Resolving non-pinned refs lazily keeps the git
+    read off worktrees that turn out to be missing on disk, which the
+    caller filters out before the integrate stage.
+    """
 
     env_name: str
     worktree: FeatureWorktree
-    target_ref: str
+    target_ref: str | None
 
 
 class WorkspaceSyncService:
@@ -167,11 +176,12 @@ class WorkspaceSyncService:
 
         `patterns` filters project worktrees by segment-aware glob over
         `<env>/<repo>` (empty list ⇒ `*/*`). Pinned worktrees integrate from
-        `origin/<main_branch>`; non-pinned integrate from
-        `origin/<feature_branch>` when the env is connected and from
-        `origin/<main_branch>` otherwise; standalone repos integrate from
-        their tracked upstream. Per-repo events fire on `reporter` as each
-        integrate finishes, in completion order.
+        `origin/<main_branch>`; non-pinned worktrees integrate from *their
+        own* tracking branch (resolved per worktree), and a non-pinned
+        worktree with no upstream is reported as `no_upstream` and skipped;
+        standalone repos integrate from their tracked upstream. Per-repo
+        events fire on `reporter` as each integrate finishes, in completion
+        order.
         """
         patterns = patterns or ["*/*"]
         project_repos = self._repo_factory.get_project_repos()
@@ -189,7 +199,7 @@ class WorkspaceSyncService:
         }
         matched_envs = [env for env in envs if matched_by_env[env.name]]
 
-        targets, skipped = self._build_pull_targets(matched_envs, matched_by_env, project_repos)
+        targets, skipped = self._build_pull_targets(matched_envs, matched_by_env)
         targets = [
             t
             for t in targets
@@ -278,33 +288,29 @@ class WorkspaceSyncService:
         self,
         envs: list[FeatureEnvironment],
         matched_by_env: dict[str, list[FeatureWorktree]],
-        project_repos: list[ProjectRepository],
     ) -> tuple[list[_PullTarget], list[EnvSkipped]]:
         """Resolve per-worktree pull targets.
 
-        Each worktree pulls from its own ref independently — no env-level
-        skip. Pinned worktrees always pull from `origin/<main_branch>`;
-        non-pinned worktrees pull from `origin/<feature_branch>` when the
-        env is connected, otherwise they fall back to `origin/<main_branch>`
-        too. Worktrees missing from disk are filtered out by
-        `_drop_missing_worktrees` in the caller, so an env that only has
-        pinned worktrees materialized produces no events for the unborn
-        non-pinned ones.
+        Each worktree pulls from its own ref independently — there is no
+        env-wide feature branch and no env-level skip. Pinned worktrees
+        always pull from `origin/<main_branch>` (pinned repos stay excluded
+        from feature-branch pulls). Non-pinned worktrees carry a `None`
+        `target_ref`: their integration ref is their own tracking branch,
+        resolved per-worktree in `_fetch_then_integrate_group` so the read
+        lands on a worktree known to exist (the caller filters out
+        worktrees missing on disk before the integrate stage) and so each
+        connected worktree pulls from its real upstream regardless of repo
+        order or whether any *other* repo is connected. A non-pinned
+        worktree with no upstream becomes a `no_upstream` skip at that
+        stage.
 
-        A non-pinned worktree with local feature commits and no feature
-        branch will see a `diverged` integrate outcome — that's the right
-        signal; it surfaces just as clearly as the old "not connected"
-        skip message did, without blocking the fresh-env / partial-init
-        case where pulling from main is exactly what the user wants.
+        The returned skip list is always empty — kept in the signature for
+        symmetry with the report's `skipped` field and the standalone path.
         """
         targets: list[_PullTarget] = []
         for env in envs:
-            env_status = self._worktree_repo.get_environment_status(env, project_repos)
             for wt in matched_by_env[env.name]:
-                if wt.repository.pinned or not env_status.feature_branch:
-                    target_ref = f"origin/{wt.repository.main_branch}"
-                else:
-                    target_ref = f"origin/{env_status.feature_branch}"
+                target_ref = f"origin/{wt.repository.main_branch}" if wt.repository.pinned else None
                 targets.append(_PullTarget(env_name=env.name, worktree=wt, target_ref=target_ref))
         return targets, []
 
@@ -357,9 +363,12 @@ class WorkspaceSyncService:
         Worktrees of a project repo share a `.git`, so a single
         `git fetch origin` from any of them updates remote refs for every
         worktree — we fetch from the first and run integrate sequentially
-        for the rest. Per-worktree integrate events are emitted on
-        `reporter` from inside this task so the user sees them as soon as
-        each integrate lands, even within the same group.
+        for the rest. A non-pinned target carries no explicit ref: we read
+        its own tracking branch here (post-fetch, on a worktree known to
+        exist) and integrate from that, or emit a `no_upstream` skip when
+        it has none — mirroring the standalone path. Per-worktree events
+        are emitted on `reporter` from inside this task so the user sees
+        them as soon as each integrate lands, even within the same group.
         """
         first_wt = targets[0].worktree
         try:
@@ -368,7 +377,7 @@ class WorkspaceSyncService:
             logger.warning("Fetch failed for %s: %s", first_wt.repository.name, exc)
         results: list[tuple[str, RepoSyncOutcome]] = []
         for t in targets:
-            outcome = self._repo_repo.integrate(t.worktree, t.target_ref, mode, autostash)
+            outcome = self._integrate_target(t, mode, autostash)
             reporter.repo_synced(
                 t.env_name,
                 outcome.repo_name,
@@ -379,6 +388,24 @@ class WorkspaceSyncService:
             )
             results.append((t.env_name, outcome))
         return results
+
+    def _integrate_target(self, target: _PullTarget, mode: PullMode, autostash: bool) -> RepoSyncOutcome:
+        """Integrate one worktree from its resolved ref.
+
+        Pinned targets carry an explicit `origin/<main_branch>` ref.
+        Non-pinned targets resolve their own tracking branch here; a
+        worktree with no upstream yields `no_upstream` (parity with
+        `integrate_standalone`) instead of being forced onto a foreign ref.
+        """
+        target_ref = target.target_ref
+        if target_ref is None:
+            target_ref = self._repo_repo.get_worktree_upstream(target.worktree)
+            if target_ref is None:
+                return RepoSyncOutcome(
+                    repo_name=target.worktree.repository.name,
+                    sync_result=SyncResult.no_upstream,
+                )
+        return self._repo_repo.integrate(target.worktree, target_ref, mode, autostash)
 
     def _fetch_then_integrate_standalone(
         self,

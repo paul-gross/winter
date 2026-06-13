@@ -12,7 +12,7 @@ A feature environment contains a worktree for every project repo, so pulling one
 
 Use raw `git pull` for the workspace branch itself — `winter ws pull` doesn't operate on it. Standalone repos can be reached via `winter ws pull --standalone` or with raw git, whichever is more convenient.
 
-`winter ws pull <env>` always targets each worktree's *tracked* upstream — `origin/<feature-branch>` for non-pinned worktrees (set by `winter ws connect`), `origin/<main-branch>` for pinned worktrees. Pass `--merge` or `--rebase` to integrate diverged repos explicitly, plus `--autostash` to handle a dirty working tree.
+`winter ws pull <env>` resolves each worktree's integration ref independently from its *own* tracked upstream — there is no env-wide feature branch. A non-pinned worktree pulls from whatever it tracks (`origin/<feature-branch>`, set by `winter ws connect`); a non-pinned worktree with no upstream is reported `no upstream` and skipped (the env pull still succeeds). Pinned worktrees always pull `origin/<main-branch>`. Pass `--merge` or `--rebase` to integrate diverged repos explicitly, plus `--autostash` to handle a dirty working tree.
 
 To bring `origin/<main-branch>` into an env instead of the tracked feature branch, use `winter ws merge origin/<main-branch> <env>` (run `winter ws fetch <env>` first if you need fresh refs).
 
@@ -60,7 +60,7 @@ winter ws pull <name>/<repo>           # one specific worktree
 winter ws pull '<name>/*'              # every worktree in the env (same as bare <name>)
 ```
 
-`PATTERNS` are segment-aware globs over `<env>/<repo>`. `pull` always includes both pinned and non-pinned worktrees in the matched set; non-pinned worktrees pull from `origin/<feature-branch>`, pinned worktrees from `origin/<main-branch>`.
+`PATTERNS` are segment-aware globs over `<env>/<repo>`. `pull` always includes both pinned and non-pinned worktrees in the matched set; each non-pinned worktree pulls from its own tracked upstream (or is skipped as `no upstream` when it has none), pinned worktrees from `origin/<main-branch>`.
 
 If a repo reports "diverged" (ff-only failed and no integration mode was given), resolve it manually with raw git in that repo's worktree per the project's contributing rules (rebase or merge), or re-run with `--merge` / `--rebase`.
 
@@ -68,7 +68,7 @@ If a repo reports "diverged" (ff-only failed and no integration mode was given),
 
 Output a concise summary based on what `winter ws pull` printed. For workspace and standalone targets, report the raw pull result.
 
-For a feature environment, include a per-repo line — what each repo did (ff'd, merged, rebased, diverged, no-op):
+For a feature environment, include a per-repo line — what each repo did (ff'd, merged, rebased, diverged, no-op, or no-upstream skip). A `no upstream` worktree is a skip, not a failure: the env pull still succeeds (exit 0) as long as no connected worktree diverged.
 
 ```
 ## Pull: <name>
@@ -76,6 +76,7 @@ For a feature environment, include a per-repo line — what each repo did (ff'd,
 - repo-a: ff'd to origin/<feature-branch>
 - repo-b: already up to date
 - repo-c: DIVERGED — needs manual resolution or rerun with --merge / --rebase
+- repo-d: no upstream — skipped (run `winter ws connect` to track a feature branch)
 ```
 
 $ARGUMENTS

@@ -26,7 +26,7 @@ Use the offline `winter ws merge master alpha` form when local `master` is alrea
 
 ### Pull remote feature-branch commits into the local env
 ```bash
-winter ws pull alpha               # ff-only against origin/<feature-branch>; diverged repos reported, not touched
+winter ws pull alpha               # ff-only against each worktree's own upstream; untracked worktrees skipped, diverged reported
 winter ws pull alpha --rebase      # ff or replay local commits onto upstream
 winter ws pull alpha --autostash   # stash dirty tree first, restore after
 ```

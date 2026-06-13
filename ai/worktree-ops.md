@@ -91,7 +91,7 @@ winter ws pull <name> --rebase       # replay local commits onto upstream
 winter ws pull <name> --autostash    # stash dirty tree, integrate, then restore
 ```
 
-Each repo pulls from its own tracked upstream: non-pinned worktrees from `origin/<feature-branch>` (set by `connect`), pinned worktrees from `origin/<main-branch>`. Standalone repos can be reached with `winter ws pull --standalone` or `winter ws pull --all`.
+Each repo pulls from its own tracked upstream: non-pinned worktrees from whatever they track (`origin/<feature-branch>`, set by `connect`), or skipped as `no upstream` when untracked; pinned worktrees from `origin/<main-branch>`. Standalone repos can be reached with `winter ws pull --standalone` or `winter ws pull --all`.
 
 `pull` is **ff-only by default** — no silent merge commits, no surprise rewrites. Diverged repos are surfaced in the report and the working tree is left untouched. Use `--merge` or `--rebase` to integrate explicitly, or resolve with raw git in the affected repo.
 
