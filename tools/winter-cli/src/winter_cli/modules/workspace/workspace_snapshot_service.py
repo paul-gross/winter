@@ -11,12 +11,14 @@ from winter_cli.modules.workspace.env_status_service import EnvStatusService
 from winter_cli.modules.workspace.extension_manifest import PORT_BASE, PORT_STEP
 from winter_cli.modules.workspace.models import (
     EnvSnapshot,
+    FeatureEnvironment,
     FeatureEnvironmentOverview,
     FeatureWorktree,
     OrphanSnapshot,
     ProjectRepository,
     RepoError,
     SourceCheckoutSnapshot,
+    StandaloneRepository,
     StandaloneRepoStatus,
     Workspace,
     WorkspaceLevelSnapshot,
@@ -104,34 +106,33 @@ class WorkspaceSnapshotService:
         env_snapshots: list[EnvSnapshot] = []
         total_matched_worktrees = 0
         for env in environments:
-            env_status = self._env_status_svc.get_environment_status(
+            overview = self._collect_env_overview(
                 env,
                 project_repos,
-                env_decorators or None,
+                on_repo_error=on_repo_error,
+                env_decorators=env_decorators,
+                worktree_repo_decorators=worktree_repo_decorators,
             )
-            env_worktrees = self._env_status_svc.get_feature_environment_worktrees(env, project_repos)
-
-            def _on_wt_error(wt: FeatureWorktree, exc: RepoError, env_name: str = env.name) -> None:
-                if on_repo_error is not None:
-                    on_repo_error(wt, exc)
-
-            repo_statuses = self._env_status_svc.get_worktree_repo_statuses(
-                env_worktrees,
-                worktree_repo_decorators or None,
-                on_repo_error=_on_wt_error if on_repo_error is not None else None,
-            )
+            if overview is None:
+                # Env-level probe failed and was tolerated (dashboard-style
+                # callback). The CLI passes on_repo_error=None, so this never
+                # happens on the `ws status` path — the error propagates instead.
+                continue
+            env_status = overview.status
 
             worktree_snapshots: list[WorktreeSnapshot] = []
-            for wt_status in repo_statuses:
+            for wt_status in overview.repo_statuses:
                 repo_name = wt_status.worktree.repository.name
                 # Apply pattern filter: skip worktrees that don't match any pattern.
                 if effective_patterns and not matches_any_pattern(env.name, repo_name, effective_patterns):
                     continue
 
-                # get_worktree_repo_statuses maps RepoStatus → WorktreeRepoStatus
-                # (losing staged/unstaged/untracked breakdown). Re-probe via
-                # get_worktree_status to recover the fine-grained counts needed
-                # for WorktreeSnapshot.
+                # OPT-OUT (collect-only): get_worktree_repo_statuses maps
+                # RepoStatus → WorktreeRepoStatus (losing the staged/unstaged/
+                # untracked breakdown). Re-probe via get_worktree_status to
+                # recover the fine-grained counts WorktreeSnapshot needs. The
+                # dashboard path deliberately skips this second probe — it has
+                # no field that needs the breakdown.
                 try:
                     rs = self._repo_repo.get_worktree_status(wt_status.worktree)
                 except RepoError as exc:
@@ -188,16 +189,7 @@ class WorkspaceSnapshotService:
 
         source_checkout_snapshots: list[SourceCheckoutSnapshot] = []
 
-        def _on_main_error(repo: ProjectRepository, exc: RepoError) -> None:
-            if on_repo_error is not None:
-                # Log-and-skip; the CLI passes on_repo_error=None so this path is dashboard-only.
-                logger.warning("source-checkout probe failed for %s: %s", repo.name, exc)
-
-        main_statuses = self._env_status_svc.get_main_branch_statuses(
-            self._workspace,
-            project_repos,
-            on_repo_error=_on_main_error if on_repo_error is not None else None,
-        )
+        main_statuses = self._collect_main_branch_statuses(project_repos, tolerate=on_repo_error is not None)
 
         for repo in project_repos:
             drift_notes: list[str] = []
@@ -255,7 +247,14 @@ class WorkspaceSnapshotService:
             for o in orphan_raw
         ]
 
-        extension_names = [r.name for r in self._repo_factory.get_standalone_repos()]
+        # The v1 `extensions` field lists the installed extension modules by
+        # name — the user-declared standalones, excluding the implicit singletons
+        # (workspace/product/harness) the dashboard additionally surfaces. This
+        # is a pure config read with NO git probe: `ws status` / `--json` must
+        # not fail on a broken extension repo just to list its name. The
+        # dashboard, which needs each standalone's health, probes them separately
+        # via `_collect_standalone_statuses`.
+        extension_names = [repo.name for repo in self._repo_factory.get_standalone_repos()]
 
         workspace_level = WorkspaceLevelSnapshot(
             root_path=str(self._workspace.root_path),
@@ -298,63 +297,139 @@ class WorkspaceSnapshotService:
 
         overviews: list[FeatureEnvironmentOverview] = []
         for env in environments:
-
-            def _on_wt_error(wt: FeatureWorktree, exc: RepoError, env_name: str = env.name) -> None:
-                if on_repo_error is not None:
-                    on_repo_error(wt, exc)
-
-            try:
-                env_status = self._env_status_svc.get_environment_status(
-                    env,
-                    project_repos,
-                    env_decorators or None,
-                )
-                env_worktrees = self._env_status_svc.get_feature_environment_worktrees(env, project_repos)
-                repo_statuses = self._env_status_svc.get_worktree_repo_statuses(
-                    env_worktrees,
-                    worktree_repo_decorators or None,
-                    on_repo_error=_on_wt_error if on_repo_error is not None else None,
-                )
-                overviews.append(FeatureEnvironmentOverview(status=env_status, repo_statuses=repo_statuses))
-            except RepoError as exc:
-                if on_repo_error is not None:
-                    # Log-and-skip; the CLI passes on_repo_error=None so this path is dashboard-only.
-                    logger.warning("env-level probe failed for %s: %s", env.name, exc)
-                else:
-                    raise
+            overview = self._collect_env_overview(
+                env,
+                project_repos,
+                on_repo_error=on_repo_error,
+                env_decorators=env_decorators,
+                worktree_repo_decorators=worktree_repo_decorators,
+            )
+            if overview is not None:
+                overviews.append(overview)
 
         # ── singletons + standalones ───────────────────────────────────────
-        standalone_statuses: list[StandaloneRepoStatus] = []
-        for r in [
-            *self._repo_factory.get_singleton_repos(),
-            *self._repo_factory.get_standalone_repos(),
-        ]:
-            try:
-                standalone_statuses.append(self._repo_repo.get_standalone_status(r))
-            except RepoError as exc:
-                if on_repo_error is not None:
-                    logger.warning("standalone probe failed for %s: %s", r.name, exc)
-                else:
-                    raise
+        # Dashboard-only: it surfaces the implicit singletons plus the declared
+        # standalones, each with its git-probed health. `collect()` does not
+        # probe standalones — its `extensions` field is a pure name read.
+        standalone_statuses = self._collect_standalone_statuses(
+            [*self._repo_factory.get_singleton_repos(), *self._repo_factory.get_standalone_repos()],
+            tolerate=on_repo_error is not None,
+        )
 
         # ── main-branch statuses ──────────────────────────────────────────
-        main_statuses: dict[str, WorktreeRepoStatus] = {}
-        if project_repos:
-
-            def _on_main_error(repo: ProjectRepository, exc: RepoError) -> None:
-                logger.warning("main-branch probe failed for %s: %s", repo.name, exc)
-
-            main_statuses = self._env_status_svc.get_main_branch_statuses(
-                self._workspace,
-                project_repos,
-                on_repo_error=_on_main_error if on_repo_error is not None else None,
-            )
+        main_statuses = self._collect_main_branch_statuses(project_repos, tolerate=on_repo_error is not None)
 
         return DashboardRefreshData(
             overviews=overviews,
             standalone_statuses=standalone_statuses,
             main_statuses=main_statuses,
         )
+
+    # ── collection helpers ──────────────────────────────────────────────────
+    #
+    # `_collect_env_overview` and `_collect_main_branch_statuses` are shared by
+    # both public methods, so a new field or error policy added to one surface
+    # cannot be silently forgotten on the other; they differ only in return
+    # shape and a cheap, explicit opt-out (the per-worktree count re-probe in
+    # `collect()`, commented at its call site). `_collect_standalone_statuses`
+    # is dashboard-only — `collect()`'s `extensions` field is a pure name read
+    # that needs no probe (see its call site).
+    #
+    # The two non-worktree helpers take a `tolerate` flag rather than the
+    # `on_repo_error` callback: they operate on `ProjectRepository` /
+    # `StandaloneRepository`, not `FeatureWorktree`, so the worktree-typed
+    # callback was never invoked with the right object — it served only as a
+    # present/absent toggle. Only `_collect_env_overview`, which genuinely routes
+    # per-worktree errors, still takes the callback.
+
+    def _collect_env_overview(
+        self,
+        env: FeatureEnvironment,
+        project_repos: list[ProjectRepository],
+        *,
+        on_repo_error: Callable[[FeatureWorktree, RepoError], None] | None,
+        env_decorators: list[IEnvironmentDecorator] | None,
+        worktree_repo_decorators: list[IWorktreeRepoDecorator] | None,
+    ) -> FeatureEnvironmentOverview | None:
+        """Build one env's overview (status + per-repo statuses) under the shared error policy.
+
+        This is the single env-level error-tolerance path: when `on_repo_error`
+        is supplied (dashboard), an env-level `RepoError` is logged and the env
+        is skipped (returns ``None``); when it is ``None`` (CLI / JSON), the
+        error propagates so the command exits non-zero. Per-worktree errors are
+        routed to the same callback by `get_worktree_repo_statuses`.
+        """
+
+        try:
+            env_status = self._env_status_svc.get_environment_status(
+                env,
+                project_repos,
+                env_decorators or None,
+            )
+            env_worktrees = self._env_status_svc.get_feature_environment_worktrees(env, project_repos)
+            # Per-worktree errors flow straight to the caller's callback (it is
+            # already worktree-typed); `get_worktree_repo_statuses` skips on a
+            # callback and propagates on None — the same policy as the env-level
+            # try/except below.
+            repo_statuses = self._env_status_svc.get_worktree_repo_statuses(
+                env_worktrees,
+                worktree_repo_decorators or None,
+                on_repo_error=on_repo_error,
+            )
+        except RepoError as exc:
+            if on_repo_error is None:
+                raise
+            logger.warning("env-level probe failed for %s: %s", env.name, exc)
+            return None
+        return FeatureEnvironmentOverview(status=env_status, repo_statuses=repo_statuses)
+
+    def _collect_main_branch_statuses(
+        self,
+        project_repos: list[ProjectRepository],
+        *,
+        tolerate: bool,
+    ) -> dict[str, WorktreeRepoStatus]:
+        """Probe each project repo's main-branch checkout under the shared error policy.
+
+        Feeds `collect()`'s source-checkout snapshots and the dashboard's
+        repo-label column. When `tolerate` is true (dashboard) a failed probe is
+        logged and skipped; when false (CLI / JSON) the first `RepoError`
+        propagates.
+        """
+
+        def _on_main_error(repo: ProjectRepository, exc: RepoError) -> None:
+            logger.warning("main-branch probe failed for %s: %s", repo.name, exc)
+
+        return self._env_status_svc.get_main_branch_statuses(
+            self._workspace,
+            project_repos,
+            on_repo_error=_on_main_error if tolerate else None,
+        )
+
+    def _collect_standalone_statuses(
+        self,
+        repos: list[StandaloneRepository],
+        *,
+        tolerate: bool,
+    ) -> list[StandaloneRepoStatus]:
+        """Probe each standalone/singleton repo's status under the shared error policy.
+
+        Dashboard-only: it passes the implicit singletons plus the declared
+        standalones for its standalone panel. (`collect()` does not call this —
+        its `extensions` field is a pure name read.) When `tolerate` is true a
+        failed probe is logged and skipped; when false the first `RepoError`
+        propagates — the same propagate-vs-skip contract used for worktree and
+        main-branch probes.
+        """
+        statuses: list[StandaloneRepoStatus] = []
+        for repo in repos:
+            try:
+                statuses.append(self._repo_repo.get_standalone_status(repo))
+            except RepoError as exc:
+                if not tolerate:
+                    raise
+                logger.warning("standalone probe failed for %s: %s", repo.name, exc)
+        return statuses
 
 
 @dataclasses.dataclass

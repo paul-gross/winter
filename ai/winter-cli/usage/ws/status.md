@@ -43,6 +43,8 @@ Shell reminder: quote patterns containing `*` or `?` to prevent shell glob expan
 | `1` | Dirty or drifted — at least one condition triggers (see scoping rule below). |
 | `2` | Command error — no match for the given patterns, a per-repo probe failure during collection (no partial snapshot is emitted), config parse failure, or other internal error. |
 
+**Extensions are not probed.** The probe failure that triggers exit 2 applies to project worktrees and source checkouts. The `workspace.extensions` list is a config-only read — `ws status` never git-probes extension repos to populate it — so a broken extension checkout cannot fail the command.
+
 **Scoping rule.** When patterns are given, the exit code reflects **only the matched worktrees' dirtiness** (`dirty > 0` on any matched worktree → exit 1). Global source-checkout drift, workspace orphans, and config drift are still printed as context but do **not** flip the exit code for a scoped run. An unscoped run (no patterns) considers all four categories.
 
 ## JSON schema (`schema_version: 1`)
@@ -103,7 +105,7 @@ Shell reminder: quote patterns containing `*` or `?` to prevent shell glob expan
 | Field | Type | Description |
 |-------|------|-------------|
 | `root_path` | `string` | Absolute path to the workspace root. |
-| `extensions` | `array[string]` | Names of installed standalone repos (extensions), e.g. `["winter-github", "winter-harness"]`. |
+| `extensions` | `array[string]` | Names of installed standalone repos (extensions), e.g. `["winter-github", "winter-harness"]`. A config-only read — see the exit-codes note below. |
 | `orphans` | `array` | `OrphanSnapshot` objects for filesystem entries with no declared owner. Each has: `kind` (short label, e.g. `"worktree_dir"`), `path` (absolute), `safe_to_remove` (`bool`), `notes` (`string`). |
 | `drift_missing` | `array[string]` | Repo names declared in config but absent on disk (run `winter ws init` to fix). |
 | `drift_undeclared` | `array[string]` | Directory names present under `projects/` but not in config. |

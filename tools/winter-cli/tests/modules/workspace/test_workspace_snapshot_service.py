@@ -8,6 +8,9 @@ import pytest
 from winter_cli.config.models import (
     AdoptExtensions,
     ProjectRepositoryConfig,
+    SingletonRepository,
+    SingletonType,
+    StandaloneRepositoryConfig,
     WorkspaceConfig,
 )
 from winter_cli.modules.workspace.drift import DriftWarningService
@@ -21,6 +24,8 @@ from winter_cli.modules.workspace.models import (
     RepoCommit,
     RepoError,
     RepoStatus,
+    StandaloneRepository,
+    StandaloneRepoStatus,
     Workspace,
 )
 from winter_cli.modules.workspace.prune_service import PruneOrphan
@@ -62,9 +67,11 @@ class FakeReadWorkspaceRepository:
         self,
         envs: list[FeatureEnvironment] | None = None,
         feature_branch: str | None = None,
+        env_errors: dict[str, RepoError] | None = None,
     ) -> None:
         self._envs: list[FeatureEnvironment] = envs or []
         self._feature_branch = feature_branch
+        self._env_errors: dict[str, RepoError] = env_errors or {}
 
     def get_environments(
         self, workspace: Workspace, project_repos: list[ProjectRepository]
@@ -77,6 +84,8 @@ class FakeReadWorkspaceRepository:
     def get_environment_status(
         self, env: FeatureEnvironment, project_repos: list[ProjectRepository]
     ) -> FeatureEnvironmentStatus:
+        if env.name in self._env_errors:
+            raise self._env_errors[env.name]
         return FeatureEnvironmentStatus(environment=env, feature_branch=self._feature_branch)
 
 
@@ -93,10 +102,12 @@ class FakeRepoRepository:
         worktree_statuses: dict[str, RepoStatus] | None = None,
         project_statuses: dict[str, RepoStatus] | None = None,
         errors: dict[str, RepoError] | None = None,
+        standalone_statuses: dict[str, StandaloneRepoStatus] | None = None,
     ) -> None:
         self._worktree_statuses: dict[str, RepoStatus] = worktree_statuses or {}
         self._project_statuses: dict[str, RepoStatus] = project_statuses or {}
         self._errors: dict[str, RepoError] = errors or {}
+        self._standalone_statuses: dict[str, StandaloneRepoStatus] = standalone_statuses or {}
 
     def get_worktree_status(self, worktree: FeatureWorktree) -> RepoStatus:
         name = worktree.repository.name
@@ -121,8 +132,15 @@ class FakeRepoRepository:
             dirty_files=[],
         )
 
-    def get_standalone_status(self, repo: Any) -> Any:
-        raise AssertionError(f"FakeRepoRepository.get_standalone_status called unexpectedly for {repo.name}")
+    def get_standalone_status(self, repo: StandaloneRepository) -> StandaloneRepoStatus:
+        name = repo.name
+        if name in self._errors:
+            raise self._errors[name]
+        if name in self._standalone_statuses:
+            return self._standalone_statuses[name]
+        # Default: a "not present"-style clean status, mirroring the real adapter's
+        # behavior for a missing/empty standalone (name preserved, no divergence).
+        return StandaloneRepoStatus(repository=repo)
 
     def __getattr__(self, name: str) -> Any:
         raise AssertionError(f"FakeRepoRepository.{name} called unexpectedly")
@@ -218,17 +236,20 @@ def _service(
     worktree_statuses: dict[str, RepoStatus] | None = None,
     project_statuses: dict[str, RepoStatus] | None = None,
     repo_errors: dict[str, RepoError] | None = None,
+    env_errors: dict[str, RepoError] | None = None,
+    standalone_statuses: dict[str, StandaloneRepoStatus] | None = None,
     projects_on_disk: list[str] | None = None,
     orphans: list[PruneOrphan] | None = None,
 ) -> WorkspaceSnapshotService:
     """Construct a `WorkspaceSnapshotService` with all fakes wired."""
     from tests.conftest import ClickRecorder, FakeFilesystem
 
-    worktree_repo = FakeReadWorkspaceRepository(envs=envs, feature_branch=feature_branch)
+    worktree_repo = FakeReadWorkspaceRepository(envs=envs, feature_branch=feature_branch, env_errors=env_errors)
     repo_repo = FakeRepoRepository(
         worktree_statuses=worktree_statuses,
         project_statuses=project_statuses,
         errors=repo_errors,
+        standalone_statuses=standalone_statuses,
     )
     repo_factory = RepositoryFactory(workspace_config)
 
@@ -613,6 +634,41 @@ def test_collect_drift_missing_populates_workspace_level(
     assert "repo-b" in snapshot.workspace.drift_missing
 
 
+def test_collect_extensions_lists_declared_standalones_without_probing(workspace: Workspace) -> None:
+    """`collect().workspace.extensions` is a pure name read of the declared standalones.
+
+    It must NOT git-probe them: a broken standalone repo (here, wired to raise
+    on `get_standalone_status`) must not fail `ws status` / `--json` just to list
+    the extension's name. The dashboard, which needs each standalone's health,
+    probes separately — see `test_collect_for_dashboard_probes_singletons_and_standalones`.
+    """
+    config = WorkspaceConfig(
+        workspace_root=WORKSPACE_ROOT,
+        session_prefix="t",
+        main_branch="main",
+        adopt_extensions=AdoptExtensions.winter,
+        project_repos=[ProjectRepositoryConfig(name="repo-a", url="git@example.com:org/repo-a.git")],
+        standalone_repos=[
+            StandaloneRepositoryConfig(name="ext-a", url="git@example.com:org/ext-a.git"),
+            StandaloneRepositoryConfig(name="ext-b", url="git@example.com:org/ext-b.git"),
+        ],
+    )
+    alpha = _make_env(workspace, "alpha", 1)
+    svc = _service(
+        workspace,
+        config,
+        envs=[alpha],
+        feature_branch="feature/x",
+        worktree_statuses={"repo-a": _clean_repo_status("repo-a")},
+        # If collect() probed standalones, these would raise and fail the call.
+        repo_errors={"ext-a": RepoError("ext-a would explode if probed"), "ext-b": RepoError("boom")},
+    )
+
+    snapshot = svc.collect()
+
+    assert sorted(snapshot.workspace.extensions) == ["ext-a", "ext-b"]
+
+
 def test_collect_on_repo_error_callback_skips_failed_worktree(
     workspace: Workspace, workspace_config: WorkspaceConfig
 ) -> None:
@@ -667,6 +723,27 @@ def test_collect_propagates_repo_error_without_callback(
         svc.collect()
 
 
+def test_collect_propagates_env_error_without_callback(workspace: Workspace, workspace_config: WorkspaceConfig) -> None:
+    """Without on_repo_error, an env-LEVEL RepoError propagates from collect().
+
+    Locks the invariant the `overview is None` branch in collect() documents:
+    the CLI path passes on_repo_error=None, so an env-level probe failure is
+    never silently skipped — it surfaces and the command exits non-zero.
+    """
+    alpha = _make_env(workspace, "alpha", 1)
+    svc = _service(
+        workspace,
+        workspace_config,
+        envs=[alpha],
+        feature_branch="feature/x",
+        worktree_statuses={"repo-a": _clean_repo_status("repo-a"), "repo-b": _clean_repo_status("repo-b")},
+        env_errors={"alpha": RepoError("alpha env boom")},
+    )
+
+    with pytest.raises(RepoError, match="alpha env boom"):
+        svc.collect()
+
+
 def test_collect_pinned_surfaces_in_worktree_snapshot(workspace: Workspace) -> None:
     """WorktreeSnapshot.pinned reflects the underlying ProjectRepository.pinned value."""
     pinned_config = WorkspaceConfig(
@@ -700,3 +777,121 @@ def test_collect_pinned_surfaces_in_worktree_snapshot(workspace: Workspace) -> N
     wt_b = next(wt for wt in env_snap.worktrees if wt.repo == "repo-b")
     assert wt_a.pinned is True
     assert wt_b.pinned is False
+
+
+# ── collect_for_dashboard ──────────────────────────────────────────────────────
+
+
+def test_collect_for_dashboard_skips_env_whose_probe_fails_with_callback(
+    workspace: Workspace, workspace_config: WorkspaceConfig
+) -> None:
+    """An env-level RepoError is tolerated (env skipped) when on_repo_error is supplied."""
+    alpha = _make_env(workspace, "alpha", 1)
+    beta = _make_env(workspace, "beta", 2)
+    worktree_statuses = {
+        "repo-a": _clean_repo_status("repo-a"),
+        "repo-b": _clean_repo_status("repo-b"),
+    }
+    svc = _service(
+        workspace,
+        workspace_config,
+        envs=[alpha, beta],
+        feature_branch="feature/x",
+        worktree_statuses=worktree_statuses,
+        env_errors={"alpha": RepoError("alpha env exploded")},
+    )
+
+    reported: list[str] = []
+    data = svc.collect_for_dashboard(on_repo_error=lambda wt, exc: reported.append(wt.repository.name))
+
+    # alpha's env-level probe failed and was tolerated; only beta survives.
+    names = [o.status.environment.name for o in data.overviews]
+    assert names == ["beta"]
+
+
+def test_collect_for_dashboard_propagates_env_error_without_callback(
+    workspace: Workspace, workspace_config: WorkspaceConfig
+) -> None:
+    """Without on_repo_error, an env-level RepoError propagates — same policy as collect()."""
+    alpha = _make_env(workspace, "alpha", 1)
+    svc = _service(
+        workspace,
+        workspace_config,
+        envs=[alpha],
+        feature_branch="feature/x",
+        worktree_statuses={"repo-a": _clean_repo_status("repo-a"), "repo-b": _clean_repo_status("repo-b")},
+        env_errors={"alpha": RepoError("alpha env boom")},
+    )
+
+    with pytest.raises(RepoError, match="alpha env boom"):
+        svc.collect_for_dashboard()
+
+
+def test_collect_for_dashboard_probes_singletons_and_standalones(workspace: Workspace) -> None:
+    """standalone_statuses covers both implicit singletons and declared standalones."""
+    config = WorkspaceConfig(
+        workspace_root=WORKSPACE_ROOT,
+        session_prefix="t",
+        main_branch="main",
+        adopt_extensions=AdoptExtensions.winter,
+        project_repos=[ProjectRepositoryConfig(name="repo-a", url="git@example.com:org/repo-a.git")],
+        standalone_repos=[StandaloneRepositoryConfig(name="ext-a", url="git@example.com:org/ext-a.git")],
+        singleton_repos=[SingletonRepository(name="workspace", type=SingletonType.workspace)],
+    )
+    alpha = _make_env(workspace, "alpha", 1)
+    standalone_statuses = {
+        "workspace": StandaloneRepoStatus(repository=StandaloneRepository(name="workspace", path=WORKSPACE_ROOT)),
+        "ext-a": StandaloneRepoStatus(
+            repository=StandaloneRepository(name="ext-a", path=WORKSPACE_ROOT / "ext-a"),
+            dirty_count=2,
+        ),
+    }
+    svc = _service(
+        workspace,
+        config,
+        envs=[alpha],
+        feature_branch="feature/x",
+        worktree_statuses={"repo-a": _clean_repo_status("repo-a")},
+        standalone_statuses=standalone_statuses,
+    )
+
+    data = svc.collect_for_dashboard()
+
+    names = sorted(s.name for s in data.standalone_statuses)
+    assert names == ["ext-a", "workspace"]
+
+
+def test_collect_for_dashboard_populates_main_branch_statuses(
+    workspace: Workspace, workspace_config: WorkspaceConfig
+) -> None:
+    """A diverged source checkout surfaces in main_statuses; clean ones are omitted."""
+    alpha = _make_env(workspace, "alpha", 1)
+    project_statuses = {
+        "repo-a": RepoStatus(
+            name="repo-a",
+            path=str(WORKSPACE_ROOT / "projects" / "repo-a"),
+            main_branch="main",
+            branch="main",
+            ahead=0,
+            behind=2,
+            dirty_files=[],
+            tracking_branch="origin/main",
+            tracking_behind=2,
+            tracking_ref_present=True,
+        ),
+    }
+    svc = _service(
+        workspace,
+        workspace_config,
+        envs=[alpha],
+        feature_branch="feature/x",
+        worktree_statuses={"repo-a": _clean_repo_status("repo-a"), "repo-b": _clean_repo_status("repo-b")},
+        project_statuses=project_statuses,
+    )
+
+    data = svc.collect_for_dashboard()
+
+    assert "repo-a" in data.main_statuses
+    assert data.main_statuses["repo-a"].behind == 2
+    # repo-b is clean (default project status) → omitted from main_statuses.
+    assert "repo-b" not in data.main_statuses
