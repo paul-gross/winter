@@ -429,9 +429,7 @@ def test_workspace_reconcile_hook_fires_once_on_reconcile_all(
     ok = svc.reconcile_all(init_reporter)
 
     assert ok is True
-    ws_reconcile_calls = [
-        call for call, _ in subprocess.popen_calls if str(hook_path) in str(call)
-    ]
+    ws_reconcile_calls = [call for call, _ in subprocess.popen_calls if str(hook_path) in str(call)]
     assert len(ws_reconcile_calls) == 1, (
         f"expected exactly 1 on_workspace_reconcile call, got {len(ws_reconcile_calls)}"
     )
@@ -482,9 +480,7 @@ def test_workspace_reconcile_hook_fires_once_on_no_target_path(
         ok = False
 
     assert ok is True
-    ws_reconcile_calls = [
-        call for call, _ in subprocess.popen_calls if str(hook_path) in str(call)
-    ]
+    ws_reconcile_calls = [call for call, _ in subprocess.popen_calls if str(hook_path) in str(call)]
     assert len(ws_reconcile_calls) == 1, (
         f"expected exactly 1 on_workspace_reconcile call, got {len(ws_reconcile_calls)}"
     )
@@ -508,6 +504,4 @@ def test_workspace_reconcile_hook_does_not_fire_on_reconcile_env(
 
     assert ok is True
     # No subprocess calls at all — the workspace reconcile hook must not fire.
-    assert not subprocess.popen_calls, (
-        "on_workspace_reconcile must NOT fire inside reconcile_env"
-    )
+    assert not subprocess.popen_calls, "on_workspace_reconcile must NOT fire inside reconcile_env"
