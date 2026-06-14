@@ -17,7 +17,7 @@ Command names below link to a per-command file where one exists; the lighter com
 | [`pull`](./pull.md) | `winter ws pull [PATTERNS]... [--standalone\|--all] [--ff-only\|--merge\|--rebase] [--autostash] [--json]` | Fetch + ff-only integrate (default) matched project worktrees |
 | [`merge`](./merge.md) | `winter ws merge SOURCE_REF [PATTERNS]... [--standalone\|--all] [--ff-only\|--merge\|--no-ff] [--autostash] [--exclude-pinned\|--only-pinned] [--json]` | Merge an arbitrary SOURCE_REF (env name, branch, `origin/...`) into matched project worktrees |
 | [`push`](./push.md) | `winter ws push [PATTERNS]... [--standalone\|--all] [--include-pinned\|--only-pinned] [--json]` | Push matched project worktrees to their tracked upstream |
-| `connect` | `winter ws connect ENV FEATURE_BRANCH [--json]` | Connect a feature environment to a remote feature branch |
+| `connect` | `winter ws connect PATTERNS... FEATURE_BRANCH [--json]` | Connect matched non-pinned worktrees to `origin/FEATURE_BRANCH`. Each `PATTERN` is a segment-aware `<env>/<repo>` glob (a bare `<env>` connects the whole env); the trailing arg is the branch, so per-repo names can differ across an env |
 | `disconnect` | `winter ws disconnect ENV [--json]` | Disconnect a feature environment from its feature branch |
 | `diff` | `winter ws diff ENV [--staged\|--branch] [--repo REPO] [--no-headers] [--json]` | Unified diff across all repos in a feature environment (`--no-headers` omits the per-repo separator headers) |
 | `index` | `winter ws index NAME [--json]` | Print the port-offset index for a feature environment name (Greek = 1..24, other = hashed 26..281) |

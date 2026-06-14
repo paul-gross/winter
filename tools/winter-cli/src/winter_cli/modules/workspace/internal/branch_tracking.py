@@ -27,7 +27,7 @@ def read_origin_merge_branch(
     must still resolve a target for, and the "connected immediately" read
     `ws status` needs. This is the single source for that read; both the
     push-target resolver (`WriteRepoRepository.get_worktree_push_branch`) and
-    the env feature-branch summary (`ReadWorkspaceRepository._read_feature_branch`)
+    the per-worktree feature-branch read (`ReadWorkspaceRepository._read_worktree_feature_branch`)
     call it. No network.
     """
     # TypeError on detached HEAD, ValueError on unborn HEAD: both mean

@@ -9,6 +9,7 @@ from winter_cli.modules.workspace.models import (
     FeatureWorktree,
     RepoCheckoutOutcome,
 )
+from winter_cli.modules.workspace.pattern_match import matches_any_pattern
 from winter_cli.modules.workspace.repo_repository import IWriteRepoRepository
 
 logger = logging.getLogger(__name__)
@@ -31,16 +32,32 @@ class EnvCheckoutService:
     def __init__(self, repo_repo: IWriteRepoRepository) -> None:
         self._repo_repo = repo_repo
 
-    def connect_env(self, env_worktrees: FeatureEnvironmentWorktrees, feature_branch: str) -> int:
-        logger.info("connect_env: env=%s feature_branch=%s", env_worktrees.environment.name, feature_branch)
-        count = 0
+    def connect_env(
+        self,
+        env_worktrees: FeatureEnvironmentWorktrees,
+        feature_branch: str,
+        patterns: list[str],
+    ) -> list[str]:
+        """Connect every non-pinned worktree matching `patterns` to `origin/<feature_branch>`.
+
+        `patterns` are segment-aware `<env>/<repo>` globs (a bare `<env>`
+        matches `<env>/*`), so a whole-env connect and a single-worktree
+        connect go through the same path — the bare-env form is just the
+        all-matching case. Pinned worktrees are always skipped. Returns the
+        names of the worktrees that were connected, in env order.
+        """
+        env_name = env_worktrees.environment.name
+        logger.info("connect_env: env=%s feature_branch=%s patterns=%s", env_name, feature_branch, patterns)
+        connected: list[str] = []
         for wt in env_worktrees.worktrees:
             if wt.repository.pinned:
                 continue
+            if not matches_any_pattern(env_name, wt.repository.name, patterns):
+                continue
             self._repo_repo.set_upstream(wt, f"origin/{feature_branch}")
             self._repo_repo.set_push_default(wt)
-            count += 1
-        return count
+            connected.append(wt.repository.name)
+        return connected
 
     def disconnect_env(self, env_worktrees: FeatureEnvironmentWorktrees) -> int:
         logger.info("disconnect_env: env=%s", env_worktrees.environment.name)

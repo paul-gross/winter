@@ -102,7 +102,25 @@ class FeatureEnvironmentStatus:
 
     environment: FeatureEnvironment
     feature_branch: str | None
+    distinct_remote_count: int = 0
     extensions: dict[str, str] = dataclasses.field(default_factory=dict)
+
+    def feature_branch_label(self, *, disconnected: str = "—") -> str:
+        """The env's branch as shown in the dashboard, with a `+N` multi-remote suffix.
+
+        `feature_branch` is the primary — the first *connected* non-pinned repo's
+        branch. When the env's worktrees span more than one distinct remote
+        branch, the label gains `+N`, where N is the number of *additional*
+        distinct remotes (`distinct_remote_count - 1`) — so a 5-distinct-remote
+        env reads `feature-x+4`. `feature_branch` is `None` only when *no*
+        non-pinned worktree is connected, in which case the label is just the
+        `disconnected` placeholder.
+        """
+        if self.feature_branch is None:
+            return disconnected
+        if self.distinct_remote_count > 1:
+            return f"{self.feature_branch}+{self.distinct_remote_count - 1}"
+        return self.feature_branch
 
 
 @dataclasses.dataclass

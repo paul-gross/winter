@@ -18,8 +18,10 @@ from winter_cli.modules.workspace.models import (
     DiffMode,
     EnvCheckoutReport,
     EnvSnapshot,
+    FeatureEnvironment,
     MergeMode,
     PinnedScope,
+    ProjectRepository,
     PullMode,
     PushReport,
     RepoError,
@@ -57,7 +59,7 @@ class EnvStatusParams:
 
 @dataclasses.dataclass
 class EnvConnectParams:
-    env: str
+    patterns: list[str]
     feature_branch: str
     output_json: bool
 
@@ -246,28 +248,59 @@ class WorkspaceHandler:
             sys.exit(exit_code)
 
     def connect(self, params: EnvConnectParams) -> None:
-        env = self._workspace_repo.get_environment(self._workspace, params.env)
         project_repos = self._repo_factory.get_project_repos()
         self._drift_warning_svc.raise_warning()
-        env_worktrees = self._env_status_svc.get_feature_environment_worktrees(env, project_repos)
-        count = self._env_checkout_svc.connect_env(env_worktrees, params.feature_branch)
+        environments = self._envs_for_patterns(params.patterns, project_repos)
+
+        connected: list[tuple[str, str]] = []
+        for env in environments:
+            env_worktrees = self._env_status_svc.get_feature_environment_worktrees(env, project_repos)
+            for repo_name in self._env_checkout_svc.connect_env(env_worktrees, params.feature_branch, params.patterns):
+                connected.append((env.name, repo_name))
 
         if params.output_json:
             _echo_json(
                 {
-                    "env": params.env,
+                    "patterns": params.patterns,
                     "feature_branch": params.feature_branch,
-                    "repos_configured": count,
+                    "connected": [{"env": e, "repo": r} for e, r in connected],
+                    "count": len(connected),
                 }
             )
             return
 
         out = self._cli_output_svc
+        if not connected:
+            click.echo(out.style(f"No worktrees matched: {' '.join(params.patterns)}", "dim"))
+            return
+
         click.echo(
             f"{out.style('✓', 'green')} Connected "
-            f"{out.style(params.env, 'bold')} → "
-            f"{out.style(params.feature_branch, 'bold')} ({count} repos)"
+            f"{out.style(str(len(connected)), 'bold')} "
+            f"worktree{'s' if len(connected) != 1 else ''} → "
+            f"{out.style(params.feature_branch, 'bold')}"
         )
+        for env_name, repo_name in connected:
+            click.echo(f"  {env_name}/{repo_name}")
+
+    def _envs_for_patterns(
+        self, patterns: list[str], project_repos: list[ProjectRepository]
+    ) -> list[FeatureEnvironment]:
+        """Resolve the environments a set of connect patterns references.
+
+        A literal env segment (no glob char) is resolved by name via
+        `get_environment`, so arbitrary / non-Greek env names still connect — the
+        worktree filtering in `connect_env` then narrows to the matched repos. A
+        glob env segment (e.g. `*/winter`) falls back to discovering existing
+        envs, since there's no single name to resolve.
+        """
+        env_segments = {p.split("/", 1)[0] for p in patterns}
+        literal = {s for s in env_segments if not _has_glob(s)}
+        envs = [self._workspace_repo.get_environment(self._workspace, name) for name in sorted(literal)]
+        if any(_has_glob(s) for s in env_segments):
+            discovered = self._workspace_repo.get_environments(self._workspace, project_repos)
+            envs.extend(e for e in discovered if e.name not in literal)
+        return envs
 
     def disconnect(self, params: EnvDisconnectParams) -> None:
         env = self._workspace_repo.get_environment(self._workspace, params.env)
@@ -849,6 +882,11 @@ class WorkspaceHandler:
                 marker = "  " if o.safe_to_remove else "! "
                 click.echo(f"    {marker}{o.kind}  {o.path}")
         click.echo()
+
+
+def _has_glob(segment: str) -> bool:
+    """Whether a pattern segment contains an fnmatch wildcard (`*`, `?`, `[`)."""
+    return any(c in segment for c in "*?[")
 
 
 def compute_status_exit_code(snapshot: WorkspaceSnapshot, *, scoped: bool) -> int:

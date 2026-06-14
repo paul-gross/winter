@@ -59,10 +59,11 @@ git -C ./projects/<repo-name> worktree add ../../<name>/<repo-name> -b <name> <m
 ## Connecting a feature environment to a remote feature branch
 
 ```bash
-winter ws connect <name> <feature-branch>
+winter ws connect <name> <feature-branch>             # every non-pinned worktree in the env
+winter ws connect <name>/<repo> <feature-branch>       # just the matched worktree(s)
 ```
 
-Sets `push.default=upstream` and the upstream (`origin/<feature-branch>`) on each non-pinned repo's worktree — pointing every non-pinned repo at the same remote feature branch (the usual shape). The env-wide feature branch shown by `winter ws status` is read back from git's upstream tracking on the first non-pinned repo, so that summary assumes the uniform case; `ws push`/`ws pull` do not depend on it, resolving each worktree's target per-worktree from its own tracking config, so a worktree you re-point individually still works. The remote branch is not created yet — that happens on first push:
+The trailing argument is the branch; everything before it is one or more segment-aware `<env>/<repo>` globs (a bare `<name>` matches `<name>/*`), so a single `connect` can target the whole env or one repo. Sets `push.default=upstream` and the upstream (`origin/<feature-branch>`) on each matched non-pinned worktree. The usual shape points every non-pinned repo at the same remote feature branch, but repos in one env may carry independent branch names — `ws status` / `ws pull` / `ws push` each resolve each worktree's target per-worktree from its own tracking config, so a worktree you re-point individually still works. (The env-wide `feature_branch` shown by `ws status` / the dashboard is read from the first *connected* non-pinned repo, so that summary assumes the uniform case; the dashboard additionally appends a `+N` suffix to flag how many other distinct remotes the env spans.) The remote branch is not created yet — that happens on first push:
 
 ```bash
 git -C "./<name>/<repo-name>" push -u origin <name>:<feature-branch>

@@ -145,7 +145,7 @@ class WorktreeDetailScreen(KeybindingMixin, PluginActionMixin, Screen):
 
         header = self.query_one("#detail-header", Static)
         badges = " ".join(v for v in env_status.extensions.values() if v)
-        branch_text = env_status.feature_branch or "disconnected"
+        branch_text = env_status.feature_branch_label(disconnected="disconnected")
         name = env_status.environment.name.capitalize()
         title = f"{name} {badges}".rstrip()
         header.update(f"  {title}  {branch_text}")

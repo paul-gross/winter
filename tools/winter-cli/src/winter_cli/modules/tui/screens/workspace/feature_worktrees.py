@@ -70,7 +70,7 @@ class FeatureWorktreesGrid(DataTable):
     @staticmethod
     def _column_header(overview: FeatureEnvironmentOverview) -> Text:
         badges = " ".join(v for v in overview.status.extensions.values() if v)
-        branch = overview.status.feature_branch or "—"
+        branch = overview.status.feature_branch_label(disconnected="—")
         name = overview.status.environment.name.capitalize()
         title = f"{name} {badges}".rstrip()
         return Text(f"{title:<12}\n{branch}")

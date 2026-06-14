@@ -235,15 +235,35 @@ def ws_status(ctx: click.Context, patterns: tuple[str, ...], output_json: bool, 
 
 
 @ws_group.command("connect")
-@click.argument("env")
-@click.argument("feature_branch")
+@click.argument("args", nargs=-1, required=True, metavar="PATTERNS... FEATURE_BRANCH")
 @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON.")
 @click.pass_context
-def ws_connect(ctx: click.Context, env: str, feature_branch: str, output_json: bool):
-    """Connect a feature environment to a remote feature branch."""
+def ws_connect(ctx: click.Context, args: tuple[str, ...], output_json: bool):
+    """Connect matched worktrees to a remote FEATURE_BRANCH.
+
+    The final argument is FEATURE_BRANCH; every argument before it is a
+    segment-aware glob over <env>/<repo> (like `pull` / `push` / `fetch`).
+    Bare env names (no '/') are treated as <env>/*. Pinned worktrees are
+    always skipped.
+
+    \b
+      winter ws connect alpha feature/x            # every non-pinned worktree in alpha
+      winter ws connect alpha/winter feature/auth  # just alpha's winter worktree
+      winter ws connect alpha/a beta/b feature/x   # alpha/a and beta/b, both → feature/x
+
+    --json emits {"patterns", "feature_branch", "connected": [{"env", "repo"}],
+    "count"} — `connected` lists exactly the worktrees whose upstream was set.
+    """
+    if len(args) < 2:
+        raise click.ClickException("connect requires at least one PATTERN and a trailing FEATURE_BRANCH")
+    *patterns, feature_branch = args
+    if not feature_branch:
+        raise click.ClickException("Empty FEATURE_BRANCH is not allowed")
+    for pattern in patterns:
+        _validate_pattern(pattern)
     container = cli_ctx(ctx).container
     handler = container.workspace_handler()
-    handler.connect(EnvConnectParams(env=env, feature_branch=feature_branch, output_json=output_json))
+    handler.connect(EnvConnectParams(patterns=list(patterns), feature_branch=feature_branch, output_json=output_json))
 
 
 @ws_group.command("disconnect")

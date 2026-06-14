@@ -37,6 +37,13 @@ winter ws init alpha                       # ensures alpha/ exists
 winter ws connect alpha feature/my-feature
 ```
 
+### Give one env's repos independent feature branches
+```bash
+winter ws connect alpha/api feature/auth      # just alpha's api worktree → origin/feature/auth
+winter ws connect alpha/web feature/billing   # just alpha's web worktree → origin/feature/billing
+```
+The trailing argument is the branch; everything before it is a segment-aware `<env>/<repo>` glob, so each worktree can track its own remote branch. `status` / `pull` / `push` then honor those per-worktree upstreams independently.
+
 ### Fold one env into another
 ```bash
 winter ws merge alpha gamma                # merge alpha into gamma's worktrees

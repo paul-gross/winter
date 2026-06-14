@@ -97,10 +97,10 @@ def _env_worktrees(workspace: Workspace, repos: list[ProjectRepository]) -> Feat
     return FeatureEnvironmentWorktrees(environment=env, worktrees=worktrees)
 
 
-def test_connect_env_sets_upstream_for_non_pinned(
+def test_connect_env_bare_env_pattern_connects_all_non_pinned(
     workspace: Workspace, service: EnvCheckoutService, fake_repo_repo: FakeWriteRepoRepository
 ) -> None:
-    """`connect_env` invokes `set_upstream(origin/<feature>) + set_push_default` per non-pinned worktree."""
+    """A bare `<env>` pattern keeps the whole-env behavior: every non-pinned worktree is connected."""
     repos = [
         ProjectRepository(name="feature-repo", main_path=workspace.root_path / "feature-repo", main_branch="main"),
         ProjectRepository(
@@ -109,11 +109,64 @@ def test_connect_env_sets_upstream_for_non_pinned(
     ]
     env_wts = _env_worktrees(workspace, repos)
 
-    count = service.connect_env(env_wts, feature_branch="feature/widget")
+    connected = service.connect_env(env_wts, feature_branch="feature/widget", patterns=["alpha"])
 
-    assert count == 1
+    assert connected == ["feature-repo"]
     assert fake_repo_repo.set_upstream_calls == [("feature-repo", "origin/feature/widget")]
     assert fake_repo_repo.set_push_default_calls == ["feature-repo"]
+
+
+def test_connect_env_scoped_pattern_connects_only_matched_worktree(
+    workspace: Workspace, service: EnvCheckoutService, fake_repo_repo: FakeWriteRepoRepository
+) -> None:
+    """A `<env>/<repo>` pattern connects only the matched worktree, leaving siblings untouched."""
+    repos = [
+        ProjectRepository(name="repo-a", main_path=workspace.root_path / "repo-a", main_branch="main"),
+        ProjectRepository(name="repo-b", main_path=workspace.root_path / "repo-b", main_branch="main"),
+    ]
+    env_wts = _env_worktrees(workspace, repos)
+
+    connected = service.connect_env(env_wts, feature_branch="feature/auth", patterns=["alpha/repo-a"])
+
+    assert connected == ["repo-a"]
+    assert fake_repo_repo.set_upstream_calls == [("repo-a", "origin/feature/auth")]
+    assert fake_repo_repo.set_push_default_calls == ["repo-a"]
+
+
+def test_connect_env_two_worktrees_get_independent_branches(
+    workspace: Workspace, service: EnvCheckoutService, fake_repo_repo: FakeWriteRepoRepository
+) -> None:
+    """Two scoped connects in one env give each worktree its own branch without disturbing the other."""
+    repos = [
+        ProjectRepository(name="repo-a", main_path=workspace.root_path / "repo-a", main_branch="main"),
+        ProjectRepository(name="repo-b", main_path=workspace.root_path / "repo-b", main_branch="main"),
+    ]
+    env_wts = _env_worktrees(workspace, repos)
+
+    assert service.connect_env(env_wts, feature_branch="feature/auth", patterns=["alpha/repo-a"]) == ["repo-a"]
+    assert service.connect_env(env_wts, feature_branch="feature/billing", patterns=["alpha/repo-b"]) == ["repo-b"]
+
+    assert fake_repo_repo.set_upstream_calls == [
+        ("repo-a", "origin/feature/auth"),
+        ("repo-b", "origin/feature/billing"),
+    ]
+
+
+def test_connect_env_pinned_worktree_excluded_even_when_pattern_matches(
+    workspace: Workspace, service: EnvCheckoutService, fake_repo_repo: FakeWriteRepoRepository
+) -> None:
+    """A pinned worktree is skipped even if a pattern names it directly."""
+    repos = [
+        ProjectRepository(
+            name="pinned-repo", main_path=workspace.root_path / "pinned-repo", main_branch="main", pinned=True
+        ),
+    ]
+    env_wts = _env_worktrees(workspace, repos)
+
+    connected = service.connect_env(env_wts, feature_branch="feature/widget", patterns=["alpha/pinned-repo"])
+
+    assert connected == []
+    assert fake_repo_repo.set_upstream_calls == []
 
 
 def test_disconnect_env_skips_pinned_and_unsets_others(

@@ -19,6 +19,8 @@ Interactive TUI showing workspace status, feature environments, and repo details
 
 **Main-checkout indicator** in the repo-name label: each repo-name label in the feature-worktrees grid carries a status suffix sourced from the project's main checkout under `projects/<repo>` — dirty-file count (red), `+N`/`-N` commits ahead/behind `origin/<main>` (green/yellow). A clean, up-to-date checkout shows nothing.
 
+**Multi-remote indicator** in the env header: the branch shown for an env is its primary — the first *connected* non-pinned repo's remote feature branch. When the env's worktrees point at more than one distinct remote branch — e.g. after a per-worktree `winter ws connect <env>/<repo>` — the header gains a `+N` suffix (`feature-x+N`), where `N` is the number of *additional* distinct remotes. So `feature-auth+2` means three distinct remote branches across the env. No suffix means every connected worktree shares one branch.
+
 ## Keybindings
 
 Every built-in action listed below has a stable **action id**. A `[keybindings]` table in `.winter/config.toml` (with the `.winter/config.local.toml` overlay applying per-machine) maps action ids to key specs; an id with no entry keeps its default. Invalid specs and unknown ids are reported as a dashboard toast and otherwise ignored — the rest of the bindings still load. See [setup.md](../setup.md#keybindings) for the config schema. (The Log tab is a separate screen whose `q`/`r`/`c` keys are fixed and not part of this table.)

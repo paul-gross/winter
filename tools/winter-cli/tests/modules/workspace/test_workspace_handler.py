@@ -1143,3 +1143,95 @@ def test_status_json_emits_v1_schema(capsys: pytest.CaptureFixture[Any]) -> None
     assert wt["dirty"] == 6
     assert wt["last_commit_subject"] == "feat: add thing"
     assert wt["pinned"] is True
+
+
+# ── connect ──────────────────────────────────────────────────────────────────
+
+
+def _connect_handler(connect_returns: dict[str, list[str]]) -> tuple[WorkspaceHandler, MagicMock]:
+    """Handler whose connect_env returns `connect_returns[env_name]` per env.
+
+    Returns the handler plus the workspace_repo mock so tests can assert which
+    resolution path (get_environment by name vs. get_environments discovery)
+    was taken.
+    """
+    from types import SimpleNamespace
+
+    workspace_repo = MagicMock()
+    workspace_repo.get_environment.side_effect = lambda _ws, name: SimpleNamespace(name=name)
+    workspace_repo.get_environments.return_value = [
+        SimpleNamespace(name="alpha"),
+        SimpleNamespace(name="beta"),
+    ]
+
+    env_status_svc = MagicMock()
+    env_status_svc.get_feature_environment_worktrees.side_effect = lambda env, _repos: env
+
+    env_checkout_svc = MagicMock()
+    env_checkout_svc.connect_env.side_effect = lambda env, _branch, _patterns: connect_returns.get(env.name, [])
+
+    cli_output_svc = MagicMock()
+    cli_output_svc.style.side_effect = lambda text, _style: text
+
+    handler = WorkspaceHandler(
+        env_status_svc=env_status_svc,
+        workspace_sync_svc=MagicMock(),
+        workspace_push_svc=MagicMock(),
+        workspace_merge_svc=MagicMock(),
+        env_checkout_svc=env_checkout_svc,
+        workspace_repo=workspace_repo,
+        repo_repo=MagicMock(),
+        repo_factory=MagicMock(),
+        drift_warning_svc=MagicMock(),
+        prune_svc=MagicMock(),
+        reporter_factory=MagicMock(),
+        cli_output_svc=cli_output_svc,
+        workspace=MagicMock(),
+    )
+    return handler, workspace_repo
+
+
+def test_connect_literal_env_resolved_by_name_not_discovery() -> None:
+    """A non-glob env pattern resolves by name — so non-Greek env names still connect."""
+    from winter_cli.modules.workspace.handlers.workspace_handler import EnvConnectParams
+
+    handler, workspace_repo = _connect_handler({"my-feature": ["api"]})
+    handler.connect(EnvConnectParams(patterns=["my-feature/api"], feature_branch="feature/x", output_json=True))
+
+    workspace_repo.get_environment.assert_called_once()
+    assert workspace_repo.get_environment.call_args.args[1] == "my-feature"
+    workspace_repo.get_environments.assert_not_called()
+
+
+def test_connect_glob_env_uses_discovery() -> None:
+    """A glob env segment falls back to discovering existing envs."""
+    from winter_cli.modules.workspace.handlers.workspace_handler import EnvConnectParams
+
+    handler, workspace_repo = _connect_handler({"alpha": ["api"], "beta": ["api"]})
+    handler.connect(EnvConnectParams(patterns=["*/api"], feature_branch="feature/x", output_json=True))
+
+    workspace_repo.get_environments.assert_called_once()
+
+
+def test_connect_json_shape_lists_connected_worktrees(capsys: pytest.CaptureFixture[Any]) -> None:
+    from winter_cli.modules.workspace.handlers.workspace_handler import EnvConnectParams
+
+    handler, _ = _connect_handler({"alpha": ["api", "web"]})
+    handler.connect(EnvConnectParams(patterns=["alpha"], feature_branch="feature/x", output_json=True))
+
+    out = json.loads(capsys.readouterr().out)
+    assert out["feature_branch"] == "feature/x"
+    assert out["count"] == 2
+    assert out["connected"] == [
+        {"env": "alpha", "repo": "api"},
+        {"env": "alpha", "repo": "web"},
+    ]
+
+
+def test_connect_no_match_reports_and_exits_zero(capsys: pytest.CaptureFixture[Any]) -> None:
+    from winter_cli.modules.workspace.handlers.workspace_handler import EnvConnectParams
+
+    handler, _ = _connect_handler({"alpha": []})
+    handler.connect(EnvConnectParams(patterns=["alpha/nope"], feature_branch="feature/x", output_json=False))
+
+    assert "No worktrees matched" in capsys.readouterr().out
