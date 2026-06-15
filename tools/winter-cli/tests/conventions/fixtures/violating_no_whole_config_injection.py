@@ -1,4 +1,4 @@
-"""Deliberately violates `winter-harness:/python/dependency-injection.md`.
+"""Deliberately violates `winter-harness:/architecture/dependency-injection.md`.
 
 Excluded from pytest collection via `conftest.collect_ignore`.
 `test_no_whole_config_injection.py` imports this file's AST directly to

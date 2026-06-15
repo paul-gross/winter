@@ -1,7 +1,7 @@
 """Shared helpers for convention tests.
 
 Each test in `tests/conventions/` walks `src/winter_cli/` with `ast` and
-asserts a convention from `winter-harness:/python/*.md`. The helper here
+asserts a convention from `winter-harness:/architecture/*.md` or `winter-harness:/standards/*.md`. The helper here
 provides the common file → AST iteration so every rule file stays small.
 
 `fixtures/` contains files that deliberately violate the rules. They are

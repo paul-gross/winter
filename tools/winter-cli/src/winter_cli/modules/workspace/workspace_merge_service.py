@@ -246,7 +246,7 @@ class WorkspaceMergeService:
         """Same shape as `WorkspaceSyncService._warn_unless_present` (which
         still uses `click.echo` — pre-existing). Service-layer user-facing
         warnings should go through the logger per
-        `winter-harness:/python/logging.md`; sync's call site is debt to
+        `winter-harness:/standards/logging.md`; sync's call site is debt to
         clean up separately."""
         if path.exists():
             return True

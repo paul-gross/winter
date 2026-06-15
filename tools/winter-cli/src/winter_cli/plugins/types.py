@@ -4,7 +4,7 @@ These names are the plugin author's API surface. Renaming `IWinterPlugin`,
 `PluginRegistration`, `IWorktreeRepoDecorator`, `IEnvironmentDecorator`,
 `IDetailPanel`, `DetailPanelContext`, `TuiAction`, or `ActionScope` is a
 breaking change for external plugins — update the authoring doc in the same
-change: `winter-harness:/python/plugin-author.md`.
+change: `winter-harness:/architecture/plugin-author.md`.
 """
 
 from __future__ import annotations

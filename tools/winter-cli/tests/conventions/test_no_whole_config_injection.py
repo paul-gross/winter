@@ -1,6 +1,6 @@
 """Convention test — no whole-`WorkspaceConfig` injection outside narrow carve-outs.
 
-Convention: `winter-harness:/python/dependency-injection.md`.
+Convention: `winter-harness:/architecture/dependency-injection.md`.
 
 Whole-config injection is a Dependency Inversion violation: high-level
 modules end up depending on the low-level app config schema. The
@@ -31,7 +31,7 @@ import pytest
 
 from tests.conventions.conftest import SRC_ROOT, location, walk_src
 
-CONVENTION_DOC = "winter-harness:/python/dependency-injection.md"
+CONVENTION_DOC = "winter-harness:/architecture/dependency-injection.md"
 
 
 # Types we forbid as whole-injection parameters. `Config` is included
@@ -41,7 +41,7 @@ FORBIDDEN_TYPES = frozenset({"WorkspaceConfig", "Config"})
 
 # Files permitted to accept `WorkspaceConfig` directly. Paths are
 # relative to `src/winter_cli/`. Each entry pairs with a rationale in
-# `winter-harness:/python/dependency-injection.md` — when adding a new
+# `winter-harness:/architecture/dependency-injection.md` — when adding a new
 # entry, cite the carve-out (translation vs lifecycle).
 ALLOWED_FILES = frozenset(
     {

@@ -1,6 +1,6 @@
 """Convention test — behavior lives in service classes, not free functions.
 
-Convention: `winter-harness:/python/service-architecture.md`.
+Convention: `winter-harness:/architecture/service-architecture.md`.
 
 Winter code is service-based: behavior lives in injected service classes
 behind Protocol seams; module-level free functions are reserved for pure,
@@ -8,8 +8,8 @@ dependency-free helpers. The tractable, false-positive-free signal of a
 violation is a **module-level function whose parameter is annotated with an
 `I`-prefixed Protocol** — the form every injected collaborator takes. DI
 consumers depend on the Protocol seam, never the concrete adapter
-(`python/dependency-injection.md`), and the `I`-prefix is reserved for
-Protocols by the naming check (`python/module-layout.md`). So an
+(`architecture/dependency-injection.md`), and the `I`-prefix is reserved for
+Protocols by the naming check (`architecture/module-layout.md`). So an
 `I`-prefixed parameter type is unambiguously a collaborator seam, and a free
 function receiving one is behavior that escaped its class. A pure helper
 takes only plain values (stdlib types, domain dataclasses).
@@ -20,7 +20,7 @@ Why match the `I`-prefix rather than concrete role suffixes
 flag the pure helpers the convention explicitly permits. The `I`-prefix
 namespace is reserved for Protocols, so matching it carries no such
 collision. The `_conforms_*` conformance sentinels
-(`python/protocol-conformance.md`) take a *concrete* adapter, not an `I*`
+(`standards/protocol-conformance.md`) take a *concrete* adapter, not an `I*`
 Protocol, so they fall outside this signal automatically — no carve-out
 needed.
 
@@ -33,7 +33,7 @@ Scope and blind spots:
 - **Protocol-param signal only.** A free function that takes a *concrete*
   collaborator, or *constructs* its collaborators inside its body, is not
   caught here — the former is also covered by the I-prefix naming rule, the
-  latter is `python/repository-pattern.md`'s territory (no library imports
+  latter is `architecture/repository-pattern.md`'s territory (no library imports
   outside repository classes). Catching either structurally would trade the
   false-positive-free guarantee for marginal coverage; this check stays on
   the precise Protocol-param signal.
@@ -48,7 +48,7 @@ import pytest
 
 from tests.conventions.conftest import location, walk_src
 
-CONVENTION_DOC = "winter-harness:/python/service-architecture.md"
+CONVENTION_DOC = "winter-harness:/architecture/service-architecture.md"
 
 
 def _annotation_name(node: ast.expr | None) -> str | None:

@@ -1,6 +1,6 @@
 """Convention test — no catch-log-rethrow except at entrypoints.
 
-Convention: `winter-harness:/python/error-handling.md`.
+Convention: `winter-harness:/architecture/error-handling.md`.
 
 The anti-pattern is an `except` handler that both logs the caught
 exception AND re-raises — every layer in the call stack ends up logging
@@ -48,7 +48,7 @@ import pytest
 
 from tests.conventions.conftest import SRC_ROOT, location, walk_src
 
-CONVENTION_DOC = "winter-harness:/python/error-handling.md"
+CONVENTION_DOC = "winter-harness:/architecture/error-handling.md"
 
 
 # CLI entrypoints exempt from this rule. Matched against the path

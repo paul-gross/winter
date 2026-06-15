@@ -1,4 +1,4 @@
-"""Deliberately violates `winter-harness:/python/service-architecture.md`.
+"""Deliberately violates `winter-harness:/architecture/service-architecture.md`.
 
 Excluded from pytest collection via `conftest.collect_ignore`.
 `test_service_based_behavior.py` imports this file's AST directly to

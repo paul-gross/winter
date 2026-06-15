@@ -1,4 +1,4 @@
-"""Deliberately violates `winter-harness:/python/error-handling.md`.
+"""Deliberately violates `winter-harness:/architecture/error-handling.md`.
 
 Excluded from pytest collection via `conftest.collect_ignore`.
 `test_no_catch_log_rethrow.py` imports this file's AST directly to

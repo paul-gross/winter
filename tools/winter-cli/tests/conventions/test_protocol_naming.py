@@ -1,7 +1,7 @@
 """Convention test — Protocols are I-prefixed and live outside internal/.
 
-Convention: `winter-harness:/python/module-layout.md`,
-`winter-harness:/python/protocol-conformance.md`.
+Convention: `winter-harness:/architecture/module-layout.md`,
+`winter-harness:/standards/protocol-conformance.md`.
 
 Walks every `.py` under `src/winter_cli/` and inspects each `ClassDef`.
 A class is a Protocol if either:
@@ -23,7 +23,7 @@ import pytest
 
 from tests.conventions.conftest import location, walk_src
 
-CONVENTION_DOC = "winter-harness:/python/module-layout.md"
+CONVENTION_DOC = "winter-harness:/architecture/module-layout.md"
 
 
 def _is_protocol_class(node: ast.ClassDef) -> bool:

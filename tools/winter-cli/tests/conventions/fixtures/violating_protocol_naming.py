@@ -1,4 +1,4 @@
-"""Deliberately violates `winter-harness:/python/module-layout.md`.
+"""Deliberately violates `winter-harness:/architecture/module-layout.md`.
 
 Excluded from pytest collection via `conftest.collect_ignore`.
 `test_protocol_naming.py` imports this file's AST directly to confirm the
