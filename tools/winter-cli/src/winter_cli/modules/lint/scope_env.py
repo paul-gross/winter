@@ -35,6 +35,12 @@ def lint_scope_env(scope: LintScope) -> dict[str, str]:
     `WINTER_LINT_SCOPE` is the scope kind (`all` / `repo` / `env` / `changed`);
     `WINTER_LINT_PATHS` is the newline-delimited absolute paths in scope (repo
     or env directories, the workspace root, or the individual changed files).
+
+    Note on empty `WINTER_LINT_PATHS`: a ``--changed`` run with no changed
+    files is short-circuited by the handler before reaching here, so lint
+    scripts are never invoked with an empty path list. Scripts must not rely
+    on this as a guarantee for non-changed scopes (e.g. ``--all`` always
+    passes at least the workspace root even when no repos are configured).
     """
     return {
         SCOPE_KIND_VAR: scope.kind.value,

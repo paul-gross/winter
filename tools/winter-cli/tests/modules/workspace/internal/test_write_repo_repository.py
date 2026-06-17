@@ -15,7 +15,6 @@ from winter_cli.modules.workspace.models import (
     FeatureWorktree,
     ProjectRepository,
     RepoError,
-    RepoStatus,
     StandaloneRepository,
     Workspace,
 )
@@ -131,47 +130,46 @@ def test_sync_ff_only_raises_on_failure(monkeypatch: pytest.MonkeyPatch, repo: W
     assert ei.value.subcommand in {"fetch", "merge"}
 
 
-def test_push_returns_tracking_ahead_when_upstream_present(
+def test_push_returns_commit_count_against_remote_ref_when_present(
     monkeypatch: pytest.MonkeyPatch, repo: WriteRepoRepository
 ) -> None:
-    """Push count reflects commits new to the upstream, not total commits past master.
+    """Push count is computed from origin/<feature_branch>..HEAD when the remote ref exists.
 
     Regression: a feature with 14 commits already on `origin/feature/foo` plus
     1 fresh commit must report `1` pushed, not `15`.
     """
-    _fake_git_repo(monkeypatch)
+    git_mock = _fake_git_repo(monkeypatch)
+    r = git_mock.Repo.return_value
+    # rev_parse succeeds → remote ref exists
+    r.git.rev_parse.return_value = "abc123"
+    # rev_list returns the count of commits in the range
+    r.git.rev_list.return_value = "1"
     wt = _wt(_REPO_PATH)
-    status = RepoStatus(
-        name="demo",
-        path=str(_REPO_PATH),
-        main_branch="main",
-        ahead=15,
-        tracking_ref_present=True,
-        tracking_ahead=1,
-    )
-    monkeypatch.setattr(repo, "get_worktree_status", lambda _wt: status)
 
-    assert repo.push(wt, feature_branch="feature/foo") == 1
+    result = repo.push(wt, feature_branch="feature/foo")
+
+    assert result == 1
+    # Must have checked for the remote ref...
+    r.git.rev_parse.assert_called_with("--verify", "--quiet", "origin/feature/foo")
+    # ...and counted HEAD..origin/feature/foo
+    r.git.rev_list.assert_called_with("--count", "origin/feature/foo..HEAD")
 
 
-def test_push_falls_back_to_ahead_when_no_upstream_ref(
+def test_push_falls_back_to_main_branch_count_when_no_remote_ref(
     monkeypatch: pytest.MonkeyPatch, repo: WriteRepoRepository
 ) -> None:
-    """First push to a freshly-connected feature branch has no upstream ref yet —
-    fall back to commits-past-master so the count still reflects what landed."""
-    _fake_git_repo(monkeypatch)
+    """First push to a new remote branch: count commits past origin/<main_branch>."""
+    git_mock = _fake_git_repo(monkeypatch)
+    r = git_mock.Repo.return_value
+    # rev_parse raises → remote ref does not exist yet
+    r.git.rev_parse.side_effect = git.GitCommandError(("git", "rev-parse"), 128, stderr=b"unknown")
+    r.git.rev_list.return_value = "3"
     wt = _wt(_REPO_PATH)
-    status = RepoStatus(
-        name="demo",
-        path=str(_REPO_PATH),
-        main_branch="main",
-        ahead=3,
-        tracking_ref_present=False,
-        tracking_ahead=0,
-    )
-    monkeypatch.setattr(repo, "get_worktree_status", lambda _wt: status)
 
-    assert repo.push(wt, feature_branch="feature/foo") == 3
+    result = repo.push(wt, feature_branch="feature/foo")
+
+    assert result == 3
+    r.git.rev_list.assert_called_with("--count", "origin/main..HEAD")
 
 
 def test_unset_upstream_is_idempotent_when_no_upstream(

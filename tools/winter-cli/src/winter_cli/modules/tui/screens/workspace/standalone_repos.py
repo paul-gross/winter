@@ -84,8 +84,6 @@ class StandaloneReposTable(DataTable):
             self.update_cell(s.name, "branch", s.branch or "—")
             self.update_cell(s.name, "status", self._render_status(s))
             self.update_cell(s.name, "commit", Text(s.latest_commit or "—", style="dim"))
-        self._update_count += 1
-        self.refresh()
 
     @staticmethod
     def _render_status(s: StandaloneRepoStatus) -> Text:

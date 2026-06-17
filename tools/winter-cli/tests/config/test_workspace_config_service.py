@@ -380,8 +380,8 @@ def test_port_config_local_overlay_overrides_scalar_knobs() -> None:
     assert config.envs_per_workspace == 20
 
 
-def test_port_config_local_overlay_extends_env_aliases_list() -> None:
-    """config.local.toml env_aliases list is appended to the base config list (deep_merge concatenation)."""
+def test_port_config_local_overlay_replaces_env_aliases_list() -> None:
+    """config.local.toml env_aliases scalar list replaces the base list (not appended)."""
     config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
     local_path = WORKSPACE_ROOT / WINTER_DIR / LOCAL_CONFIG_FILE
     fs = FakeFilesystem(files={config_path: "", local_path: ""})
@@ -389,19 +389,20 @@ def test_port_config_local_overlay_extends_env_aliases_list() -> None:
         fs,
         {
             config_path: {
-                "env_aliases": ["alpha", "beta"],
+                "env_aliases": ["alpha", "beta", "gamma", "delta", "epsilon"],
                 "envs_per_workspace": 48,
             },
             local_path: {
-                "env_aliases": ["gamma"],
+                # Overlay trims env_aliases to just two entries.
+                "env_aliases": ["alpha", "beta"],
             },
         },
     )
 
     config = svc.load()
 
-    # Lists concatenate via deep_merge — same as git_excludes and [[project_repository]].
-    assert config.env_aliases == ["alpha", "beta", "gamma"]
+    # Scalar lists are replaced by the overlay, not appended to.
+    assert config.env_aliases == ["alpha", "beta"]
 
 
 def test_envs_per_workspace_validation_rejects_too_small() -> None:

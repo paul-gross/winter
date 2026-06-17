@@ -163,7 +163,12 @@ class CapabilityRegistryService:
 
         if resolution.binding_kind == "explicit":
             assert bound is not None
-            candidate = next(c for c in slot_candidates if c.extension_name == bound)
+            candidate = next((c for c in slot_candidates if c.extension_name == bound), None)
+            if candidate is None:
+                raise CapabilityBindingError(
+                    f"capabilities.{slot.value} explicit binding {bound!r} has no matching candidate."
+                    " Run `winter capabilities` to see all candidates and their binding state."
+                )
             return ResolvedCapability(
                 slot=slot,
                 extension_name=candidate.extension_name,

@@ -154,18 +154,21 @@ class EnvCheckoutService:
                 repos=refused,
             )
 
-        # Phase 2 — connect every non-pinned repo, then reset to the feature
-        # ref where present or to main where the feature branch doesn't exist
-        # yet.
+        # Phase 2 — reset to the feature ref (or main) first, then connect.
+        # hard_reset runs before set_upstream / set_push_default so that a
+        # mid-loop failure leaves the worktree on its original tracking rather
+        # than re-pointed at the new upstream but stuck on the old HEAD.
         outcomes: list[RepoCheckoutOutcome] = []
         for wt in targets:
-            self._repo_repo.set_upstream(wt, feature_ref)
-            self._repo_repo.set_push_default(wt)
             if have_feature_ref[wt.repository.name]:
                 self._repo_repo.hard_reset(wt, feature_ref)
+                self._repo_repo.set_upstream(wt, feature_ref)
+                self._repo_repo.set_push_default(wt)
                 outcomes.append(RepoCheckoutOutcome(wt.repository.name, CheckoutResult.reset_feature))
             else:
                 self._repo_repo.hard_reset(wt, f"origin/{wt.repository.main_branch}")
+                self._repo_repo.set_upstream(wt, feature_ref)
+                self._repo_repo.set_push_default(wt)
                 outcomes.append(RepoCheckoutOutcome(wt.repository.name, CheckoutResult.reset_main))
 
         return EnvCheckoutReport(

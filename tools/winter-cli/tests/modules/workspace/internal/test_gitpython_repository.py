@@ -294,24 +294,27 @@ def test_set_user_identity_writes_name_and_email(monkeypatch: pytest.MonkeyPatch
 
 def test_get_push_default_returns_value_when_set(monkeypatch: pytest.MonkeyPatch, adapter: GitPythonRepository) -> None:
     git_mock = _fake_git_repo(monkeypatch)
-    cw = MagicMock()
-    cw.get_value.return_value = "upstream"
-    git_mock.Repo.return_value.config_writer.return_value.__enter__ = MagicMock(return_value=cw)
-    git_mock.Repo.return_value.config_writer.return_value.__exit__ = MagicMock(return_value=False)
+    cr = MagicMock()
+    cr.get_value.return_value = "upstream"
+    git_mock.Repo.return_value.config_reader.return_value.__enter__ = MagicMock(return_value=cr)
+    git_mock.Repo.return_value.config_reader.return_value.__exit__ = MagicMock(return_value=False)
 
     result = adapter.get_push_default(_REPO_PATH)
 
     assert result == "upstream"
+    # Must use config_reader (no lock), not config_writer.
+    git_mock.Repo.return_value.config_reader.assert_called_once()
+    git_mock.Repo.return_value.config_writer.assert_not_called()
 
 
 def test_get_push_default_returns_none_when_empty(
     monkeypatch: pytest.MonkeyPatch, adapter: GitPythonRepository
 ) -> None:
     git_mock = _fake_git_repo(monkeypatch)
-    cw = MagicMock()
-    cw.get_value.return_value = ""
-    git_mock.Repo.return_value.config_writer.return_value.__enter__ = MagicMock(return_value=cw)
-    git_mock.Repo.return_value.config_writer.return_value.__exit__ = MagicMock(return_value=False)
+    cr = MagicMock()
+    cr.get_value.return_value = ""
+    git_mock.Repo.return_value.config_reader.return_value.__enter__ = MagicMock(return_value=cr)
+    git_mock.Repo.return_value.config_reader.return_value.__exit__ = MagicMock(return_value=False)
 
     result = adapter.get_push_default(_REPO_PATH)
 

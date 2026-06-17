@@ -119,8 +119,8 @@ class GitPythonRepository:
             cw.set_value("user", "email", email)
 
     def get_push_default(self, path: Path) -> str | None:
-        with git.Repo(str(path)) as r, r.config_writer() as cw:
-            value = cw.get_value("push", "default", "")
+        with git.Repo(str(path)) as r, r.config_reader() as cr:
+            value = cr.get_value("push", "default", "")
         return str(value) if value != "" else None
 
     # ── Status probes ────────────────────────────────────────────────────

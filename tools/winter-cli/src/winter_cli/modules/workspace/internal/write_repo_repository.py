@@ -246,19 +246,25 @@ class WriteRepoRepository(ReadRepoRepository):
             cw.set_value("push", "default", "upstream")
 
     def push(self, worktree: FeatureWorktree, feature_branch: str | None = None) -> int:
-        # `get_worktree_status` opens its own Repo internally; resolve the
-        # ahead count before opening ours so the two Repo lifetimes don't
-        # overlap unnecessarily.
-        status = self.get_worktree_status(worktree)
-        # Count what we're actually putting on the remote: when the upstream
-        # ref exists, that's `tracking_ahead` (HEAD past upstream). On the
-        # first push to a freshly-connected feature branch the upstream ref
-        # doesn't exist yet and `tracking_ahead` is 0 — fall back to `ahead`
-        # (HEAD past master), which is what the push creates on the remote.
-        commit_count = status.tracking_ahead if status.tracking_ref_present else status.ahead
         message = f"push failed for {worktree.repository.name}"
         with git.Repo(str(worktree.path)) as r:
             if feature_branch:
+                # Count commits in HEAD but not in origin/<feature_branch>.  On
+                # the very first push to a new remote branch the remote ref
+                # doesn't exist yet — rev-list against it would error, so fall
+                # back to counting all commits in HEAD relative to the main
+                # branch (what the remote will see as net-new).
+                remote_ref = f"origin/{feature_branch}"
+                try:
+                    r.git.rev_parse("--verify", "--quiet", remote_ref)
+                    remote_ref_exists = True
+                except git.GitCommandError:
+                    remote_ref_exists = False
+                if remote_ref_exists:
+                    commit_count = self._count_range(r, worktree.repository.name, f"{remote_ref}..HEAD")
+                else:
+                    main_ref = f"origin/{worktree.repository.main_branch}"
+                    commit_count = self._count_range(r, worktree.repository.name, f"{main_ref}..HEAD")
                 self._git_ops.run_remote_git(
                     r,
                     "push",
@@ -269,6 +275,16 @@ class WriteRepoRepository(ReadRepoRepository):
                     message=message,
                 )
             else:
+                # Plain push — count commits ahead of the tracked upstream.
+                try:
+                    tracking = r.active_branch.tracking_branch()
+                    tracking_name = tracking.name if tracking is not None else None
+                except TypeError:
+                    tracking_name = None
+                if tracking_name is not None:
+                    commit_count = self._count_range(r, worktree.repository.name, f"{tracking_name}..HEAD")
+                else:
+                    commit_count = 0
                 self._git_ops.run_remote_git(
                     r,
                     "push",

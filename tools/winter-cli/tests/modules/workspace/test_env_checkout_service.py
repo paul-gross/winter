@@ -12,6 +12,7 @@ from winter_cli.modules.workspace.models import (
     FeatureEnvironmentWorktrees,
     FeatureWorktree,
     ProjectRepository,
+    RepoError,
     Workspace,
 )
 
@@ -49,6 +50,7 @@ class FakeWriteRepoRepository:
         self.dirty_worktree_repos: set[str] = set()
         self.repos_with_commits_not_in: set[str] = set()
         self.upstreams: dict[str, str] = {}
+        self.hard_reset_raises: set[str] = set()
 
     def set_upstream(self, worktree: FeatureWorktree, upstream: str) -> None:
         self.set_upstream_calls.append((worktree.repository.name, upstream))
@@ -74,6 +76,8 @@ class FakeWriteRepoRepository:
 
     def hard_reset(self, worktree: FeatureWorktree, ref: str) -> None:
         self.hard_reset_calls.append((worktree.repository.name, ref))
+        if worktree.repository.name in self.hard_reset_raises:
+            raise RepoError(f"hard_reset failed for {worktree.repository.name}")
 
     # Methods touched by other EnvCheckoutService code paths — raise to surface
     # accidental fan-out beyond the call under test.
@@ -439,3 +443,26 @@ def test_checkout_env_with_force_resets_dirty_repos(
     assert report.aborted is False
     assert [(o.repo_name, o.result) for o in report.repos] == [("dirty-repo", CheckoutResult.reset_feature)]
     assert fake_repo_repo.hard_reset_calls == [("dirty-repo", "origin/feature/widget")]
+
+
+def test_checkout_env_mid_repo_hard_reset_failure_leaves_tracking_unchanged(
+    workspace: Workspace, service: EnvCheckoutService, fake_repo_repo: FakeWriteRepoRepository
+) -> None:
+    """A hard_reset failure mid-loop must not leave the repo re-pointed at the new upstream.
+
+    hard_reset runs before set_upstream / set_push_default so that a raised
+    exception propagates before tracking is written — the worktree stays on
+    its original (old) upstream rather than silently mis-tracked.
+    """
+    repos = [ProjectRepository(name="r1", main_path=workspace.root_path / "r1", main_branch="main")]
+    fake_repo_repo.hard_reset_raises.add("r1")
+    env_wts = _env_worktrees(workspace, repos)
+
+    with pytest.raises(RepoError):
+        service.checkout_env(env_wts, feature_branch="feature/widget", force=False)
+
+    # hard_reset was attempted (it raised), but set_upstream must NOT have been
+    # called because the reset failed — tracking must stay on the old ref.
+    assert fake_repo_repo.hard_reset_calls == [("r1", "origin/feature/widget")]
+    assert fake_repo_repo.set_upstream_calls == []
+    assert fake_repo_repo.set_push_default_calls == []

@@ -177,8 +177,6 @@ class WorktreeDetailScreen(KeybindingMixin, PluginActionMixin, Screen):
                 table.update_cell(name, "branch", rs.branch or "—")
                 table.update_cell(name, "status", render_repo_cell(rs, include_extensions=False))
                 table.update_cell(name, "ext", self._render_extensions(rs), update_width=True)
-            table._update_count += 1
-            table.refresh()
 
         # Seed/repair the focused repo: fall back to the first repo when none
         # was supplied or the supplied one isn't present in this env.

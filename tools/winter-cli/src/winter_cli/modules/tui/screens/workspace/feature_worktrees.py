@@ -132,9 +132,6 @@ class FeatureWorktreesGrid(DataTable):
                 value = render_repo_cell(repo_status) if repo_status else Text("-")
                 self.update_cell(repo_name, col_key, value, update_width=True)
 
-        self._update_count += 1
-        self.refresh()
-
     def _build_repo_label(self, prefix: str, repo_name: str) -> Text:
         label = Text(f"{prefix}{repo_name}")
         ms = self.main_statuses.get(repo_name)

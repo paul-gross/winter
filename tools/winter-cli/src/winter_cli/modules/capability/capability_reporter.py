@@ -25,9 +25,12 @@ class StreamCapabilityReporter:
 
             if kind == "explicit":
                 bound = resolution.bound_extension
-                candidate = next(c for c in resolution.candidates if c.extension_name == bound)
-                valid_glyph = "✓" if candidate.entrypoint_valid else "✗"
-                self._click.echo(f"{slot_name} → {bound} (explicit)  [{candidate.entrypoint_rel} {valid_glyph}]")
+                candidate = next((c for c in resolution.candidates if c.extension_name == bound), None)
+                if candidate is None:
+                    self._click.echo(f"{slot_name} → {bound} (explicit)  [candidate not found]")
+                else:
+                    valid_glyph = "✓" if candidate.entrypoint_valid else "✗"
+                    self._click.echo(f"{slot_name} → {bound} (explicit)  [{candidate.entrypoint_rel} {valid_glyph}]")
 
             elif kind == "implicit":
                 candidate = resolution.candidates[0]

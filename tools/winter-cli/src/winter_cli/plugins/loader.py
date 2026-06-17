@@ -84,8 +84,13 @@ class PluginRegistry:
                 self._load_plugin(plugin_dir)
                 seen.add(plugin_dir.name)
 
-        for repo in standalone_repos or []:
+        for repo in sorted(standalone_repos or [], key=lambda r: r.name):
             if repo.name in seen:
+                logger.warning(
+                    "plugin '%s' from extension %s shadowed by a higher-priority plugin of the same name",
+                    repo.name,
+                    repo.path,
+                )
                 continue
             if not self._fs.is_dir(repo.path) or not self._fs.is_file(repo.path / "plugin.py"):
                 continue

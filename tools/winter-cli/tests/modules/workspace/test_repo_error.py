@@ -42,3 +42,19 @@ def test_factory_from_git_extracts_fields():
     assert err.exit_code == 128
     assert "connection closed" in err.stderr
     assert err.message == "fetch failed for X"
+
+
+def test_repo_error_str_renders_legible_message_for_negative_exit_code():
+    """A signal-killed git op (exit=-9) must render a legible hint, not a bare negative number."""
+    err = RepoError(
+        "git push timed out",
+        subcommand="push",
+        cmd_args=("origin",),
+        cwd="/tmp/repo",
+        exit_code=-9,
+        stderr="",
+    )
+    rendered = str(err)
+    assert "killed by signal 9" in rendered
+    # The raw exit code is still present for traceability.
+    assert "-9" in rendered

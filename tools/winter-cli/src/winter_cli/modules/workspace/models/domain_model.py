@@ -199,7 +199,10 @@ class RepoError(Exception):
         if self.cwd:
             parts.append(f"  cwd: {self.cwd}")
         if self.exit_code is not None:
-            parts.append(f"  exit {self.exit_code}")
+            if self.exit_code < 0:
+                parts.append(f"  exit {self.exit_code} (killed by signal {-self.exit_code})")
+            else:
+                parts.append(f"  exit {self.exit_code}")
         if self.stderr:
             parts.append(f"  stderr: {self.stderr.strip()}")
         return "\n".join(parts)

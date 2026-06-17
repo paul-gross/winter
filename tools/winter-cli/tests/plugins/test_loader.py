@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -125,8 +126,10 @@ def test_discover_reads_plugin_config_when_present(workspace: Workspace) -> None
     assert config_received == [{"opt_in": True, "name": "demo"}]
 
 
-def test_discover_skips_extension_plugin_when_workspace_plugin_wins(workspace: Workspace) -> None:
-    """Workspace plugin shadows a same-named plugin shipped by an extension."""
+def test_discover_skips_extension_plugin_when_workspace_plugin_wins(
+    workspace: Workspace, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Workspace plugin shadows a same-named plugin shipped by an extension — emits WARNING."""
     ws_dir = WORKSPACE_ROOT / ".winter" / "plugins" / "demo"
     ws_plugin = ws_dir / "plugin.py"
     ext_path = WORKSPACE_ROOT / "ext-demo"
@@ -143,11 +146,44 @@ def test_discover_skips_extension_plugin_when_workspace_plugin_wins(workspace: W
     )
 
     ext_repo = StandaloneRepository(name="demo", path=ext_path)
-    registry = PluginRegistry(fs, FakeConfigFileReader({}), loader).discover(workspace, standalone_repos=[ext_repo])
+    with caplog.at_level(logging.WARNING, logger="winter_cli.plugins.loader"):
+        registry = PluginRegistry(fs, FakeConfigFileReader({}), loader).discover(workspace, standalone_repos=[ext_repo])
 
     # Workspace one loaded, extension one skipped (same name).
     assert loader.load_calls == [("demo", ws_plugin)]
     assert len(registry.plugins) == 1
+    # A WARNING must be emitted naming the shadowed extension.
+    assert any("demo" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+
+
+def test_discover_standalone_plugins_loaded_in_sorted_order(workspace: Workspace) -> None:
+    """Standalone extension plugins are loaded in deterministic (sorted) name order."""
+    ext_b_path = WORKSPACE_ROOT / "ext-b"
+    ext_a_path = WORKSPACE_ROOT / "ext-a"
+    ext_b_plugin = ext_b_path / "plugin.py"
+    ext_a_plugin = ext_a_path / "plugin.py"
+    fs = FakeFilesystem(
+        directories=[ext_b_path, ext_a_path],
+        files={ext_b_plugin: "", ext_a_plugin: ""},
+    )
+    b_received: list[dict] = []
+    a_received: list[dict] = []
+    loader = FakePluginLoader(
+        {
+            ext_b_plugin: _make_module("ext-b", config_received=b_received),
+            ext_a_plugin: _make_module("ext-a", config_received=a_received),
+        }
+    )
+
+    repos = [
+        StandaloneRepository(name="ext-b", path=ext_b_path),
+        StandaloneRepository(name="ext-a", path=ext_a_path),
+    ]
+    PluginRegistry(fs, FakeConfigFileReader({}), loader).discover(workspace, standalone_repos=repos)
+
+    # ext-a sorts before ext-b regardless of the order in the input list.
+    loaded_names = [name for name, _ in loader.load_calls]
+    assert loaded_names == ["ext-a", "ext-b"]
 
 
 def test_discover_skips_plugin_module_without_create_plugin(workspace: Workspace) -> None:
