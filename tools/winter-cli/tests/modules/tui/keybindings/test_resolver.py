@@ -95,3 +95,66 @@ def test_shared_prefix_is_not_a_collision() -> None:
     # `g` and `gd` share a prefix key but are distinct triggers — not flagged.
     res = _resolver({"a.top": "g", "a.goto": "gd"}).resolve([_binding("a.top", "g"), _binding("a.goto", "x")])
     assert res.errors == []
+
+
+# --- Scope-aware collision tests (issue/58) ---
+
+
+def test_plugin_disjoint_scopes_same_key_no_collision() -> None:
+    """Two plugin bindings on the same key with disjoint scope sets are NOT a collision."""
+    from winter_cli.plugins.types import ActionScope
+
+    b1 = _binding("plugin.a", "e", scopes=frozenset({ActionScope.feature_worktree}))
+    b2 = _binding("plugin.b", "e", scopes=frozenset({ActionScope.standalone_repository}))
+    res = _resolver().resolve([b1, b2])
+    assert res.errors == []
+
+
+def test_plugin_overlapping_scopes_same_key_collision_area_named() -> None:
+    """Two plugin bindings on the same key with overlapping scope sets emit an area-named error."""
+    from winter_cli.plugins.types import ActionScope
+
+    b1 = _binding("plugin.a", "e", scopes=frozenset({ActionScope.feature_worktree}))
+    b2 = _binding("plugin.b", "e", scopes=frozenset({ActionScope.feature_worktree}))
+    res = _resolver().resolve([b1, b2])
+    assert len(res.errors) == 1
+    assert "feature_worktree" in res.errors[0]
+    assert "plugin.a" in res.errors[0]
+    assert "plugin.b" in res.errors[0]
+
+
+def test_builtin_vs_plugin_same_key_uses_wildcard_message() -> None:
+    """A built-in (empty scopes) binding vs a plugin binding on the same key uses the existing format."""
+    from winter_cli.plugins.types import ActionScope
+
+    builtin = _binding("workspace.refresh", "r")  # empty scopes — built-in wildcard
+    plugin_b = _binding("plugin.a", "r", scopes=frozenset({ActionScope.feature_worktree}))
+    res = _resolver().resolve([builtin, plugin_b])
+    assert len(res.errors) == 1
+    # Must use the original format (no " in <area>" qualifier) and contain both ids.
+    assert "workspace.refresh" in res.errors[0]
+    assert "plugin.a" in res.errors[0]
+    assert " in " not in res.errors[0]
+
+
+def test_builtin_vs_two_overlapping_plugins_no_double_report() -> None:
+    """builtin(empty) + plugin.a(feature_worktree) + plugin.b(feature_worktree) on one key:
+    each conflicting id appears in exactly one error message — no double-reporting."""
+    from winter_cli.plugins.types import ActionScope
+
+    builtin = _binding("workspace.refresh", "r")
+    plugin_a = _binding("plugin.a", "r", scopes=frozenset({ActionScope.feature_worktree}))
+    plugin_b = _binding("plugin.b", "r", scopes=frozenset({ActionScope.feature_worktree}))
+    res = _resolver().resolve([builtin, plugin_a, plugin_b])
+    # The conflict must still be reported (not silently dropped).
+    assert len(res.errors) >= 1
+    # Collect which error messages each id appears in.
+    ids_to_messages: dict[str, list[str]] = {"workspace.refresh": [], "plugin.a": [], "plugin.b": []}
+    for msg in res.errors:
+        for id_ in ids_to_messages:
+            if id_ in msg:
+                ids_to_messages[id_].append(msg)
+    # No id should appear in two *different* error messages.
+    for id_, messages in ids_to_messages.items():
+        unique = set(messages)
+        assert len(unique) <= 1, f"{id_!r} appears in multiple distinct error messages: {unique}"

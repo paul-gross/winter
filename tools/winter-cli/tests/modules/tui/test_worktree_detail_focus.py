@@ -114,6 +114,7 @@ async def test_get_selected_repo_label_column_is_sensible_default():
 class _FakePluginRegistry:
     worktree_repo_decorators: tuple = ()
     environment_decorators: tuple = ()
+    tui_actions: tuple = ()
 
     def __init__(self, detail_panels: tuple = ()) -> None:
         self.detail_panels = detail_panels

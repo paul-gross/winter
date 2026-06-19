@@ -114,15 +114,53 @@ class KeybindingResolver:
         (or the chord engine) and the second silently wins. A shared *prefix*
         (`g` and `gd`) is intentional and not a collision — only identical full
         key tuples are flagged.
+
+        Scope-aware: two bindings conflict iff their scope sets intersect, where
+        an empty scope set (built-in actions) is a wildcard that intersects
+        everything. Disjoint plugin scope sets on the same key are NOT a
+        collision.
         """
-        by_keys: dict[tuple[str, ...], list[str]] = {}
+        by_keys: dict[tuple[str, ...], list[ResolvedBinding]] = {}
         for rb in resolved:
-            by_keys.setdefault(rb.spec.keys, []).append(rb.binding.action_id)
+            by_keys.setdefault(rb.spec.keys, []).append(rb)
         errors: list[str] = []
-        for keys, ids in by_keys.items():
-            if len(ids) > 1:
-                spec = "+".join(keys) if len(keys) == 1 else " ".join(keys)
-                errors.append(f"keybindings: {', '.join(sorted(ids))} all bind {spec!r}; only the last takes effect")
+        for keys, rbs in by_keys.items():
+            if len(rbs) < 2:
+                continue
+            spec = "+".join(keys) if len(keys) == 1 else " ".join(keys)
+            # Check every pair for scope intersection.
+            # Collect conflicting pairs grouped by their intersecting areas so
+            # we emit one deterministic error per area cluster rather than O(N^2) noise.
+            # area_cluster -> set of action_ids involved in that cluster.
+            # Empty scopes = wildcard; those always produce a built-in-style error.
+            wildcard_ids: set[str] = set()
+            # For plugin-vs-plugin overlaps, group by frozenset of intersecting area values.
+            area_to_ids: dict[frozenset[str], set[str]] = {}
+            for i in range(len(rbs)):
+                for j in range(i + 1, len(rbs)):
+                    a, b = rbs[i].binding, rbs[j].binding
+                    if not a.scopes or not b.scopes:
+                        # At least one side is a wildcard (built-in) — always conflicts.
+                        wildcard_ids.add(a.action_id)
+                        wildcard_ids.add(b.action_id)
+                    else:
+                        overlap = a.scopes & b.scopes
+                        if overlap:
+                            area_key = frozenset(s.value for s in overlap)
+                            area_to_ids.setdefault(area_key, set()).add(a.action_id)
+                            area_to_ids.setdefault(area_key, set()).add(b.action_id)
+            if wildcard_ids:
+                errors.append(
+                    f"keybindings: {', '.join(sorted(wildcard_ids))} all bind {spec!r}; only the last takes effect"
+                )
+            for area_key, ids in sorted(area_to_ids.items(), key=lambda kv: sorted(kv[0])):
+                # Exclude ids already reported in the wildcard error to avoid double-reporting.
+                remaining = ids - wildcard_ids
+                if len(remaining) < 2:
+                    continue
+                areas = ", ".join(sorted(area_key))
+                ids_str = ", ".join(sorted(remaining))
+                errors.append(f"keybindings: {ids_str} all bind {spec!r} in {areas}; only the last takes effect")
         return errors
 
     def _default_spec(self, action: ActionBinding) -> KeySpec:

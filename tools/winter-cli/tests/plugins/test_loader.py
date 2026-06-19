@@ -9,7 +9,7 @@ import pytest
 from tests.conftest import FakeConfigFileReader, FakeFilesystem
 from winter_cli.modules.workspace.models import StandaloneRepository, Workspace
 from winter_cli.plugins.loader import PluginRegistry
-from winter_cli.plugins.types import IDetailPanel, PluginRegistration
+from winter_cli.plugins.types import ActionScope, IDetailPanel, PluginRegistration, TuiAction
 
 WORKSPACE_ROOT = Path("/ws")
 
@@ -279,3 +279,40 @@ def test_discover_other_plugins_load_when_one_explodes(workspace: Workspace) -> 
 
     registry = PluginRegistry(fs, FakeConfigFileReader({}), loader).discover(workspace, standalone_repos=[])
     assert [p.name for p in registry.plugins] == ["good"]
+
+
+# --- actions_for_scope with multi-scope TuiAction ----------------------------
+
+
+def test_actions_for_scope_returns_single_scope_action(workspace: Workspace) -> None:
+    """A single-scope TuiAction is returned only for its declared scope."""
+    registry = PluginRegistry(FakeFilesystem(), FakeConfigFileReader({}), FakePluginLoader({}))
+    action = TuiAction(
+        name="ws_only",
+        scope=ActionScope.workspace,
+        key="w",
+        description="workspace action",
+        handler=lambda inv: None,
+    )
+    registry.tui_actions = [action]
+
+    assert registry.actions_for_scope(ActionScope.workspace) == [action]
+    assert registry.actions_for_scope(ActionScope.standalone_repository) == []
+
+
+def test_actions_for_scope_returns_multi_scope_action_for_each_declared_scope(workspace: Workspace) -> None:
+    """A multi-scope TuiAction appears in actions_for_scope for EACH of its scopes."""
+    registry = PluginRegistry(FakeFilesystem(), FakeConfigFileReader({}), FakePluginLoader({}))
+    action = TuiAction(
+        name="multi",
+        scope=[ActionScope.workspace, ActionScope.standalone_repository],
+        key="m",
+        description="multi-scope action",
+        handler=lambda inv: None,
+    )
+    registry.tui_actions = [action]
+
+    assert registry.actions_for_scope(ActionScope.workspace) == [action]
+    assert registry.actions_for_scope(ActionScope.standalone_repository) == [action]
+    assert registry.actions_for_scope(ActionScope.feature_environment) == []
+    assert registry.actions_for_scope(ActionScope.feature_worktree) == []

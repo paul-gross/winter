@@ -54,7 +54,7 @@ class PluginRegistry:
         self.tui_actions: list[TuiAction] = []
 
     def actions_for_scope(self, scope: ActionScope) -> list[TuiAction]:
-        return [a for a in self.tui_actions if a.scope == scope]
+        return [a for a in self.tui_actions if scope in a.scopes]
 
     def discover(
         self,

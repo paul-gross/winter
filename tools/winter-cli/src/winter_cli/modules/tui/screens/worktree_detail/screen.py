@@ -29,6 +29,7 @@ from winter_cli.modules.workspace.repository_factory import RepositoryFactory
 from winter_cli.modules.workspace.workspace_repository import IReadWorkspaceRepository
 from winter_cli.plugins.loader import PluginRegistry
 from winter_cli.plugins.types import (
+    ActionInvocation,
     ActionScope,
     DetailPanelContext,
     FeatureEnvironmentContext,
@@ -269,32 +270,49 @@ class WorktreeDetailScreen(KeybindingMixin, PluginActionMixin, Screen):
         if action is None:
             return
 
-        if action.scope == ActionScope.workspace:
-            self._execute_workspace_action(action_name)
-        elif action.scope == ActionScope.feature_environment:
-            self._execute_environment_action(action_name)
-        elif action.scope == ActionScope.feature_worktree and self._focused_repo is not None:
-            self._execute_worktree_action(action_name, self._focused_repo)
+        # Resolve originating scope: most-specific-resolvable in declared scopes.
+        # Order: feature_worktree (only when _focused_repo is set), feature_environment, workspace.
+        originating_scope: ActionScope | None = None
+        order = [ActionScope.feature_worktree, ActionScope.feature_environment, ActionScope.workspace]
+        for scope in order:
+            if scope not in action.scopes:
+                continue
+            if scope == ActionScope.feature_worktree and self._focused_repo is None:
+                continue
+            originating_scope = scope
+            break
+
+        if originating_scope is None:
+            return
+
+        if originating_scope == ActionScope.workspace:
+            self._execute_workspace_action(action_name, originating_scope)
+        elif originating_scope == ActionScope.feature_environment:
+            self._execute_environment_action(action_name, originating_scope)
+        elif originating_scope == ActionScope.feature_worktree:
+            self._execute_worktree_action(action_name, self._focused_repo, originating_scope)
 
     @work(thread=True)
-    def _execute_workspace_action(self, action_name: str) -> None:
+    def _execute_workspace_action(self, action_name: str, originating_scope: ActionScope) -> None:
         ctx = WorkspaceContext(workspace=self._workspace, suspend=self.app.suspend)
-        for action in self._plugin_registry.actions_for_scope(ActionScope.workspace):
+        inv = ActionInvocation(scope=originating_scope, context=ctx)
+        for action in self._plugin_registry.actions_for_scope(originating_scope):
             if action.name == action_name:
-                action.handler(ctx)
+                action.handler(inv)
                 return
 
     @work(thread=True)
-    def _execute_environment_action(self, action_name: str) -> None:
+    def _execute_environment_action(self, action_name: str, originating_scope: ActionScope) -> None:
         env = self._workspace_repo.get_environment(self._workspace, self.worktree_name)
         ctx = FeatureEnvironmentContext(environment=env, suspend=self.app.suspend)
-        for action in self._plugin_registry.actions_for_scope(ActionScope.feature_environment):
+        inv = ActionInvocation(scope=originating_scope, context=ctx)
+        for action in self._plugin_registry.actions_for_scope(originating_scope):
             if action.name == action_name:
-                action.handler(ctx)
+                action.handler(inv)
                 return
 
     @work(thread=True)
-    def _execute_worktree_action(self, action_name: str, repo_name: str) -> None:
+    def _execute_worktree_action(self, action_name: str, repo_name: str, originating_scope: ActionScope) -> None:
         project_repos = self._repo_factory.get_project_repos()
         env = self._workspace_repo.get_environment(self._workspace, self.worktree_name)
         env_worktrees = self._env_status_svc.get_feature_environment_worktrees(env, project_repos)
@@ -302,9 +320,10 @@ class WorktreeDetailScreen(KeybindingMixin, PluginActionMixin, Screen):
         if wt is None:
             return
         ctx = FeatureWorktreeContext(worktree=wt, suspend=self.app.suspend)
-        for action in self._plugin_registry.actions_for_scope(ActionScope.feature_worktree):
+        inv = ActionInvocation(scope=originating_scope, context=ctx)
+        for action in self._plugin_registry.actions_for_scope(originating_scope):
             if action.name == action_name:
-                action.handler(ctx)
+                action.handler(inv)
                 return
 
     def action_back(self) -> None:

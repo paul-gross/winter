@@ -23,7 +23,13 @@ from winter_cli.modules.workspace.models import (
 from winter_cli.modules.workspace.repo_repository import IReadRepoRepository
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
 from winter_cli.plugins.loader import PluginRegistry
-from winter_cli.plugins.types import ActionScope, DetailPanelContext, StandaloneRepoContext, WorkspaceContext
+from winter_cli.plugins.types import (
+    ActionInvocation,
+    ActionScope,
+    DetailPanelContext,
+    StandaloneRepoContext,
+    WorkspaceContext,
+)
 
 
 class StandaloneDetailScreen(KeybindingMixin, PluginActionMixin, Screen):
@@ -141,26 +147,40 @@ class StandaloneDetailScreen(KeybindingMixin, PluginActionMixin, Screen):
         )
         if action is None:
             return
-        if action.scope == ActionScope.workspace:
-            self._execute_workspace_action(action_name)
-        elif action.scope == ActionScope.standalone_repository:
-            self._execute_standalone_action(action_name)
+
+        # Resolve originating scope: most-specific-resolvable in declared scopes.
+        # Order: standalone_repository, workspace.
+        originating_scope: ActionScope | None = None
+        for scope in (ActionScope.standalone_repository, ActionScope.workspace):
+            if scope in action.scopes:
+                originating_scope = scope
+                break
+
+        if originating_scope is None:
+            return
+
+        if originating_scope == ActionScope.workspace:
+            self._execute_workspace_action(action_name, originating_scope)
+        elif originating_scope == ActionScope.standalone_repository:
+            self._execute_standalone_action(action_name, originating_scope)
 
     @work(thread=True)
-    def _execute_workspace_action(self, action_name: str) -> None:
+    def _execute_workspace_action(self, action_name: str, originating_scope: ActionScope) -> None:
         ctx = WorkspaceContext(workspace=self._workspace, suspend=self.app.suspend)
-        for action in self._plugin_registry.actions_for_scope(ActionScope.workspace):
+        inv = ActionInvocation(scope=originating_scope, context=ctx)
+        for action in self._plugin_registry.actions_for_scope(originating_scope):
             if action.name == action_name:
-                action.handler(ctx)
+                action.handler(inv)
                 return
 
     @work(thread=True)
-    def _execute_standalone_action(self, action_name: str) -> None:
+    def _execute_standalone_action(self, action_name: str, originating_scope: ActionScope) -> None:
         repo = self._resolve_repo()
         if repo is None:
             return
         ctx = StandaloneRepoContext(repo=repo, suspend=self.app.suspend)
-        for action in self._plugin_registry.actions_for_scope(ActionScope.standalone_repository):
+        inv = ActionInvocation(scope=originating_scope, context=ctx)
+        for action in self._plugin_registry.actions_for_scope(originating_scope):
             if action.name == action_name:
-                action.handler(ctx)
+                action.handler(inv)
                 return

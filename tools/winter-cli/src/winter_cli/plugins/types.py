@@ -2,9 +2,9 @@
 
 These names are the plugin author's API surface. Renaming `IWinterPlugin`,
 `PluginRegistration`, `IWorktreeRepoDecorator`, `IEnvironmentDecorator`,
-`IDetailPanel`, `DetailPanelContext`, `TuiAction`, or `ActionScope` is a
-breaking change for external plugins — update the authoring doc in the same
-change: `winter-harness:/architecture/plugin-author.md`.
+`IDetailPanel`, `DetailPanelContext`, `TuiAction`, `ActionScope`, or
+`ActionInvocation` is a breaking change for external plugins — update the
+authoring doc in the same change: `winter-harness:/architecture/plugin-author.md`.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import enum
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 import click
@@ -127,7 +127,32 @@ class StandaloneRepoContext:
 
 ActionContext = WorkspaceContext | FeatureEnvironmentContext | FeatureWorktreeContext | StandaloneRepoContext
 
-ActionHandler = Callable[[ActionContext], None]
+
+@dataclasses.dataclass
+class ActionInvocation:
+    """Wrapper passed to every action handler.
+
+    Carries the originating `scope` so multi-scope handlers can branch on which
+    area triggered the action, and the resolved `context` holding the selection.
+    Unknown attribute lookups delegate to the inner `context` so existing
+    handlers that read `ctx.repo`, `ctx.worktree`, `ctx.environment`,
+    `ctx.workspace`, or `ctx.suspend` keep working without modification.
+    """
+
+    scope: ActionScope
+    context: ActionContext
+
+    def __getattr__(self, name: str) -> Any:
+        # Delegate unknown attributes to the wrapped context so handlers
+        # written against the bare context keep working. Only reached for
+        # attributes not found normally (so `scope`/`context` never recurse).
+        try:
+            return getattr(self.context, name)
+        except AttributeError:
+            raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}") from None
+
+
+ActionHandler = Callable[[ActionInvocation], None]
 
 
 @dataclasses.dataclass
@@ -135,8 +160,13 @@ class TuiAction:
     name: str
     """Unique identifier for the action (e.g. 'codediff')."""
 
-    scope: ActionScope
-    """Determines what context the handler receives."""
+    scope: ActionScope | Sequence[ActionScope]
+    """Determines what context the handler receives.
+
+    Accepts a single `ActionScope` or a sequence of scopes. All internal code
+    reads the normalized `scopes` frozenset instead; `scope` is the author-facing
+    input surface only.
+    """
 
     key: str
     """Keybinding to trigger this action (e.g. 'e')."""
@@ -146,6 +176,18 @@ class TuiAction:
 
     handler: ActionHandler
     """Callable invoked with the appropriate context."""
+
+    scopes: frozenset[ActionScope] = dataclasses.field(init=False, repr=False)
+    """Normalized read surface — always a frozenset regardless of how `scope` was provided."""
+
+    def __post_init__(self) -> None:
+        if isinstance(self.scope, ActionScope):
+            object.__setattr__(self, "scopes", frozenset({self.scope}))
+        else:
+            normalized = frozenset(self.scope)
+            if not normalized:
+                raise ValueError("TuiAction requires at least one ActionScope")
+            object.__setattr__(self, "scopes", normalized)
 
 
 @dataclasses.dataclass

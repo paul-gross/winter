@@ -15,11 +15,30 @@ from textual.app import App, ComposeResult
 
 from winter_cli.config.models import KeybindingsConfig
 from winter_cli.modules.tui.keybindings import KeybindingResolver
+from winter_cli.modules.tui.screens.workspace.feature_worktrees import FeatureWorktreesGrid
 from winter_cli.modules.tui.screens.workspace.screen import WorkspaceScreen
 from winter_cli.modules.tui.screens.workspace.standalone_repos import StandaloneReposTable
-from winter_cli.modules.workspace.models.domain_model import StandaloneRepository, Workspace
-from winter_cli.modules.workspace.models.service_model import StandaloneRepoStatus
-from winter_cli.plugins.types import ActionContext, ActionScope, StandaloneRepoContext, TuiAction
+from winter_cli.modules.workspace.models.domain_model import (
+    FeatureEnvironment,
+    FeatureEnvironmentWorktrees,
+    FeatureWorktree,
+    ProjectRepository,
+    StandaloneRepository,
+    Workspace,
+)
+from winter_cli.modules.workspace.models.service_model import (
+    FeatureEnvironmentOverview,
+    FeatureEnvironmentStatus,
+    StandaloneRepoStatus,
+    WorktreeRepoStatus,
+)
+from winter_cli.plugins.types import (
+    ActionInvocation,
+    ActionScope,
+    FeatureWorktreeContext,
+    StandaloneRepoContext,
+    TuiAction,
+)
 
 _WORKSPACE = Workspace(root_path=Path("/tmp/ws"), session_prefix="t", main_branch="main")
 _REPO = StandaloneRepository(name="winter-harness", path=Path("/tmp/ws/ai/harness"))
@@ -101,7 +120,7 @@ class _FakePluginRegistry:
         self.tui_actions = actions
 
     def actions_for_scope(self, scope: ActionScope) -> list[TuiAction]:
-        return [a for a in self.tui_actions if a.scope == scope]
+        return [a for a in self.tui_actions if scope in a.scopes]
 
 
 class _ScreenApp(App):
@@ -129,7 +148,7 @@ def _make_screen(actions: list[TuiAction]) -> WorkspaceScreen:
 
 @pytest.mark.asyncio
 async def test_standalone_action_fires_with_repo_context():
-    captured: list[ActionContext] = []
+    captured: list[ActionInvocation] = []
     action = TuiAction(
         name="probe",
         scope=ActionScope.standalone_repository,
@@ -151,14 +170,18 @@ async def test_standalone_action_fires_with_repo_context():
         await pilot.pause()
 
     assert len(captured) == 1
-    ctx = captured[0]
-    assert isinstance(ctx, StandaloneRepoContext)
-    assert ctx.repo.name == "winter-harness"
+    inv = captured[0]
+    # Handlers now receive an ActionInvocation wrapping the context.
+    assert isinstance(inv, ActionInvocation)
+    assert inv.scope == ActionScope.standalone_repository
+    # Attribute delegation preserves existing handler access patterns.
+    assert isinstance(inv.context, StandaloneRepoContext)
+    assert inv.repo.name == "winter-harness"
 
 
 @pytest.mark.asyncio
 async def test_standalone_action_is_noop_when_nothing_selected():
-    captured: list[ActionContext] = []
+    captured: list[ActionInvocation] = []
     action = TuiAction(
         name="probe",
         scope=ActionScope.standalone_repository,
@@ -182,3 +205,137 @@ async def test_standalone_action_is_noop_when_nothing_selected():
         await pilot.pause()
 
     assert captured == []
+
+
+# --- multi-scope dispatch (issue/58) -----------------------------------------
+
+
+def _env(name: str, index: int) -> FeatureEnvironment:
+    return FeatureEnvironment(workspace=_WORKSPACE, name=name, index=index, path=Path(f"/tmp/ws/{name}"))
+
+
+def _worktree(env: FeatureEnvironment, repo_name: str) -> FeatureWorktree:
+    repo = ProjectRepository(name=repo_name, main_path=Path(f"/tmp/ws/projects/{repo_name}"), main_branch="main")
+    return FeatureWorktree(workspace=_WORKSPACE, environment=env, repository=repo)
+
+
+def _overview(name: str, index: int, repo_names: list[str]) -> FeatureEnvironmentOverview:
+    env = _env(name, index)
+    repo_statuses = [
+        WorktreeRepoStatus(worktree=_worktree(env, rn), branch=name, ahead=0, behind=0, dirty_count=0)
+        for rn in repo_names
+    ]
+    status = FeatureEnvironmentStatus(environment=env, feature_branch=f"feature/{name}")
+    return FeatureEnvironmentOverview(status=status, repo_statuses=repo_statuses)
+
+
+class _FakeSnapshotSvcWithEnv:
+    """Snapshot service that returns both a feature environment and a singleton."""
+
+    def __init__(self, overview: FeatureEnvironmentOverview) -> None:
+        self._overview = overview
+
+    def collect_for_dashboard(self, **_kwargs: Any):
+        from winter_cli.modules.workspace.workspace_snapshot_service import DashboardRefreshData
+
+        return DashboardRefreshData(
+            overviews=[self._overview],
+            standalone_statuses=[StandaloneRepoStatus(repository=_REPO)],
+            main_statuses={},
+        )
+
+
+class _FakeRepoFactoryWithWorktrees(_FakeRepoFactory):
+    def __init__(self, env_worktrees: FeatureEnvironmentWorktrees) -> None:
+        self._env_worktrees = env_worktrees
+
+    def find_standalone(self, name):
+        return next((r for r in [_REPO] if r.name == name), None)
+
+
+def _make_screen_with_env(actions: list[TuiAction], overview: FeatureEnvironmentOverview) -> WorkspaceScreen:
+    return WorkspaceScreen(
+        snapshot_svc=cast(Any, _FakeSnapshotSvcWithEnv(overview)),
+        repo_factory=cast(Any, _FakeRepoFactory()),
+        workspace=_WORKSPACE,
+        plugin_registry=cast(Any, _FakePluginRegistry(actions)),
+        error_log=cast(Any, None),
+        keybinding_resolver=KeybindingResolver(KeybindingsConfig()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_multiscope_action_fires_standalone_scope_when_singletons_focused():
+    """A [feature_worktree, standalone_repository] action routes to standalone_repository
+    when the singletons table holds focus, passing the correct ActionInvocation."""
+    captured: list[ActionInvocation] = []
+    action = TuiAction(
+        name="probe",
+        scope=[ActionScope.feature_worktree, ActionScope.standalone_repository],
+        key="P",
+        description="probe",
+        handler=captured.append,
+    )
+    overview = _overview("alpha", 1, ["winter-cli"])
+    screen = _make_screen_with_env([action], overview)
+    app = _ScreenApp(screen)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        # Focus the singletons table so the action routes to standalone_repository.
+        table = screen.query_one("#singletons", StandaloneReposTable)
+        table.focus()
+        await pilot.pause()
+        assert table.get_selected_repo() == "winter-harness"
+
+        screen._run_plugin_action("probe")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+    assert len(captured) == 1
+    inv = captured[0]
+    assert isinstance(inv, ActionInvocation)
+    assert inv.scope == ActionScope.standalone_repository
+    assert isinstance(inv.context, StandaloneRepoContext)
+    assert inv.repo.name == "winter-harness"
+
+
+@pytest.mark.asyncio
+async def test_multiscope_action_fires_worktree_scope_when_grid_focused():
+    """A [feature_worktree, standalone_repository] action routes to feature_worktree
+    when the grid table holds focus and a worktree+repo selection is resolvable."""
+    captured: list[ActionInvocation] = []
+    action = TuiAction(
+        name="probe",
+        scope=[ActionScope.feature_worktree, ActionScope.standalone_repository],
+        key="P",
+        description="probe",
+        handler=captured.append,
+    )
+    overview = _overview("alpha", 1, ["winter-cli"])
+    screen = _make_screen_with_env([action], overview)
+    app = _ScreenApp(screen)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        # Focus the grid so the action routes to feature_worktree.
+        # Move cursor to column 1 (first env, col 0 is the label column).
+        grid = screen.query_one("#grid", FeatureWorktreesGrid)
+        grid.move_cursor(row=0, column=1)
+        grid.focus()
+        await pilot.pause()
+        assert grid.get_selected_worktree() == "alpha"
+        assert grid.get_selected_repo() == "winter-cli"
+
+        screen._run_plugin_action("probe")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+    assert len(captured) == 1
+    inv = captured[0]
+    assert isinstance(inv, ActionInvocation)
+    assert inv.scope == ActionScope.feature_worktree
+    assert isinstance(inv.context, FeatureWorktreeContext)
+    assert inv.worktree.repository.name == "winter-cli"

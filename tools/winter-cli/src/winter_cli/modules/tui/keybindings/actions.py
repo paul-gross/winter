@@ -44,6 +44,14 @@ class ActionBinding:
     `TuiAction.key`), taken verbatim rather than parsed through the user-facing
     key-spec grammar. A config override always uses the grammar regardless."""
 
+    scopes: frozenset[ActionScope] = dataclasses.field(default_factory=frozenset)
+    """Scopes this binding is active in.
+
+    Empty for built-in actions (they collide on identical keys regardless of
+    area); populated for plugin bindings so the resolver only reports a collision
+    when two bindings' scope sets intersect.
+    """
+
 
 # `app.quit` is offered on the workspace screen (the only screen where quitting,
 # rather than going back, is the q action). Detail screens bind their own back.
@@ -92,17 +100,27 @@ def plugin_action_bindings(
     registry: PluginRegistry,
     scopes: Iterable[ActionScope],
 ) -> list[ActionBinding]:
-    """Build `ActionBinding`s for plugin actions in `scopes`, id'd `plugin.<name>`."""
+    """Build `ActionBinding`s for plugin actions whose scopes intersect `scopes`.
+
+    Emits exactly one `ActionBinding` per matching action (regardless of how many
+    scopes it declares), carrying the intersection on `binding.scopes`. This
+    prevents a multi-scope action from producing duplicate bindings with the same
+    action_id that would otherwise self-collide in the resolver.
+    """
+    requested = frozenset(scopes)
     bindings: list[ActionBinding] = []
-    for scope in scopes:
-        for action in registry.actions_for_scope(scope):
-            bindings.append(
-                ActionBinding(
-                    action_id=f"{PLUGIN_ID_PREFIX}{action.name}",
-                    default=action.key,
-                    action=f"plugin_{action.name}",
-                    description=action.description,
-                    default_is_token=True,
-                )
+    for action in registry.tui_actions:
+        active = action.scopes & requested
+        if not active:
+            continue
+        bindings.append(
+            ActionBinding(
+                action_id=f"{PLUGIN_ID_PREFIX}{action.name}",
+                default=action.key,
+                action=f"plugin_{action.name}",
+                description=action.description,
+                default_is_token=True,
+                scopes=active,
             )
+        )
     return bindings

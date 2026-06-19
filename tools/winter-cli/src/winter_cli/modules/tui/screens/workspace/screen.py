@@ -34,10 +34,12 @@ from winter_cli.modules.workspace.repository_factory import RepositoryFactory
 from winter_cli.modules.workspace.workspace_snapshot_service import WorkspaceSnapshotService
 from winter_cli.plugins.loader import PluginRegistry
 from winter_cli.plugins.types import (
+    ActionInvocation,
     ActionScope,
     FeatureEnvironmentContext,
     FeatureWorktreeContext,
     StandaloneRepoContext,
+    TuiAction,
     WorkspaceContext,
 )
 
@@ -277,6 +279,38 @@ class WorkspaceScreen(KeybindingMixin, PluginActionMixin, Screen):
             app = cast("WinterDashboardApp", self.app)
             app.push_screen(app.screen_factory.standalone_detail_screen(repo_name))
 
+    def _resolve_action_scope(self, action: TuiAction) -> ActionScope | None:
+        """Resolve the originating scope for a plugin action, biased by focused area.
+
+        Uses a deterministic priority order based on which area holds focus:
+        - Singletons focused: standalone_repository first, then workspace fallback.
+        - Grid focused (default): feature_worktree first, then feature_environment,
+          then workspace, then standalone_repository.
+
+        Returns the first scope in the ordered list that is present in the
+        action's declared scopes, or None if none match.
+        """
+        focused = self.focused
+        on_standalone = focused is not None and focused.id == "singletons"
+        if on_standalone:
+            order = [
+                ActionScope.standalone_repository,
+                ActionScope.workspace,
+                ActionScope.feature_worktree,
+                ActionScope.feature_environment,
+            ]
+        else:
+            order = [
+                ActionScope.feature_worktree,
+                ActionScope.feature_environment,
+                ActionScope.workspace,
+                ActionScope.standalone_repository,
+            ]
+        for scope in order:
+            if scope in action.scopes:
+                return scope
+        return None
+
     def _run_plugin_action(self, action_name: str) -> None:
         action = next(
             (a for a in self._plugin_registry.tui_actions if a.name == action_name),
@@ -285,46 +319,54 @@ class WorkspaceScreen(KeybindingMixin, PluginActionMixin, Screen):
         if action is None:
             return
 
-        if action.scope == ActionScope.workspace:
-            self._execute_workspace_action(action_name)
-        elif action.scope == ActionScope.feature_environment:
+        originating_scope = self._resolve_action_scope(action)
+        if originating_scope is None:
+            return
+
+        if originating_scope == ActionScope.workspace:
+            self._execute_workspace_action(action_name, originating_scope)
+        elif originating_scope == ActionScope.feature_environment:
             grid = self.query_one("#grid", FeatureWorktreesGrid)
             wt_name = grid.get_selected_worktree()
             if wt_name is not None:
-                self._execute_environment_action(action_name, wt_name)
-        elif action.scope == ActionScope.feature_worktree:
+                self._execute_environment_action(action_name, wt_name, originating_scope)
+        elif originating_scope == ActionScope.feature_worktree:
             grid = self.query_one("#grid", FeatureWorktreesGrid)
             wt_name = grid.get_selected_worktree()
             repo_name = grid.get_selected_repo()
             if wt_name is not None and repo_name is not None:
-                self._execute_worktree_action(action_name, wt_name, repo_name)
-        elif action.scope == ActionScope.standalone_repository:
+                self._execute_worktree_action(action_name, wt_name, repo_name, originating_scope)
+        elif originating_scope == ActionScope.standalone_repository:
             singletons = self.query_one("#singletons", StandaloneReposTable)
             repo_name = singletons.get_selected_repo()
             if repo_name is not None:
-                self._execute_standalone_action(action_name, repo_name)
+                self._execute_standalone_action(action_name, repo_name, originating_scope)
 
     @work(thread=True)
-    def _execute_workspace_action(self, action_name: str) -> None:
+    def _execute_workspace_action(self, action_name: str, originating_scope: ActionScope) -> None:
         ctx = WorkspaceContext(workspace=self._workspace, suspend=self.app.suspend)
-        for action in self._plugin_registry.actions_for_scope(ActionScope.workspace):
+        inv = ActionInvocation(scope=originating_scope, context=ctx)
+        for action in self._plugin_registry.actions_for_scope(originating_scope):
             if action.name == action_name:
-                action.handler(ctx)
+                action.handler(inv)
                 return
 
     @work(thread=True)
-    def _execute_environment_action(self, action_name: str, wt_name: str) -> None:
+    def _execute_environment_action(self, action_name: str, wt_name: str, originating_scope: ActionScope) -> None:
         env_worktrees = self._env_worktrees.get(wt_name)
         if env_worktrees is None:
             return
         ctx = FeatureEnvironmentContext(environment=env_worktrees.environment, suspend=self.app.suspend)
-        for action in self._plugin_registry.actions_for_scope(ActionScope.feature_environment):
+        inv = ActionInvocation(scope=originating_scope, context=ctx)
+        for action in self._plugin_registry.actions_for_scope(originating_scope):
             if action.name == action_name:
-                action.handler(ctx)
+                action.handler(inv)
                 return
 
     @work(thread=True)
-    def _execute_worktree_action(self, action_name: str, wt_name: str, repo_name: str) -> None:
+    def _execute_worktree_action(
+        self, action_name: str, wt_name: str, repo_name: str, originating_scope: ActionScope
+    ) -> None:
         env_worktrees = self._env_worktrees.get(wt_name)
         if env_worktrees is None:
             return
@@ -332,18 +374,20 @@ class WorkspaceScreen(KeybindingMixin, PluginActionMixin, Screen):
         if wt is None:
             return
         ctx = FeatureWorktreeContext(worktree=wt, suspend=self.app.suspend)
-        for action in self._plugin_registry.actions_for_scope(ActionScope.feature_worktree):
+        inv = ActionInvocation(scope=originating_scope, context=ctx)
+        for action in self._plugin_registry.actions_for_scope(originating_scope):
             if action.name == action_name:
-                action.handler(ctx)
+                action.handler(inv)
                 return
 
     @work(thread=True)
-    def _execute_standalone_action(self, action_name: str, repo_name: str) -> None:
+    def _execute_standalone_action(self, action_name: str, repo_name: str, originating_scope: ActionScope) -> None:
         repo = self._repo_factory.find_standalone(repo_name)
         if repo is None:
             return
         ctx = StandaloneRepoContext(repo=repo, suspend=self.app.suspend)
-        for action in self._plugin_registry.actions_for_scope(ActionScope.standalone_repository):
+        inv = ActionInvocation(scope=originating_scope, context=ctx)
+        for action in self._plugin_registry.actions_for_scope(originating_scope):
             if action.name == action_name:
-                action.handler(ctx)
+                action.handler(inv)
                 return
