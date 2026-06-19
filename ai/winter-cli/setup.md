@@ -93,6 +93,19 @@ The overlay uses the same schema as the shared config. Keys in the overlay overr
 
 **Index reservation:** index 0 (`base_port`..`base_port+ports_per_env-1`) is reserved for a future single-slot "local" environment — a pre-seeded shared dataset/area distinct in purpose from the regular alias and hash-band slots. It is never assigned. The slot immediately after the aliases (`N+1`, default index 11 with the 10-alias default) is reserved as a buffer between the fixed alias band and the hash band; this is why the invariant requires `envs_per_workspace >= len(env_aliases) + 2` (not `+1`).
 
+### Dashboard layout
+
+The `winter dashboard` TUI can render the feature-worktrees grid in four orientations. Set the default in a `[tui.dashboard]` table; the `config.local.toml` overlay applies per-machine, merging key-by-key.
+
+```toml
+[tui.dashboard]
+layout = "auto"   # auto | repos-as-columns | repos-as-rows | list
+```
+
+Accepted values: `auto` (default), `repos-as-columns`, `repos-as-rows`, `list`. See [the dashboard Layouts reference](./usage/dashboard.md#layouts) for what each layout does and how `auto` resolves.
+
+An unknown `layout` value is a config error at startup. The `t` key cycles layouts live for the current session (overriding the configured default); see [usage/dashboard.md#layouts](./usage/dashboard.md#layouts).
+
 ### Keybindings
 
 The `winter dashboard` TUI binds each action to a configurable key. Override the defaults in a `[keybindings]` table; the `config.local.toml` overlay applies per-machine, merging key-by-key.

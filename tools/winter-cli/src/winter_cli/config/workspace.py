@@ -5,6 +5,8 @@ from pathlib import Path
 from winter_cli.config.models import (
     _DEFAULT_ENV_ALIASES,
     AdoptExtensions,
+    DashboardConfig,
+    DashboardLayout,
     GitIdentity,
     KeybindingsConfig,
     ProjectRepositoryConfig,
@@ -125,6 +127,7 @@ class WorkspaceConfigService:
         )
 
         keybindings = self._parse_keybindings(merged.get("keybindings"))
+        dashboard = self._parse_dashboard(merged.get("tui"))
 
         caps_raw = merged.get("capabilities")
         capabilities = (
@@ -180,6 +183,7 @@ class WorkspaceConfigService:
             doctor=merged.get("doctor") if isinstance(merged.get("doctor"), str) else None,
             lint=_coerce_str_list(merged.get("lint")),
             keybindings=keybindings,
+            dashboard=dashboard,
             base_port=base_port,
             ports_per_env=ports_per_env,
             env_aliases=env_aliases,
@@ -205,6 +209,29 @@ class WorkspaceConfigService:
         if isinstance(raw.get("timeoutlen"), int) and not isinstance(raw.get("timeoutlen"), bool):
             kwargs["timeoutlen"] = raw["timeoutlen"]
         return KeybindingsConfig(**kwargs)
+
+    @staticmethod
+    def _parse_dashboard(tui_raw: object) -> DashboardConfig:
+        """Build a DashboardConfig from the `[tui.dashboard]` sub-table.
+
+        Reads the nested `[tui.dashboard]` table: first the `[tui]` table, then
+        its `dashboard` sub-table. An unknown or invalid `layout` value raises
+        ConfigError listing the valid choices.
+        """
+        if not isinstance(tui_raw, dict):
+            return DashboardConfig()
+        dashboard_raw = tui_raw.get("dashboard")
+        if not isinstance(dashboard_raw, dict):
+            return DashboardConfig()
+        layout_value = dashboard_raw.get("layout", "auto")
+        try:
+            layout = DashboardLayout(layout_value)
+        except ValueError as exc:
+            valid = ", ".join(repr(m.value) for m in DashboardLayout)
+            raise ConfigError(
+                f"Invalid tui.dashboard.layout value: {layout_value!r}. Must be one of: {valid}."
+            ) from exc
+        return DashboardConfig(layout=layout)
 
     def _read_config(self, path: Path) -> dict:
         if not self._fs.is_file(path):

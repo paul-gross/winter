@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import FakeFilesystem
-from winter_cli.config.models import _DEFAULT_ENV_ALIASES, AdoptExtensions, SingletonType
+from winter_cli.config.models import _DEFAULT_ENV_ALIASES, AdoptExtensions, DashboardLayout, SingletonType
 from winter_cli.config.workspace import (
     CONFIG_FILE,
     LOCAL_CONFIG_FILE,
@@ -486,3 +486,72 @@ def test_port_base_for_index_default_config_beta() -> None:
     # Default: base_port=4000, ports_per_env=20
     # beta has index 2 in the default env_aliases list
     assert config.port_base_for_index(2) == 4000 + 2 * 20
+
+
+# ── dashboard layout config ───────────────────────────────────────────────────
+
+
+def test_dashboard_layout_default_when_absent() -> None:
+    """No [tui.dashboard] table → dashboard.layout defaults to DashboardLayout.auto."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(fs, {config_path: {}})
+
+    assert svc.load().dashboard.layout == DashboardLayout.auto
+
+
+def test_dashboard_layout_explicit_auto() -> None:
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(fs, {config_path: {"tui": {"dashboard": {"layout": "auto"}}}})
+
+    assert svc.load().dashboard.layout == DashboardLayout.auto
+
+
+def test_dashboard_layout_repos_as_columns() -> None:
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(fs, {config_path: {"tui": {"dashboard": {"layout": "repos-as-columns"}}}})
+
+    assert svc.load().dashboard.layout == DashboardLayout.repos_as_columns
+
+
+def test_dashboard_layout_repos_as_rows() -> None:
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(fs, {config_path: {"tui": {"dashboard": {"layout": "repos-as-rows"}}}})
+
+    assert svc.load().dashboard.layout == DashboardLayout.repos_as_rows
+
+
+def test_dashboard_layout_list() -> None:
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(fs, {config_path: {"tui": {"dashboard": {"layout": "list"}}}})
+
+    assert svc.load().dashboard.layout == DashboardLayout.list
+
+
+def test_dashboard_layout_invalid_raises_config_error() -> None:
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(fs, {config_path: {"tui": {"dashboard": {"layout": "grid"}}}})
+
+    with pytest.raises(ConfigError, match=r"tui\.dashboard\.layout"):
+        svc.load()
+
+
+def test_dashboard_layout_overlay_overrides_base() -> None:
+    """config.local.toml overlay overrides [tui.dashboard] from the base config."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    local_path = WORKSPACE_ROOT / WINTER_DIR / LOCAL_CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: "", local_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {"tui": {"dashboard": {"layout": "repos-as-rows"}}},
+            local_path: {"tui": {"dashboard": {"layout": "list"}}},
+        },
+    )
+
+    assert svc.load().dashboard.layout == DashboardLayout.list

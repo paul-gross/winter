@@ -53,6 +53,7 @@ class ActionBinding:
 WORKSPACE_ACTIONS: tuple[ActionBinding, ...] = (
     ActionBinding("workspace.refresh", "r", "refresh", "Refresh"),
     ActionBinding("workspace.open_log", "L", "open_log", "Log"),
+    ActionBinding("workspace.cycle_layout", "t", "cycle_layout", "Cycle layout"),
     ActionBinding("app.quit", "q", "app.quit", "Quit"),
     # Lives on the workspace screen (the grid's row → detail drill-in) but keeps
     # the issue's `worktree.open_detail` id since it opens a worktree's detail.

@@ -8,6 +8,7 @@ from textual.containers import Center, Horizontal, Middle
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, LoadingIndicator, Static
 
+from winter_cli.config.models import DashboardLayout
 from winter_cli.modules.tui.error_log import ErrorLogService
 from winter_cli.modules.tui.keybindings import (
     KeybindingMixin,
@@ -57,6 +58,7 @@ class WorkspaceScreen(KeybindingMixin, PluginActionMixin, Screen):
         plugin_registry: PluginRegistry,
         error_log: ErrorLogService,
         keybinding_resolver: KeybindingResolver,
+        dashboard_layout: DashboardLayout = DashboardLayout.auto,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -66,6 +68,7 @@ class WorkspaceScreen(KeybindingMixin, PluginActionMixin, Screen):
         self._plugin_registry = plugin_registry
         self._error_log = error_log
         self._keybinding_resolver = keybinding_resolver
+        self._dashboard_layout = dashboard_layout
         self._env_worktrees: dict[str, FeatureEnvironmentWorktrees] = {}
 
     def compose(self):
@@ -78,7 +81,7 @@ class WorkspaceScreen(KeybindingMixin, PluginActionMixin, Screen):
         yield Static("[bold]Standalone Repositories[/bold]", id="singletons-label")
         yield StandaloneReposTable(id="singletons")
         yield Static("[bold]Feature Repositories[/bold]", id="grid-label")
-        yield FeatureWorktreesGrid(id="grid")
+        yield FeatureWorktreesGrid(layout=self._dashboard_layout, id="grid")
         with Horizontal(id="status-bar"):
             yield Static(
                 "[green]+N[/green] [dim]ahead of main[/dim]  "
@@ -207,6 +210,8 @@ class WorkspaceScreen(KeybindingMixin, PluginActionMixin, Screen):
         grid.set_reactive(FeatureWorktreesGrid.main_statuses, main_statuses if main_statuses is not None else {})
         grid.statuses = overviews
 
+        self._update_grid_label(grid)
+
         panel = self.query_one("#services", ServicePanel)
         panel.statuses = [o.status for o in overviews]
 
@@ -214,6 +219,16 @@ class WorkspaceScreen(KeybindingMixin, PluginActionMixin, Screen):
 
     def action_refresh(self) -> None:
         self._refresh_data()
+
+    def _update_grid_label(self, grid: FeatureWorktreesGrid) -> None:
+        self.query_one("#grid-label", Static).update(
+            f"[bold]Feature Repositories — {grid.active_layout_label()}[/bold]"
+        )
+
+    def action_cycle_layout(self) -> None:
+        grid = self.query_one("#grid", FeatureWorktreesGrid)
+        grid.cycle_layout()
+        self._update_grid_label(grid)
 
     def action_jump_prev(self) -> None:
         chain = self.focus_chain

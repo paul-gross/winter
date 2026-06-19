@@ -28,6 +28,22 @@ class AdoptExtensions(enum.Enum):
     """Symlink skills/agents from any standalone repo, with or without winter-ext.toml."""
 
 
+class DashboardLayout(enum.Enum):
+    auto = "auto"
+    """Default. 1 repo → list; repos > envs → repos-as-rows; else → repos-as-columns."""
+
+    repos_as_columns = "repos-as-columns"
+    """Transpose of repos-as-rows: envs are rows, repos are columns."""
+
+    repos_as_rows = "repos-as-rows"
+    """Repos are rows, envs are columns (current behavior)."""
+
+    list = "list"
+    """One row per (env, repo) with columns env/project/remote/git-status/service-status;
+    multi-repo groups under each env elide env/service on repeat rows (both env-scoped),
+    while remote is per-repo (each worktree's own upstream) and shows on every row."""
+
+
 class GitIdentity(BaseModel):
     """Git author identity applied to every repo winter-cli manages."""
 
@@ -117,6 +133,22 @@ class StandaloneRepositoryConfig(BaseModel):
 
     cmd: list[str] = Field(default_factory=list)
     """Shell commands run idempotently after clone."""
+
+
+class DashboardConfig(BaseModel):
+    """Dashboard layout configuration from the `[tui.dashboard]` config table.
+
+    Controls how repos and envs are arranged in the dashboard grid:
+    - `auto` (default): 1 repo → list; repos > envs → repos-as-rows; else → repos-as-columns.
+    - `repos-as-rows`: repos are rows, envs are columns (current behavior).
+    - `repos-as-columns`: transpose — envs are rows, repos are columns.
+    - `list`: one row per (env, repo) with columns env/project/remote/git-status/service-status;
+      multi-repo groups under each env elide env/service on repeat rows (both env-scoped),
+      while remote is per-repo (each worktree's own upstream) and shows on every row.
+    """
+
+    layout: DashboardLayout = DashboardLayout.auto
+    """Grid layout mode for the dashboard."""
 
 
 class KeybindingsConfig(BaseModel):
@@ -233,6 +265,9 @@ class WorkspaceConfig(BaseModel):
 
     keybindings: KeybindingsConfig = Field(default_factory=KeybindingsConfig)
     """Dashboard keybinding overrides from the `[keybindings]` table."""
+
+    dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+    """Dashboard layout configuration from the `[tui.dashboard]` table."""
 
     def port_base_for_index(self, index: int) -> int:
         """Return the per-env port base for the given env index.

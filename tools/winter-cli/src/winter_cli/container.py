@@ -635,6 +635,7 @@ class Container(containers.DeclarativeContainer):
         plugin_registry=plugin_registry,
         error_log=error_log_svc,
         keybinding_resolver=keybinding_resolver,
+        dashboard_layout=workspace_config.provided.dashboard.layout,
     )
 
     worktree_detail_screen = providers.Factory(
