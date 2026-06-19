@@ -18,10 +18,11 @@ The `winter` command is a workspace-level tool for managing worktrees and reposi
 
 ## What the CLI can do
 
-The surface is two command groups plus six standalone commands:
+The surface is two command groups plus seven standalone commands:
 
 - **`winter ws …`** — reconcile the workspace or a feature env against the config (`init`), inspect state (`status`, `list`, `worktrees`, `diff`, `index`), move commits between remotes and worktrees (`fetch`, `pull`, `push`, `merge`), and manage env lifecycle (`connect`, `disconnect`, `checkout`, `destroy`, `prune`).
 - **`winter repo …`** — add, remove, and list the repositories declared in the config.
+- **`winter ext …`** — extension contract management: `verify` checks that an extension conforms to the bundled capability spec; `new` scaffolds a new extension skeleton that passes verification out of the box (see [usage/ext.md](./usage/ext.md)).
 - **`winter dashboard`** — interactive TUI for workspace status, with remappable keybindings.
 - **`winter service <action> [<env>/<service>…]`** — a stable `up`/`down`/`status`/`restart`/`logs` interface that dispatches to whichever orchestrator extension the workspace registers. `up`/`down` take a single `<env>`; `status`/`restart`/`logs` take `<env>/<service>` PATTERNS (see [usage/service.md](./usage/service.md)).
 - **`winter doctor`** — preflight health checks.
@@ -35,7 +36,7 @@ Most flows are multi-repo: a single `winter ws` invocation fans out over every m
 
 | Topic | Read when… |
 |-------|------------|
-| [Command reference](./usage/index.md) | …you need to run any `winter` command — the per-topic routing index for `ws`, `repo`, `dashboard`, `service`, `doctor`, `lint`, `graph`, and `capabilities`. |
+| [Command reference](./usage/index.md) | …you need to run any `winter` command — the per-topic routing index for `ws`, `repo`, `ext`, `dashboard`, `service`, `doctor`, `lint`, `graph`, and `capabilities`. |
 | [Common workflows](./workflows.md) | …you want a ready-made command sequence for a routine multi-step operation — bootstrap, start a feature, merge main, push, tear down. |
 | [Resilience & drift](./resilience.md) | …you hit a flaky-network retry, a hung remote git call, or a config↔filesystem drift warning, and want the cross-cutting behavior behind it. |
 | [Install & configure](./setup.md) | …you're installing winter or editing `.winter/config.toml` — schema, local overlay, and extensions. |

@@ -70,6 +70,74 @@ class ServiceOrchestratorResolver:
         resolved = self._registry.resolve(CapabilitySlot.service)
         return ResolvedOrchestrator(entrypoint=resolved.entrypoint, ext_dir=resolved.ext_dir, prefix=resolved.prefix)
 
+    def try_resolve_extension(self, extension: str) -> ResolvedOrchestrator | str:
+        """Non-raising resolution for a bare extension path or name.
+
+        Accepts a local path or an installed-extension name (same path-vs-name
+        semantics as the `--service-orchestrator` override), bypassing the
+        registry entirely. Returns `ResolvedOrchestrator` on success, or an
+        error string describing the setup failure.
+
+        Used by `ConformanceVerifyService` so orchestrator resolution logic is
+        not duplicated there.
+        """
+        if self._is_path(extension):
+            return self._try_resolve_path(extension)
+        return self._try_resolve_name(extension)
+
+    def _try_resolve_path(self, value: str) -> ResolvedOrchestrator | str:
+        """Path mode: resolve a local extension directory, returning errors as strings."""
+        ext_dir = Path(value)
+        if not ext_dir.is_absolute():
+            base = self._workspace_root if self._workspace_root is not None else Path.cwd()
+            ext_dir = base / ext_dir
+        ext_dir = ext_dir.resolve()
+
+        if not self._fs.is_dir(ext_dir):
+            return self._verify_error_path_not_found(value, ext_dir)
+
+        manifest_path = ext_dir / EXT_MANIFEST
+        if not self._fs.is_file(manifest_path):
+            return self._verify_error_no_manifest(value, manifest_path)
+
+        synthetic_repo = StandaloneRepository(name=ext_dir.name, path=ext_dir)
+        try:
+            manifest = self._manifest_loader.load(synthetic_repo, manifest_path)
+        except Exception as exc:
+            return f"could not load manifest at {manifest_path}: {exc}"
+
+        entrypoint_rel = manifest.capability_entrypoint("service")
+        if not entrypoint_rel:
+            return self._verify_error_no_entrypoint(value, manifest_path)
+
+        entrypoint = ext_dir / entrypoint_rel
+        if not self._fs.is_file(entrypoint):
+            return self._verify_error_entrypoint_missing(value, entrypoint, entrypoint_rel, manifest_path)
+
+        return ResolvedOrchestrator(entrypoint=entrypoint, ext_dir=ext_dir, prefix=manifest.prefix)
+
+    def _try_resolve_name(self, name: str) -> ResolvedOrchestrator | str:
+        """Name mode: look up a registered installed extension, returning errors as strings."""
+        repo = self._find_extension(name)
+        if repo is None:
+            return self._verify_error_name_not_installed(name)
+
+        manifest_path = repo.path / EXT_MANIFEST
+        try:
+            manifest = self._manifest_loader.load(repo, manifest_path)
+        except Exception as exc:
+            return f"could not load manifest at {manifest_path}: {exc}"
+
+        entrypoint_rel = manifest.capability_entrypoint("service")
+        if not entrypoint_rel:
+            return self._verify_error_no_entrypoint(name, manifest_path)
+
+        entrypoint = repo.path / entrypoint_rel
+        if not self._fs.is_file(entrypoint):
+            return self._verify_error_entrypoint_missing(name, entrypoint, entrypoint_rel, manifest_path)
+
+        return ResolvedOrchestrator(entrypoint=entrypoint, ext_dir=repo.path, prefix=manifest.prefix)
+
     def _is_path(self, value: str) -> bool:
         """Return True when `value` should be treated as a local extension path.
 
@@ -158,3 +226,35 @@ class ServiceOrchestratorResolver:
             if repo.name == name:
                 return repo
         return None
+
+    # Verify-mode error message templates — used by `try_resolve_extension` to
+    # surface setup failures with user-readable messages that match the messages
+    # produced when `ConformanceVerifyService` used its own private resolution copy.
+    @staticmethod
+    def _verify_error_path_not_found(value: str, ext_dir: Path) -> str:
+        return f"extension path {value!r} not found — {ext_dir} is not a directory"
+
+    @staticmethod
+    def _verify_error_no_manifest(value: str, manifest_path: Path) -> str:
+        return f"extension path {value!r} has no {EXT_MANIFEST} — expected at {manifest_path}"
+
+    @staticmethod
+    def _verify_error_no_entrypoint(value: str, manifest_path: Path) -> str:
+        return (
+            f"extension {value!r} declares no service entrypoint — "
+            f'add `orchestrate_services = "<path>"` or `[provides] service = "<path>"` to {manifest_path}'
+        )
+
+    @staticmethod
+    def _verify_error_entrypoint_missing(value: str, entrypoint: Path, entrypoint_rel: str, manifest_path: Path) -> str:
+        return (
+            f"extension {value!r} entrypoint not found at {entrypoint} "
+            f'(declared as {entrypoint_rel!r} in {manifest_path})'
+        )
+
+    @staticmethod
+    def _verify_error_name_not_installed(name: str) -> str:
+        return (
+            f"extension {name!r} is not an installed extension — "
+            "it must match the name of a [[standalone_repository]] in .winter/config.toml"
+        )

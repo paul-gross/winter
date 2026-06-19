@@ -14,5 +14,6 @@ Every `winter` command group and usage topic, one file each. Read this index, th
 | [Lint](./lint.md) | …you need to check the workspace against its documented conventions, or wire up a new lint check. |
 | [Graph](./graph.md) | …you need the module dependency graph, or to consume it as JSON from a lint check. |
 | [Capabilities](./capabilities.md) | …you need to see which extension provides each capability slot (service, …), or consume the binding map as JSON. |
+| [Extension management](./ext.md) | …you need to verify that an extension conforms to a capability spec, or scaffold a new extension skeleton (`winter ext verify`, `winter ext new`). |
 
 Each topic lives in its own file here under `usage/`; a command group with many sub-commands gets its own subdirectory with a hub (`ws/` is the worked example). Keep this routing table in sync when adding one.

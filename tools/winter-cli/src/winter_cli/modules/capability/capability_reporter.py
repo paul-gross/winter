@@ -43,6 +43,10 @@ class StreamCapabilityReporter:
                 bound = resolution.bound_extension
                 self._click.echo(f"{slot_name} → {bound} (invalid)  — {resolution.error}")
 
+            elif kind == "incompatible":
+                bound = resolution.bound_extension
+                self._click.echo(f"{slot_name} → {bound} (incompatible)  — {resolution.error}")
+
             else:
                 # unbound
                 if resolution.is_ambiguous:

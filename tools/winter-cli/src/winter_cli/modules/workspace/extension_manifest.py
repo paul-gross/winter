@@ -79,6 +79,12 @@ class ExtensionManifest:
     module name (the `<context>` half of a `<context>:/path` reference, e.g.
     `winter-product`). It is the data the `winter graph` command aggregates and
     the extractability lint check validates references against. Empty by default.
+
+    `implements` maps capability slot names to the spec version string this
+    extension implements (e.g. `{"service": "v1"}`). Declared via `[implements]`
+    in `winter-ext.toml`. Absent or empty means the extension predates the field
+    and is treated as compatible (opt-in / lenient-when-absent). Use
+    `implemented_version(slot)` to look up the version for a specific slot.
     """
 
     prefix: str
@@ -90,6 +96,7 @@ class ExtensionManifest:
     orchestrate_services: str | None = None
     requires: tuple[str, ...] = ()
     provides: dict[str, str] = field(default_factory=dict)
+    implements: dict[str, str] = field(default_factory=dict)
 
     def capability_entrypoint(self, slot: str) -> str | None:
         """Resolve the entrypoint for a capability slot.
@@ -103,6 +110,15 @@ class ExtensionManifest:
         if slot == "service":
             return self.orchestrate_services
         return None
+
+    def implemented_version(self, slot: str) -> str | None:
+        """Return the spec version this extension declares it implements for `slot`.
+
+        Returns None when `[implements]` is absent or the slot is not listed —
+        indicating the extension predates the `implements` field; treated as
+        compatible by the version-compat check.
+        """
+        return self.implements.get(slot)
 
 
 class ExtensionManifestLoader:
@@ -161,6 +177,13 @@ class ExtensionManifestLoader:
             else {}
         )
 
+        implements_raw = data.get("implements")
+        implements = (
+            {k: str(v) for k, v in implements_raw.items() if isinstance(k, str) and isinstance(v, str) and v}
+            if isinstance(implements_raw, dict)
+            else {}
+        )
+
         return ExtensionManifest(
             prefix=prefix,
             skills_dirs=skills_dirs,
@@ -171,4 +194,5 @@ class ExtensionManifestLoader:
             orchestrate_services=orchestrate_services,
             requires=requires,
             provides=provides,
+            implements=implements,
         )

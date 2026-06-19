@@ -19,7 +19,7 @@ class CapabilitySlot(enum.Enum):
     service = "service"
 
 
-BindingKind = Literal["explicit", "implicit", "unbound", "invalid"]
+BindingKind = Literal["explicit", "implicit", "unbound", "invalid", "incompatible"]
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,8 @@ class CapabilityCandidate:
     `ext_dir` is the extension's on-disk root directory.
     `prefix` is the resolved symlink prefix for this extension.
     `entrypoint_valid` is True when `entrypoint_path` names an existing file on disk.
+    `implemented_version` is the spec version declared in `[implements]` for this slot,
+        or None when the extension predates the `implements` field (treated as compatible).
     """
 
     extension_name: str
@@ -40,6 +42,7 @@ class CapabilityCandidate:
     ext_dir: Path
     prefix: str
     entrypoint_valid: bool
+    implemented_version: str | None = None
 
 
 @dataclass(frozen=True)

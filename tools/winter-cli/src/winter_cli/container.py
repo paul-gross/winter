@@ -401,12 +401,22 @@ class Container(containers.DeclarativeContainer):
         reporter_factory=reporter_factory,
     )
 
+    # ── capability spec loader: machine-readable contracts (cold path) ──────
+    # Declared here (before capability_registry_svc) so the registry can
+    # reference it. The service is cold-path only (capabilities / ext verify).
+
+    spec_loader = providers.Singleton(
+        _lazy("winter_cli.modules.capability.spec_loader:SpecLoader"),
+        config_file_reader=config_file_reader,
+    )
+
     capability_registry_svc = providers.Factory(
         _lazy("winter_cli.modules.capability.capability_registry_service:CapabilityRegistryService"),
         repo_factory=repo_factory,
         manifest_loader=extension_manifest_loader,
         bindings=workspace_config.provided.capabilities,
         fs=fs,
+        spec_loader=spec_loader,
     )
 
     core_probe_svc = providers.Factory(
@@ -626,6 +636,45 @@ class Container(containers.DeclarativeContainer):
         scope_resolver=lint_scope_resolver,
         stream_reporter=stream_lint_reporter,
         json_reporter=json_lint_reporter,
+    )
+
+    # ── ext: extension verification (cold path) ─────────────────────────────
+
+    ext_verify_svc = providers.Factory(
+        _lazy("winter_cli.modules.ext.verify_service:ConformanceVerifyService"),
+        subprocess_runner=subprocess_runner,
+        orchestrator_resolver=service_orchestrator_resolver,
+        spec_loader=spec_loader,
+        workspace_root=workspace_config.provided.workspace_root,
+    )
+
+    stream_verify_reporter = providers.Factory(
+        _lazy("winter_cli.modules.ext.verify_reporter:StreamVerifyReporter"),
+        click=providers.Object(click),
+    )
+
+    json_verify_reporter = providers.Factory(
+        _lazy("winter_cli.modules.ext.verify_reporter:JsonVerifyReporter"),
+        click=providers.Object(click),
+    )
+
+    ext_verify_handler = providers.Factory(
+        _lazy("winter_cli.modules.ext.handler:ExtVerifyHandler"),
+        verify_service=ext_verify_svc,
+        stream_reporter=stream_verify_reporter,
+        json_reporter=json_verify_reporter,
+    )
+
+    ext_scaffold_svc = providers.Factory(
+        _lazy("winter_cli.modules.ext.scaffold_service:ExtScaffoldService"),
+        spec_loader=spec_loader,
+        fs=fs,
+    )
+
+    ext_new_handler = providers.Factory(
+        _lazy("winter_cli.modules.ext.handler:ExtNewHandler"),
+        scaffold_service=ext_scaffold_svc,
+        click=providers.Object(click),
     )
 
     # Session-scoped log buffer for RepoErrors captured during dashboard

@@ -1,0 +1,97 @@
+slot    = "service"
+version = "v1"
+title   = "Service orchestration"
+
+# Always-present environment variables set by winter on every dispatch,
+# regardless of action. Source of truth: service_dispatch_service.py.
+[[env_var]]
+name        = "WINTER_WORKSPACE_DIR"
+description = "Absolute path to the workspace root."
+
+[[env_var]]
+name        = "WINTER_EXT_DIR"
+description = "Absolute path to this orchestrator extension's clone (the dir containing winter-ext.toml)."
+
+[[env_var]]
+name        = "WINTER_EXT_PREFIX"
+description = "The resolved symlink prefix for this extension."
+
+# Exit-code conventions for the service capability.
+[[exit_code]]
+code    = 0
+meaning = "Success."
+
+[[exit_code]]
+code    = 2
+meaning = "Unknown or unsupported action — the orchestrator does not recognise the action word."
+
+[[exit_code]]
+code    = 3
+meaning = "Recognized-but-unimplemented action — the orchestrator knows the action but refuses to execute it (refuse-all stub)."
+
+# Pass-through: for any other exit code the orchestrator's exit code becomes
+# winter's exit code unmodified.
+
+# Actions the orchestrator entrypoint must implement.
+# Invocation form: <entrypoint> <action> [positionals...]
+#   single-env:       <entrypoint> <action> <env>
+#   patterns-optional: <entrypoint> <action> [<env>/<service>...]
+#   patterns-required: <entrypoint> <action> <env>/<service> [<env>/<service>...]
+
+[[action]]
+name    = "up"
+arity   = "single-env"
+summary = "Start all services in the named feature environment."
+
+[[action]]
+name    = "down"
+arity   = "single-env"
+summary = "Stop all services in the named feature environment."
+
+[[action]]
+name    = "status"
+arity   = "patterns-optional"
+summary = "Report the running state of matched services (defaults to all envs/services)."
+
+[[action]]
+name    = "restart"
+arity   = "patterns-required"
+summary = "Restart one or more matched services without bringing down unmatched ones."
+
+[[action]]
+name    = "logs"
+arity   = "patterns-required"
+summary = "Stream or emit the log backlog for matched services as NDJSON on stdout."
+
+[[action.env_var]]
+name        = "WINTER_LOG_FOLLOW"
+description = "1 = stream live until Ctrl-C; 0 = emit backlog and exit."
+
+[[action.env_var]]
+name        = "WINTER_LOG_TAIL"
+description = "Positive integer or 'all'. The orchestrator SHOULD honour this; winter applies a backstop."
+
+[[action.env_var]]
+name        = "WINTER_LOG_SINCE"
+description = "RFC3339 absolute timestamp (pre-normalised from any duration); empty string if not set."
+
+[[action.env_var]]
+name        = "WINTER_LOG_UNTIL"
+description = "RFC3339 absolute timestamp; empty string if not set."
+
+[[action.env_var]]
+name        = "WINTER_LOG_TIMESTAMPS"
+description = "1 = per-line timestamps requested; 0 = not requested."
+
+# Conformance checks. These drive winter ext verify (phase 2).
+[[check]]
+kind        = "accepts-action"
+description = "The entrypoint exits with any code other than 2 for each declared action word (exit 2 = unknown-action signal; exit 0 or exit 3 pass)."
+
+[[check]]
+kind        = "refuses-unknown"
+description = "The entrypoint exits non-zero for an action word not in the declared action set (exit 2 or exit 3 are both accepted)."
+
+[[check]]
+kind        = "forwards-params"
+description = "The entrypoint echoes its argv back on stdout or stderr (confirming argv is forwarded). WINTER_* env vars are set on every dispatch but are not asserted by this check."

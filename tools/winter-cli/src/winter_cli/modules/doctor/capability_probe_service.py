@@ -50,6 +50,21 @@ class CapabilityProbeService:
                     )
                 )
 
+            elif binding_kind == "incompatible":
+                results.append(
+                    ProbeResult(
+                        source=CAPABILITY_SOURCE,
+                        name=probe_name,
+                        status=ProbeStatus.fail,
+                        message=res.error or "version incompatible",
+                        remediation=(
+                            f"Upgrade winter to support the version declared in the extension's"
+                            f" [implements] table, or pin the extension to a version compatible"
+                            f" with this winter's supported {slot_name} spec versions."
+                        ),
+                    )
+                )
+
             elif binding_kind == "implicit":
                 candidate = res.candidates[0]
                 if not candidate.entrypoint_valid:

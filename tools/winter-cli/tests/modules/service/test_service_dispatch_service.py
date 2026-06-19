@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import FakeConfigFileReader, FakeFilesystem, FakeSubprocessRunner
+from tests.conftest import FakeConfigFileReader, FakeFilesystem, FakeSpecLoader, FakeSubprocessRunner
 from winter_cli.modules.capability.capability_registry_service import CapabilityRegistryService
 from winter_cli.modules.service.orchestrator_resolver import ServiceOrchestratorResolver
 from winter_cli.modules.service.service_dispatch_service import ServiceDispatchService
@@ -38,6 +38,7 @@ def _resolver(
         manifest_loader=loader,
         bindings=bindings,
         fs=fs,
+        spec_loader=FakeSpecLoader(),
     )
     return ServiceOrchestratorResolver(
         registry=registry,

@@ -12,6 +12,46 @@ from winter_cli.modules.service.models import LogOptions, parse_since_until
 from winter_cli.modules.service.status_models import StatusOptions
 
 
+def _load_spec_action_summaries() -> dict[str, str]:
+    """Return {action_name: summary} derived from the bundled service-v1 spec.
+
+    Called once at module import.  Loading the bundled TOML is fast (no network,
+    no workspace discovery) and acceptable on this cold help-render path.
+    Falls back to an empty dict if the spec cannot be loaded for any reason so
+    the command structure remains usable even in degraded environments.
+    """
+    try:
+        from winter_cli.core.internal.tomllib_config_file_reader import TomllibConfigFileReader
+        from winter_cli.modules.capability.spec_loader import SpecLoader
+
+        loader = SpecLoader(config_file_reader=TomllibConfigFileReader())
+        spec = loader.load("service", "v1")
+        return {action.name: action.summary for action in spec.actions}
+    except Exception:
+        return {}
+
+
+_SPEC_SUMMARIES: dict[str, str] = _load_spec_action_summaries()
+
+# Per-action short_help strings sourced from the spec.  The fallback literal
+# mirrors what the spec says; it is only reached if the bundled TOML is absent
+# (which should never happen in a normal install).
+_HELP_UP = _SPEC_SUMMARIES.get("up", "Start all services in the named feature environment.")
+_HELP_DOWN = _SPEC_SUMMARIES.get("down", "Stop all services in the named feature environment.")
+_HELP_STATUS = _SPEC_SUMMARIES.get(
+    "status",
+    "Report the running state of matched services (defaults to all envs/services).",
+)
+_HELP_RESTART = _SPEC_SUMMARIES.get(
+    "restart",
+    "Restart one or more matched services without bringing down unmatched ones.",
+)
+_HELP_LOGS = _SPEC_SUMMARIES.get(
+    "logs",
+    "Stream or emit the log backlog for matched services as NDJSON on stdout.",
+)
+
+
 def _service_handler(ctx: click.Context):
     """Resolve a ServiceHandler, injecting any active orchestrator override first.
 
@@ -46,7 +86,7 @@ def service_group() -> None:
     """
 
 
-@service_group.command("up", short_help="Start env services.")
+@service_group.command("up", short_help=_HELP_UP)
 @click.argument("env")
 @click.pass_context
 def up_cmd(ctx: click.Context, env: str) -> None:
@@ -55,7 +95,7 @@ def up_cmd(ctx: click.Context, env: str) -> None:
     handler.run(ServiceParams(action="up", env=env))
 
 
-@service_group.command("down", short_help="Stop env services.")
+@service_group.command("down", short_help=_HELP_DOWN)
 @click.argument("env")
 @click.pass_context
 def down_cmd(ctx: click.Context, env: str) -> None:
@@ -64,7 +104,7 @@ def down_cmd(ctx: click.Context, env: str) -> None:
     handler.run(ServiceParams(action="down", env=env))
 
 
-@service_group.command("status", short_help="Report service status.")
+@service_group.command("status", short_help=_HELP_STATUS)
 @click.argument("patterns", nargs=-1)
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit the structured status document as JSON.")
 @click.pass_context
@@ -87,7 +127,7 @@ def status_cmd(ctx: click.Context, patterns: tuple[str, ...], as_json: bool) -> 
     handler.run_status(options)
 
 
-@service_group.command("restart", short_help="Restart matched services.")
+@service_group.command("restart", short_help=_HELP_RESTART)
 @click.argument("patterns", nargs=-1, required=True)
 @click.pass_context
 def restart_cmd(ctx: click.Context, patterns: tuple[str, ...]) -> None:
@@ -120,7 +160,7 @@ def _validate_tail(ctx: click.Context, param: click.Parameter, value: str) -> in
     return n
 
 
-@service_group.command("logs", short_help="Stream service logs.")
+@service_group.command("logs", short_help=_HELP_LOGS)
 @click.argument("patterns", nargs=-1, required=True)
 @click.option("-f", "--follow", is_flag=True, default=False, help="Stream until interrupted.")
 @click.option(

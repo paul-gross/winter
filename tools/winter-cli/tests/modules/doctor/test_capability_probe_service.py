@@ -202,3 +202,29 @@ def test_probe_name_uses_slot_value() -> None:
     results = svc.run()
 
     assert results[0].name == f"slot: {CapabilitySlot.service.value}"
+
+
+# ── incompatible binding → fail with both versions in the message ────────────
+
+
+def test_incompatible_binding_emits_fail_with_version_message() -> None:
+    error_msg = (
+        "capabilities.service provider implements service spec v2, but this winter supports {v1}."
+        " Upgrade winter or pin the extension to a supported version."
+    )
+    res = _resolution(
+        binding_kind="incompatible",
+        bound_extension="winter-service-tmux",
+        candidates=(_candidate("winter-service-tmux"),),
+        error=error_msg,
+    )
+    svc = _svc([res])
+
+    results = svc.run()
+
+    assert len(results) == 1
+    r = results[0]
+    assert r.status == ProbeStatus.fail
+    assert r.message == error_msg
+    assert r.remediation is not None
+    assert "Upgrade winter" in r.remediation or "supported" in r.remediation

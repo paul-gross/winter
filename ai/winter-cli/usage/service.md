@@ -67,6 +67,17 @@ winter service up alpha
 
 ## Orchestrator contract
 
+This section is **validated against** the machine-readable spec at
+`tools/winter-cli/src/winter_cli/modules/capability/specs/service-v1.toml` — that file is the single
+source of truth for the action set, exit codes, and env vars an orchestrator must
+implement.  An orchestrator can self-check its conformance at any time with:
+
+```bash
+winter ext verify <path-to-extension-dir>
+```
+
+See [ext.md](./ext.md) for the full `winter ext verify` reference (check kinds, exit codes, `--json` contract, version compatibility) and `winter ext new` for scaffolding a stub that passes verification out of the box.
+
 This is the full spec a service-orchestrator extension is written against — conform to it without reading winter's source.
 
 ### Uniform invocation rule
@@ -205,7 +216,9 @@ Winter applies these backstops even when the orchestrator has pre-filtered, ensu
 
 ### Exit codes
 
-- Click owns flag-parse errors: exit 2 (before dispatch).
-- The orchestrator's exit code becomes `winter`'s exit code.
+- **0** — success.
+- **2** — unknown or unsupported action (Click owns flag-parse errors at this code too, before dispatch).
+- **3** — recognized-but-unimplemented action: the orchestrator knows the action but refuses to execute it (refuse-all stub). Both 2 and 3 are accepted by `winter ext verify` as valid refusal codes.
+- **Other** — the orchestrator's exit code becomes `winter`'s exit code unmodified.
 - `-f` interrupted by Ctrl-C: exit 130 (and the child receives the signal naturally).
 - **`status` conformance failure:** if the orchestrator's stdout is not a conformant status document, winter exits non-zero even if the orchestrator itself exited 0. The rule: the orchestrator's own non-zero exit code wins; if the orchestrator exited 0, winter synthesises exit code 1. The actionable error is written to stderr.

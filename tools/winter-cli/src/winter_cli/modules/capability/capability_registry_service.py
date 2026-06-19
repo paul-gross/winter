@@ -11,6 +11,8 @@ from winter_cli.modules.capability.models import (
     ResolvedCapability,
     SlotResolution,
 )
+from winter_cli.modules.capability.spec_loader import ISpecLoader
+from winter_cli.modules.capability.version_compat import VersionCompatError, check_compat
 from winter_cli.modules.workspace.extension_manifest import EXT_MANIFEST, ExtensionManifestLoader
 from winter_cli.modules.workspace.models import RepoError
 from winter_cli.modules.workspace.repository_factory import IStandaloneRepoProvider
@@ -37,11 +39,13 @@ class CapabilityRegistryService:
         manifest_loader: ExtensionManifestLoader,
         bindings: dict[str, str],
         fs: IFilesystemReader,
+        spec_loader: ISpecLoader,
     ) -> None:
         self._repo_factory = repo_factory
         self._manifest_loader = manifest_loader
         self._bindings = bindings
         self._fs = fs
+        self._spec_loader = spec_loader
 
     def candidates(self, slot: CapabilitySlot) -> list[CapabilityCandidate]:
         """Return every installed extension that declares it provides `slot`.
@@ -73,6 +77,7 @@ class CapabilityRegistryService:
                     ext_dir=repo.path,
                     prefix=manifest.prefix,
                     entrypoint_valid=self._fs.is_file(entrypoint_path),
+                    implemented_version=manifest.implemented_version(slot.value),
                 )
             )
         return result
@@ -118,8 +123,14 @@ class CapabilityRegistryService:
                         f" at {candidate.entrypoint_path}."
                     )
                 else:
-                    binding_kind = "explicit"
-                    error = None
+                    # Check version compatibility for the bound provider.
+                    compat_error = self._check_version_compat(slot, candidate)
+                    if compat_error is not None:
+                        binding_kind = "incompatible"
+                        error = compat_error
+                    else:
+                        binding_kind = "explicit"
+                        error = None
         else:
             bound_extension = None
             if len(slot_candidates) == 0:
@@ -140,6 +151,15 @@ class CapabilityRegistryService:
             error=error,
         )
 
+    def _check_version_compat(self, slot: CapabilitySlot, candidate: CapabilityCandidate) -> str | None:
+        """Return a compat error message for `candidate`'s `slot` implementation, or None.
+
+        Uses the `implemented_version` already loaded onto the candidate in
+        `candidates()` — no second filesystem walk or manifest load needed.
+        """
+        supported = self._spec_loader.supported_versions(slot.value)
+        return check_compat(slot.value, candidate.implemented_version, supported)
+
     def describe_all(self) -> list[SlotResolution]:
         """Return a `SlotResolution` for every known capability slot."""
         return [self.describe(s) for s in CapabilitySlot]
@@ -158,6 +178,12 @@ class CapabilityRegistryService:
         if resolution.binding_kind == "invalid":
             assert resolution.error is not None
             raise CapabilityBindingError(
+                resolution.error + " Run `winter capabilities` to see all candidates and their binding state."
+            )
+
+        if resolution.binding_kind == "incompatible":
+            assert resolution.error is not None
+            raise VersionCompatError(
                 resolution.error + " Run `winter capabilities` to see all candidates and their binding state."
             )
 

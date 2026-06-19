@@ -20,6 +20,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/winter_cli"]
+# Include non-Python package data: the bundled capability spec TOML files.
+# Hatchling's `packages` setting collects only .py files by default; the
+# `artifacts` list adds extra glob patterns that are included regardless.
+artifacts = [
+    "src/winter_cli/modules/capability/specs/*.toml",
+]
 
 [project.scripts]
 winter = "winter_cli.cli:cli"

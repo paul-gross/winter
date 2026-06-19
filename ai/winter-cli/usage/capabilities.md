@@ -17,6 +17,7 @@ Each slot prints on one line. The format varies by binding kind:
 - **implicit** — `<slot> → <ext> (implicit)  [<entrypoint> ✓/✗]` — sole provider, no explicit config binding.
 - **unbound (ambiguous)** — `<slot> → (unbound — N candidates: <ext1>, <ext2>)` with one indented line per candidate showing its entrypoint and validity.
 - **invalid** — `<slot> → <ext> (invalid)  — <error message>` — the config binding is broken (extension not installed, not providing the slot, or entrypoint missing).
+- **incompatible** — `<slot> → <ext> (incompatible)  — <error message>` — the bound extension declares an `[implements] <slot>` version that this winter does not support. The error message names both the declared version and the supported set. Remediation: upgrade winter to a version that supports the declared spec version, or pin the extension to a version compatible with this winter's supported spec versions.
 - **no provider** — `<slot> → (no provider installed)`.
 
 ## JSON contract
@@ -44,7 +45,7 @@ Field reference:
 |-------|------|---------|
 | `slot` | string | Capability slot name (e.g. `"service"`). |
 | `bound` | string \| null | Extension name from an explicit `capabilities.<slot>` config binding, or `null` when no binding is set. |
-| `binding_kind` | string | One of `"explicit"`, `"implicit"`, `"unbound"`, `"invalid"`. |
+| `binding_kind` | string | One of `"explicit"`, `"implicit"`, `"unbound"`, `"invalid"`, `"incompatible"`. |
 | `ambiguous` | boolean | True when `binding_kind == "unbound"` and there are two or more candidates. |
 | `error` | string \| null | Human-readable error for `binding_kind == "invalid"`; `null` otherwise. |
 | `candidates` | array | Every installed extension declaring `provides.<slot>`. |

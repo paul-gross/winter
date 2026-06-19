@@ -78,6 +78,10 @@ class LocalFilesystem:
     def rmtree(path: Path) -> None:
         shutil.rmtree(path)
 
+    @staticmethod
+    def chmod(path: Path, mode: int) -> None:
+        path.chmod(mode)
+
 
 # Returning IFilesystemWriter pins both seams: IFilesystemReader is a supertype,
 # so a Writer-conforming adapter trivially conforms to Reader too.

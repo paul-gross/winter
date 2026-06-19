@@ -10,6 +10,7 @@ from tests.conftest import (
     ClickRecorder,
     FakeConfigFileReader,
     FakeFilesystem,
+    FakeSpecLoader,
     FakeSubprocessRunner,
 )
 from winter_cli.core.internal.click_cli_output_service import ClickCliOutputService
@@ -74,6 +75,7 @@ def _resolver(runner: FakeSubprocessRunner) -> ServiceOrchestratorResolver:
         manifest_loader=loader,
         bindings={"service": "winter-service-tmux"},
         fs=fs,
+        spec_loader=FakeSpecLoader(),
     )
     return ServiceOrchestratorResolver(
         registry=registry,

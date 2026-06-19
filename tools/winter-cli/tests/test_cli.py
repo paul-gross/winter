@@ -46,6 +46,7 @@ def test_cli_group_advertises_every_top_level_command() -> None:
         "capabilities",
         "dashboard",
         "doctor",
+        "ext",
         "graph",
         "lint",
         "repo",

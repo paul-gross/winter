@@ -4,9 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import FakeConfigFileReader, FakeFilesystem
+from tests.conftest import FakeConfigFileReader, FakeFilesystem, FakeSpecLoader
 from winter_cli.modules.capability.capability_registry_service import CapabilityRegistryService
 from winter_cli.modules.capability.models import CapabilityBindingError, CapabilitySlot, ResolvedCapability
+from winter_cli.modules.capability.version_compat import VersionCompatError
 from winter_cli.modules.workspace.extension_manifest import EXT_MANIFEST, ExtensionManifestLoader
 from winter_cli.modules.workspace.models import StandaloneRepository
 
@@ -29,6 +30,7 @@ def _registry(
     manifests: dict[Path, dict],
     files: dict[Path, str],
     bindings: dict[str, str] | None = None,
+    spec_loader: FakeSpecLoader | None = None,
 ) -> CapabilityRegistryService:
     loader = ExtensionManifestLoader(config_file_reader=FakeConfigFileReader(manifests))
     return CapabilityRegistryService(
@@ -36,6 +38,7 @@ def _registry(
         manifest_loader=loader,
         bindings=bindings or {},
         fs=FakeFilesystem(files=files),
+        spec_loader=spec_loader or FakeSpecLoader(),
     )
 
 
@@ -299,4 +302,133 @@ def test_orchestrate_services_backcompat_discovered_as_service_candidate() -> No
 
     resolved = reg.resolve(CapabilitySlot.service)
     assert resolved.entrypoint == entrypoint
+    assert resolved.extension_name == "winter-service-tmux"
+
+
+# ── 9. Version compat: provider implements v2, winter only supports {v1} ──────
+
+
+def test_incompatible_version_describe_returns_incompatible_kind() -> None:
+    """Provider declares implements.service = v2; winter supports {v1} only →
+    describe() reports binding_kind == 'incompatible' with an error message."""
+    repo = _tmux_repo()
+    entrypoint = TMUX / "workflow/service"
+    reg = _registry(
+        repos=[repo],
+        manifests={TMUX / EXT_MANIFEST: {"provides": {"service": "workflow/service"}, "implements": {"service": "v2"}}},
+        files={TMUX / EXT_MANIFEST: "", entrypoint: ""},
+        bindings={"service": "winter-service-tmux"},
+        spec_loader=FakeSpecLoader({"service": {"v1"}}),  # winter only ships v1
+    )
+    resolution = reg.describe(CapabilitySlot.service)
+    assert resolution.binding_kind == "incompatible"
+    assert resolution.error is not None
+    assert "v2" in resolution.error
+    assert "v1" in resolution.error
+
+
+def test_incompatible_version_resolve_raises_version_compat_error() -> None:
+    """resolve() raises VersionCompatError naming both versions when bound provider
+    implements an unsupported spec version."""
+    repo = _tmux_repo()
+    entrypoint = TMUX / "workflow/service"
+    reg = _registry(
+        repos=[repo],
+        manifests={TMUX / EXT_MANIFEST: {"provides": {"service": "workflow/service"}, "implements": {"service": "v2"}}},
+        files={TMUX / EXT_MANIFEST: "", entrypoint: ""},
+        bindings={"service": "winter-service-tmux"},
+        spec_loader=FakeSpecLoader({"service": {"v1"}}),
+    )
+    with pytest.raises(VersionCompatError) as exc_info:
+        reg.resolve(CapabilitySlot.service)
+    msg = str(exc_info.value)
+    assert "v2" in msg
+    assert "v1" in msg
+
+
+def test_incompatible_version_resolve_raises_is_capability_binding_error() -> None:
+    """VersionCompatError is a CapabilityBindingError — callers matching the broad
+    type still catch it."""
+    repo = _tmux_repo()
+    entrypoint = TMUX / "workflow/service"
+    reg = _registry(
+        repos=[repo],
+        manifests={TMUX / EXT_MANIFEST: {"provides": {"service": "workflow/service"}, "implements": {"service": "v2"}}},
+        files={TMUX / EXT_MANIFEST: "", entrypoint: ""},
+        bindings={"service": "winter-service-tmux"},
+        spec_loader=FakeSpecLoader({"service": {"v1"}}),
+    )
+    with pytest.raises(CapabilityBindingError):
+        reg.resolve(CapabilitySlot.service)
+
+
+# ── 10. Version compat: provider implements v1, winter supports {v1} ─────────
+
+
+def test_compatible_version_v1_describe_returns_explicit() -> None:
+    """Provider declares implements.service = v1; winter supports {v1} → compatible,
+    binding_kind == 'explicit'."""
+    repo = _tmux_repo()
+    entrypoint = TMUX / "workflow/service"
+    reg = _registry(
+        repos=[repo],
+        manifests={TMUX / EXT_MANIFEST: {"provides": {"service": "workflow/service"}, "implements": {"service": "v1"}}},
+        files={TMUX / EXT_MANIFEST: "", entrypoint: ""},
+        bindings={"service": "winter-service-tmux"},
+        spec_loader=FakeSpecLoader({"service": {"v1"}}),
+    )
+    resolution = reg.describe(CapabilitySlot.service)
+    assert resolution.binding_kind == "explicit"
+    assert resolution.error is None
+
+
+def test_compatible_version_v1_resolve_returns_resolved_capability() -> None:
+    repo = _tmux_repo()
+    entrypoint = TMUX / "workflow/service"
+    reg = _registry(
+        repos=[repo],
+        manifests={TMUX / EXT_MANIFEST: {"provides": {"service": "workflow/service"}, "implements": {"service": "v1"}}},
+        files={TMUX / EXT_MANIFEST: "", entrypoint: ""},
+        bindings={"service": "winter-service-tmux"},
+        spec_loader=FakeSpecLoader({"service": {"v1"}}),
+    )
+    resolved = reg.resolve(CapabilitySlot.service)
+    assert isinstance(resolved, ResolvedCapability)
+    assert resolved.extension_name == "winter-service-tmux"
+
+
+# ── 11. Backwards compat: no implements declaration → compatible ───────────────
+
+
+def test_no_implements_declaration_describe_returns_explicit() -> None:
+    """Extension with no [implements] table → backwards compat, treated as
+    compatible (lenient-when-absent). This is the winter-service-tmux case."""
+    repo = _tmux_repo()
+    entrypoint = TMUX / "workflow/service"
+    reg = _registry(
+        repos=[repo],
+        # No "implements" key in manifest at all — predates the field
+        manifests={TMUX / EXT_MANIFEST: {"provides": {"service": "workflow/service"}}},
+        files={TMUX / EXT_MANIFEST: "", entrypoint: ""},
+        bindings={"service": "winter-service-tmux"},
+        spec_loader=FakeSpecLoader({"service": {"v1"}}),
+    )
+    resolution = reg.describe(CapabilitySlot.service)
+    assert resolution.binding_kind == "explicit"
+    assert resolution.error is None
+
+
+def test_no_implements_declaration_resolve_returns_resolved_capability() -> None:
+    """Extension with no [implements] → resolves cleanly without version check."""
+    repo = _tmux_repo()
+    entrypoint = TMUX / "workflow/service"
+    reg = _registry(
+        repos=[repo],
+        manifests={TMUX / EXT_MANIFEST: {"provides": {"service": "workflow/service"}}},
+        files={TMUX / EXT_MANIFEST: "", entrypoint: ""},
+        bindings={"service": "winter-service-tmux"},
+        spec_loader=FakeSpecLoader({"service": {"v1"}}),
+    )
+    resolved = reg.resolve(CapabilitySlot.service)
+    assert isinstance(resolved, ResolvedCapability)
     assert resolved.extension_name == "winter-service-tmux"

@@ -51,5 +51,10 @@ else
   cli="$ws/tools/winter-cli"
 fi
 
+# Preserve the caller's real working directory before pinning cwd to tools/winter-cli/.
+# The launcher must anchor cwd there for gitpython (see header comment), but commands
+# that resolve user-facing paths (e.g. `ext new`) need the original invocation dir.
+export WINTER_INVOCATION_CWD="$PWD"
+
 cd "$ws/tools/winter-cli"
 exec mise -C "$cli" exec -- uv run --project "$cli" winter "$@"

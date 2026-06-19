@@ -1,0 +1,204 @@
+from __future__ import annotations
+
+# CLI-boundary smoke tests for `winter ext verify` exit codes.
+#
+# The service-layer tests in test_verify_service.py cover all failure classes at
+# the Python API level.  This file adds a thin CLI-boundary layer that calls the
+# real `winter ext verify` CLI via subprocess and asserts the exit codes that
+# external consumers (shell scripts, CI) depend on.
+#
+# Coverage map:
+#   exit 0 — conforming provider         → via test_scaffold_service.py::test_scaffold_output_passes_verify
+#   exit 1 — setup failure               → test_verify_exits_nonzero_on_setup_failure
+#   exit 1 — action-word not accepted    → test_verify_exits_nonzero_on_action_rejected
+#   exit 1 — unknown action accepted     → test_verify_exits_nonzero_on_unknown_action_accepted
+#   exit 1 — params dropped              → test_verify_exits_nonzero_on_params_dropped
+#
+# Each failure-class test writes a minimal extension whose entrypoint is a tiny
+# Python script that exhibits exactly one failure class; it does NOT use the
+# scaffold (that would make it conforming).
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+
+def _make_workspace(base: Path) -> Path:
+    """Create a minimal .winter/ workspace at *base* and return *base*."""
+    base.mkdir(parents=True, exist_ok=True)
+    (base / ".winter").mkdir()
+    (base / ".winter" / "config.toml").write_text(
+        'main_branch = "main"\nsession_prefix = "test"\n'
+        '[[project_repository]]\nname = "demo"\nurl = "git@example.com:x/demo.git"\n'
+    )
+    return base
+
+
+def _make_ext(
+    ext_dir: Path,
+    entrypoint_script: str,
+) -> Path:
+    """Write a minimal extension with the given entrypoint script.
+
+    Returns the ext_dir for convenience.
+    """
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    (ext_dir / "winter-ext.toml").write_text(
+        'name = "test-ext"\n\n[provides]\nservice = "workflow/service"\n'
+    )
+    ep = ext_dir / "workflow" / "service"
+    ep.parent.mkdir(parents=True, exist_ok=True)
+    ep.write_text(entrypoint_script)
+    ep.chmod(ep.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return ext_dir
+
+
+def _verify(workspace: Path, ext_dir: Path) -> subprocess.CompletedProcess:
+    """Run `winter ext verify <ext_dir>` in *workspace* and return the result."""
+    return subprocess.run(
+        [sys.executable, "-m", "winter_cli.cli", "ext", "verify", str(ext_dir)],
+        capture_output=True,
+        text=True,
+        cwd=str(workspace),
+    )
+
+
+# Known actions and their sentinel/unknown-action constants (from service-v1.toml).
+_KNOWN_ACTIONS = {"up", "down", "status", "restart", "logs"}
+_UNKNOWN_ACTION = "__winter_nonexistent_action__"
+_SENTINEL = "__WINTER_VERIFY_SENTINEL__"
+
+# ── conforming extension: exit 0 ──────────────────────────────────────────────
+# NOTE: exit-0 coverage is provided by test_scaffold_service.py::test_scaffold_output_passes_verify.
+# This file adds the setup-failure and each failure-class non-zero case.
+
+
+# ── setup failure: extension directory does not exist ─────────────────────────
+
+
+def test_verify_exits_nonzero_on_setup_failure(tmp_path: Path) -> None:
+    """When the extension directory does not exist, exit is non-zero."""
+    workspace = _make_workspace(tmp_path / "ws")
+    missing_dir = tmp_path / "nonexistent-ext"
+
+    result = _verify(workspace, missing_dir)
+
+    assert result.returncode != 0, (
+        f"expected non-zero exit for missing extension directory; got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+# ── failure class A: action-word not accepted (exits 2 for a declared action) ─
+
+
+def test_verify_exits_nonzero_on_action_rejected(tmp_path: Path) -> None:
+    """When the entrypoint exits 2 for a declared action, `ext verify` exits non-zero.
+
+    This is the 'action-word-not-accepted' failure class: the entrypoint returns
+    the unknown-action signal (exit 2) even for a valid declared action word.
+    """
+    workspace = _make_workspace(tmp_path / "ws")
+    # Entrypoint always exits 2 (unknown-action) — rejects everything including
+    # the declared action words, so 'accepts-*' checks fail.
+    rejects_all = "#!/usr/bin/env python3\nimport sys\nsys.exit(2)\n"
+    ext_dir = _make_ext(tmp_path / "ext", rejects_all)
+
+    result = _verify(workspace, ext_dir)
+
+    assert result.returncode != 0, (
+        f"expected non-zero exit when action rejected; got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+# ── failure class B: unknown action accepted (exits 0 for unknown action) ─────
+
+
+def test_verify_exits_nonzero_on_unknown_action_accepted(tmp_path: Path) -> None:
+    """When the entrypoint exits 0 for an unknown action, `ext verify` exits non-zero.
+
+    This is the 'unknown-action-accepted' failure class: the refuses-unknown check
+    expects a non-zero exit for the probe unknown action, but gets exit 0.
+    """
+    workspace = _make_workspace(tmp_path / "ws")
+    # Entrypoint always exits 0 — accepts everything including unknown actions.
+    # Also echoes argv to stderr so forwards-params passes.
+    accepts_all = (
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print(' '.join(sys.argv), file=sys.stderr)\n"
+        "sys.exit(0)\n"
+    )
+    ext_dir = _make_ext(tmp_path / "ext", accepts_all)
+
+    result = _verify(workspace, ext_dir)
+
+    assert result.returncode != 0, (
+        f"expected non-zero exit when unknown action accepted; got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    combined = result.stdout + result.stderr
+    assert "refuses-unknown" in combined or "✗" in combined, (
+        "expected 'refuses-unknown' failure in output"
+    )
+
+
+# ── failure class C: params dropped (sentinel not echoed back) ───────────────
+
+
+def test_verify_exits_nonzero_on_params_dropped(tmp_path: Path) -> None:
+    """When the entrypoint does not echo the sentinel, `ext verify` exits non-zero.
+
+    This is the 'params-dropped' failure class: the forwards-params check sends a
+    sentinel token in the argv but the entrypoint produces no output containing it.
+    """
+    workspace = _make_workspace(tmp_path / "ws")
+    # Entrypoint accepts known actions, refuses unknown, but produces NO output —
+    # so the sentinel is never echoed back, making forwards-params fail.
+    known_actions_repr = repr(list(_KNOWN_ACTIONS))
+    drops_params = (
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"_KNOWN = {known_actions_repr}\n"
+        "if len(sys.argv) < 2 or sys.argv[1] not in _KNOWN:\n"
+        "    sys.exit(2)\n"
+        "# Exits 0 for known actions but produces NO stdout/stderr (drops argv/params).\n"
+        "sys.exit(0)\n"
+    )
+    ext_dir = _make_ext(tmp_path / "ext", drops_params)
+
+    result = _verify(workspace, ext_dir)
+
+    assert result.returncode != 0, (
+        f"expected non-zero exit when params dropped; got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    combined = result.stdout + result.stderr
+    assert "forwards-params" in combined or "✗" in combined, (
+        "expected 'forwards-params' failure in output"
+    )
+
+
+# ── --json flag: exit codes are the same regardless of output format ──────────
+
+
+def test_verify_json_flag_also_exits_nonzero_on_failure(tmp_path: Path) -> None:
+    """--json does not suppress the non-zero exit on failure."""
+    workspace = _make_workspace(tmp_path / "ws")
+    missing_dir = tmp_path / "nonexistent-ext"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "winter_cli.cli", "ext", "verify",
+         "--json", str(missing_dir)],
+        capture_output=True,
+        text=True,
+        cwd=str(workspace),
+    )
+
+    assert result.returncode != 0, (
+        f"expected non-zero exit for --json + setup failure; got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )

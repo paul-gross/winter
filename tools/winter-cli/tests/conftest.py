@@ -282,6 +282,13 @@ class FakeFilesystem:
             if path in d.parents:
                 self.directories.discard(d)
 
+    def chmod(self, path: Path, mode: int) -> None:
+        # Track executable bit: any mode with at least one execute bit sets the path executable.
+        if mode & 0o111:
+            self.executables.add(path)
+        else:
+            self.executables.discard(path)
+
 
 class FakeConfigFileReader:
     """IConfigFileReader fake — returns canned dicts keyed by path.
@@ -400,6 +407,27 @@ class FakeSubprocessRunner:
             raise AssertionError(f"FakeSubprocessRunner.popen got unexpected command: {key!r}")
         lines, rc = self._popen_responses[key]
         yield FakeStreamingProcess(lines, rc)
+
+
+class FakeSpecLoader:
+    """ISpecLoader fake — returns a configurable set of supported versions per slot.
+
+    Defaults to returning `{"v1"}` for every slot, matching what the real
+    SpecLoader returns for the shipped `service-v1.toml`. Tests that exercise
+    version-compat paths can override `supported` for specific slots.
+
+    `load()` always raises NotImplementedError — unit tests that only need
+    version-compat checking never call it.
+    """
+
+    def __init__(self, supported: dict[str, set[str]] | None = None) -> None:
+        self._supported: dict[str, set[str]] = supported or {}
+
+    def supported_versions(self, slot: str) -> set[str]:
+        return self._supported.get(slot, {"v1"})
+
+    def load(self, slot: str, version: str) -> Any:
+        raise NotImplementedError("FakeSpecLoader.load not implemented")
 
 
 class FakeGitRepository:

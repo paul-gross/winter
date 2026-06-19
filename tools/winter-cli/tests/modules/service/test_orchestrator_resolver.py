@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import FakeConfigFileReader, FakeFilesystem
+from tests.conftest import FakeConfigFileReader, FakeFilesystem, FakeSpecLoader
 from winter_cli.modules.capability.capability_registry_service import CapabilityRegistryService
 from winter_cli.modules.service.orchestrator_resolver import ServiceOrchestratorResolver
 from winter_cli.modules.workspace.extension_manifest import EXT_MANIFEST, ExtensionManifestLoader
@@ -39,6 +39,7 @@ def _resolver(
         manifest_loader=loader,
         bindings=bindings,
         fs=fs,
+        spec_loader=FakeSpecLoader(),
     )
     return ServiceOrchestratorResolver(
         registry=registry,
@@ -181,6 +182,7 @@ def test_path_mode_resolves_relative_path_against_workspace_root() -> None:
         manifest_loader=loader,
         bindings={},
         fs=fs,
+        spec_loader=FakeSpecLoader(),
     )
     res = ServiceOrchestratorResolver(
         registry=registry,
@@ -263,6 +265,7 @@ def test_override_beats_config_value() -> None:
         manifest_loader=loader,
         bindings={"service": "winter-service-tmux"},  # config value
         fs=fs,
+        spec_loader=FakeSpecLoader(),
     )
     res = ServiceOrchestratorResolver(
         registry=registry,
