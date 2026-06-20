@@ -19,21 +19,6 @@ class CapabilityProbeService:
             slot_name = res.slot.value
             probe_name = f"slot: {slot_name}"
 
-            if res.is_ambiguous:
-                names = ", ".join(c.extension_name for c in res.candidates)
-                results.append(
-                    ProbeResult(
-                        source=CAPABILITY_SOURCE,
-                        name=probe_name,
-                        status=ProbeStatus.fail,
-                        message=f"ambiguous — multiple providers: {names}",
-                        remediation=(
-                            f'Set capabilities.{slot_name} = "<name>" in .winter/config.toml to disambiguate.'
-                        ),
-                    )
-                )
-                continue
-
             binding_kind: BindingKind = res.binding_kind
 
             if binding_kind == "invalid":

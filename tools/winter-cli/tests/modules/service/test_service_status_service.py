@@ -7,12 +7,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tests.conftest import ClickRecorder, FakeSubprocessRunner
+from tests.conftest import ClickRecorder, FakeConfigFileReader, FakeFilesystem, FakeSpecLoader, FakeSubprocessRunner
 from winter_cli.core.internal.click_cli_output_service import ClickCliOutputService
-from winter_cli.modules.service.orchestrator_resolver import ResolvedOrchestrator
+from winter_cli.modules.capability.capability_registry_service import CapabilityRegistryService
+from winter_cli.modules.service.orchestrator_resolver import ResolvedOrchestrator, ServiceOrchestratorResolver
 from winter_cli.modules.service.service_status_service import ServiceStatusService
 from winter_cli.modules.service.status_models import StatusOptions
 from winter_cli.modules.service.status_parser import StatusDocumentParser
+from winter_cli.modules.workspace.extension_manifest import EXT_MANIFEST, ExtensionManifestLoader
+from winter_cli.modules.workspace.models import StandaloneRepository
 
 _PARSER = StatusDocumentParser()
 
@@ -40,13 +43,45 @@ def _opts(**kwargs: Any) -> StatusOptions:
     return StatusOptions(**defaults)
 
 
+class _StubRepoFactory:
+    def __init__(self, repos: list[StandaloneRepository]) -> None:
+        self._repos = repos
+
+    def get_standalone_repos(self) -> list[StandaloneRepository]:
+        return self._repos
+
+
+def _make_single_provider_registry() -> tuple[CapabilityRegistryService, ServiceOrchestratorResolver]:
+    """Build a registry + resolver wired to a single tmux provider (status entrypoint)."""
+    repo = StandaloneRepository(name="winter-service-tmux", path=WS / "winter-service-tmux")
+    loader = ExtensionManifestLoader(
+        config_file_reader=FakeConfigFileReader({repo.path / EXT_MANIFEST: {"orchestrate_services": "workflow/status"}})
+    )
+    fs = FakeFilesystem(files={repo.path / EXT_MANIFEST: "", repo.path / "workflow/status": ""})
+    registry = CapabilityRegistryService(
+        repo_factory=_StubRepoFactory([repo]),
+        manifest_loader=loader,
+        bindings={"service": ["winter-service-tmux"]},
+        fs=fs,
+        spec_loader=FakeSpecLoader(),
+    )
+    resolver = ServiceOrchestratorResolver(
+        registry=registry,
+        repo_factory=_StubRepoFactory([repo]),
+        manifest_loader=loader,
+        fs=fs,
+    )
+    return registry, resolver
+
+
 def _svc(
     runner: FakeSubprocessRunner | None = None,
     click: ClickRecorder | None = None,
 ) -> ServiceStatusService:
+    _registry, resolver = _make_single_provider_registry()
     return ServiceStatusService(
         subprocess_runner=runner or FakeSubprocessRunner(),
-        orchestrator_resolver=_resolver(),
+        orchestrator_resolver=resolver,
         status_parser=StatusDocumentParser(),
         cli_output=ClickCliOutputService(),
         click=click or ClickRecorder(),

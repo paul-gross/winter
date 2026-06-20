@@ -129,18 +129,34 @@ class WorkspaceConfigService:
         keybindings = self._parse_keybindings(merged.get("keybindings"))
         dashboard = self._parse_dashboard(merged.get("tui"))
 
+        # ── capabilities: each slot accepts str | list[str] ─────────────────────
+        # Parse the [capabilities] table, normalizing each slot value to a deduped
+        # ordered list. A bare string becomes a one-element list; a list is used
+        # as-is (skipping non-string and empty-string entries).
         caps_raw = merged.get("capabilities")
-        capabilities = (
-            {str(k): str(v) for k, v in caps_raw.items() if isinstance(v, str) and v}
-            if isinstance(caps_raw, dict)
-            else {}
-        )
+        capabilities: dict[str, list[str]] = {}
+        if isinstance(caps_raw, dict):
+            for k, v in caps_raw.items():
+                slot_key = str(k)
+                normalized = _coerce_str_list(v)
+                # Deduplicate preserving order.
+                _seen_cap: set[str] = set()
+                _deduped_cap: list[str] = []
+                for _s in normalized:
+                    if _s not in _seen_cap:
+                        _seen_cap.add(_s)
+                        _deduped_cap.append(_s)
+                if _deduped_cap:
+                    capabilities[slot_key] = _deduped_cap
+
+        # Legacy back-compat: service_orchestrator (singular) folds into
+        # capabilities["service"] when no explicit capabilities.service is set.
         if (
             "service" not in capabilities
             and isinstance(merged.get("service_orchestrator"), str)
             and merged["service_orchestrator"]
         ):
-            capabilities["service"] = merged["service_orchestrator"]
+            capabilities["service"] = [merged["service_orchestrator"]]
 
         main_branch = merged.get("main_branch") or "main"
 

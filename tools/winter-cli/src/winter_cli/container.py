@@ -547,22 +547,43 @@ class Container(containers.DeclarativeContainer):
         workspace_root=workspace_config.provided.workspace_root,
     )
 
+    status_document_parser = providers.Singleton(_lazy("winter_cli.modules.service.status_parser:StatusDocumentParser"))
+
+    service_describe_parser = providers.Singleton(
+        _lazy("winter_cli.modules.service.describe_parser:DescribeResultParser")
+    )
+
+    service_describe_svc = providers.Factory(
+        _lazy("winter_cli.modules.service.service_provider_index:ServiceDescribeService"),
+        subprocess_runner=subprocess_runner,
+        describe_parser=service_describe_parser,
+        workspace_root=workspace_config.provided.workspace_root,
+    )
+
+    service_fan_out_svc = providers.Factory(
+        _lazy("winter_cli.modules.service.service_fan_out_service:ServiceFanOutService"),
+        subprocess_runner=subprocess_runner,
+        workspace_root=workspace_config.provided.workspace_root,
+    )
+
     service_dispatch_svc = providers.Factory(
         _lazy("winter_cli.modules.service.service_dispatch_service:ServiceDispatchService"),
         subprocess_runner=subprocess_runner,
         orchestrator_resolver=service_orchestrator_resolver,
+        fan_out_service=service_fan_out_svc,
+        describe_service=service_describe_svc,
         workspace_root=workspace_config.provided.workspace_root,
+        click=providers.Object(click),
     )
 
     service_logs_svc = providers.Factory(
         _lazy("winter_cli.modules.service.service_logs_service:ServiceLogsService"),
         subprocess_runner=subprocess_runner,
         orchestrator_resolver=service_orchestrator_resolver,
+        describe_service=service_describe_svc,
         click=providers.Object(click),
         workspace_root=workspace_config.provided.workspace_root,
     )
-
-    status_document_parser = providers.Singleton(_lazy("winter_cli.modules.service.status_parser:StatusDocumentParser"))
 
     service_status_svc = providers.Factory(
         _lazy("winter_cli.modules.service.service_status_service:ServiceStatusService"),

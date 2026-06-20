@@ -6,7 +6,7 @@ from pathlib import Path
 
 from winter_cli.core.filesystem import IFilesystemReader
 from winter_cli.modules.capability.capability_registry_service import CapabilityRegistryService
-from winter_cli.modules.capability.models import CapabilitySlot
+from winter_cli.modules.capability.models import CapabilitySlot, ResolvedCapability
 from winter_cli.modules.workspace.extension_manifest import EXT_MANIFEST, ExtensionManifestLoader
 from winter_cli.modules.workspace.models import RepoError, StandaloneRepository
 from winter_cli.modules.workspace.repository_factory import IStandaloneRepoProvider
@@ -69,6 +69,27 @@ class ServiceOrchestratorResolver:
 
         resolved = self._registry.resolve(CapabilitySlot.service)
         return ResolvedOrchestrator(entrypoint=resolved.entrypoint, ext_dir=resolved.ext_dir, prefix=resolved.prefix)
+
+    def resolve_all(self) -> list[ResolvedCapability]:
+        """Return the ordered list of providers, collapsing to one when an override is active.
+
+        When ``--service-orchestrator`` / ``WINTER_SERVICE_ORCHESTRATOR`` is set, the
+        override collapses fan-out to a single provider for this invocation.  When no
+        override is active, delegates to ``registry.resolve_all()`` which returns the
+        full ordered list of providers (explicit or implicit-all).
+        """
+        if self._override:
+            resolved = self.resolve()  # raises RepoError on any setup failure
+            # Wrap as a ResolvedCapability so callers get a uniform list type.
+            cap = ResolvedCapability(
+                slot=CapabilitySlot.service,
+                extension_name=resolved.prefix,
+                entrypoint=resolved.entrypoint,
+                ext_dir=resolved.ext_dir,
+                prefix=resolved.prefix,
+            )
+            return [cap]
+        return self._registry.resolve_all(CapabilitySlot.service)
 
     def try_resolve_extension(self, extension: str) -> ResolvedOrchestrator | str:
         """Non-raising resolution for a bare extension path or name.

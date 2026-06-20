@@ -102,12 +102,13 @@ def _conforming_runner(ep: Path = ENTRYPOINT) -> FakeSubprocessRunner:
         return SubprocessResult(returncode=0, stdout=argv_str, stderr="")
 
     responses: dict[str, SubprocessResult] = {
-        # accepts-action checks (exit 0 for each of the 5 declared actions)
+        # accepts-action checks (exit 0 for each of the 6 declared actions)
         f"{ep_str} up {_PROBE_ENV}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} down {_PROBE_ENV}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} status": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         # refuses-unknown check (exit 2 = non-zero)
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
         # forwards-params check (echo sentinel back in stdout)
@@ -135,6 +136,7 @@ def test_conforming_extension_reports_accepts_action_checks() -> None:
     assert "accepts-status" in check_ids
     assert "accepts-restart" in check_ids
     assert "accepts-logs" in check_ids
+    assert "accepts-describe" in check_ids
 
 
 def test_conforming_extension_reports_refuses_unknown_check() -> None:
@@ -164,6 +166,7 @@ def test_action_rejected_with_exit_2_fails_accepts_check() -> None:
         f"{ep_str} status": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
             returncode=0, stdout=f"{_SENTINEL}/__svc__", stderr=""
@@ -185,6 +188,7 @@ def test_action_rejected_report_has_descriptive_detail() -> None:
         f"{ep_str} status": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
             returncode=0, stdout=f"{_SENTINEL}/__svc__", stderr=""
@@ -209,6 +213,7 @@ def test_accepts_unknown_action_fails_refuses_check() -> None:
         f"{ep_str} status": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         # Returns exit 0 for the unknown action — fails the refuses-unknown check.
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
@@ -231,6 +236,7 @@ def test_accepts_unknown_action_detail_mentions_exit_0() -> None:
         f"{ep_str} status": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
             returncode=0, stdout=f"{_SENTINEL}/__svc__", stderr=""
@@ -254,6 +260,7 @@ def test_drops_params_fails_forwards_check() -> None:
         f"{ep_str} status": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
         # Empty stdout/stderr — sentinel not echoed, drops params.
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(returncode=0, stdout="", stderr=""),
@@ -273,6 +280,7 @@ def test_drops_params_detail_mentions_sentinel() -> None:
         f"{ep_str} status": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(returncode=0, stdout="", stderr=""),
     }
@@ -392,3 +400,96 @@ def test_verify_cwd_is_workspace_root() -> None:
     _local_svc(runner).verify(str(EXT_DIR))
     _, cwd = runner.run_calls[0]
     assert cwd == WS
+
+
+# ── emits-describe-json check ─────────────────────────────────────────────────
+
+
+def _runner_with_bad_describe_json(ep: Path = ENTRYPOINT) -> FakeSubprocessRunner:
+    """Runner whose describe action emits malformed JSON — fails emits-describe-json."""
+    ep_str = str(ep)
+    responses: dict[str, SubprocessResult] = {
+        f"{ep_str} up {_PROBE_ENV}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} down {_PROBE_ENV}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} status": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        # describe emits malformed JSON — not a valid {"services": [...]} object.
+        f"{ep_str} describe": SubprocessResult(returncode=0, stdout="this is not json", stderr=""),
+        f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
+        f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
+            returncode=0, stdout=f"{_SENTINEL}/__svc__", stderr=""
+        ),
+    }
+    return FakeSubprocessRunner(run_responses=responses)
+
+
+def _runner_with_non_object_describe(ep: Path = ENTRYPOINT) -> FakeSubprocessRunner:
+    """Runner whose describe action emits a JSON array (not an object) — fails check."""
+    ep_str = str(ep)
+    responses: dict[str, SubprocessResult] = {
+        f"{ep_str} up {_PROBE_ENV}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} down {_PROBE_ENV}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} status": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        # describe emits a JSON array, not an object — fails the check.
+        f"{ep_str} describe": SubprocessResult(returncode=0, stdout='["service-a", "service-b"]', stderr=""),
+        f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
+        f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
+            returncode=0, stdout=f"{_SENTINEL}/__svc__", stderr=""
+        ),
+    }
+    return FakeSubprocessRunner(run_responses=responses)
+
+
+def test_conforming_extension_emits_describe_json_check_passes() -> None:
+    """A conforming extension (emitting {\"services\": []}) passes the emits-describe-json check."""
+    runner = _conforming_runner()
+    report = _local_svc(runner).verify(str(EXT_DIR))
+    check_ids = {r.check_id for r in report.results}
+    assert "emits-describe-json" in check_ids
+    emits_check = next(r for r in report.results if r.check_id == "emits-describe-json")
+    assert emits_check.passed
+
+
+def test_malformed_describe_json_fails_emits_describe_json_check() -> None:
+    """An extension emitting non-JSON for describe fails the emits-describe-json check."""
+    runner = _runner_with_bad_describe_json()
+    report = _local_svc(runner).verify(str(EXT_DIR))
+    assert report.any_failed
+    emits_check = next(r for r in report.results if r.check_id == "emits-describe-json")
+    assert not emits_check.passed
+    # Detail should mention the parse failure.
+    assert "parseable" in emits_check.detail or "parse" in emits_check.detail.lower()
+
+
+def test_non_object_describe_json_fails_emits_describe_json_check() -> None:
+    """An extension emitting a JSON array (not an object) for describe fails the check."""
+    runner = _runner_with_non_object_describe()
+    report = _local_svc(runner).verify(str(EXT_DIR))
+    assert report.any_failed
+    emits_check = next(r for r in report.results if r.check_id == "emits-describe-json")
+    assert not emits_check.passed
+
+
+def test_valid_services_list_passes_emits_describe_json_check() -> None:
+    """An extension emitting {\"services\": [\"a\", \"b\"]} passes the check."""
+    ep_str = str(ENTRYPOINT)
+    responses: dict[str, SubprocessResult] = {
+        f"{ep_str} up {_PROBE_ENV}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} down {_PROBE_ENV}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} status": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
+        # Valid: non-empty services list.
+        f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":["api","worker"]}', stderr=""),
+        f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
+        f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
+            returncode=0, stdout=f"{_SENTINEL}/__svc__", stderr=""
+        ),
+    }
+    runner = FakeSubprocessRunner(run_responses=responses)
+    report = _local_svc(runner).verify(str(EXT_DIR))
+    emits_check = next(r for r in report.results if r.check_id == "emits-describe-json")
+    assert emits_check.passed

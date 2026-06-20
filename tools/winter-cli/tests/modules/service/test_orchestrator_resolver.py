@@ -33,7 +33,7 @@ def _resolver(
 ) -> ServiceOrchestratorResolver:
     loader = ExtensionManifestLoader(config_file_reader=FakeConfigFileReader(manifests))
     fs = FakeFilesystem(files=files, directories=directories or [])
-    bindings: dict[str, str] = {"service": orchestrator} if orchestrator else {}
+    bindings: dict[str, list[str]] = {"service": [orchestrator]} if orchestrator else {}
     registry = CapabilityRegistryService(
         repo_factory=_StubRepoFactory(repos),
         manifest_loader=loader,
@@ -263,7 +263,7 @@ def test_override_beats_config_value() -> None:
     registry = CapabilityRegistryService(
         repo_factory=_StubRepoFactory([repo]),
         manifest_loader=loader,
-        bindings={"service": "winter-service-tmux"},  # config value
+        bindings={"service": ["winter-service-tmux"]},  # config value
         fs=fs,
         spec_loader=FakeSpecLoader(),
     )

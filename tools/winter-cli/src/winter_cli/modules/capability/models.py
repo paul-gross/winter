@@ -52,8 +52,13 @@ class SlotResolution:
     `slot` is the capability slot being resolved.
     `candidates` is every installed extension that declares it provides this slot.
     `bound_extension` is the explicit config binding name (from `capabilities.<slot>`) if any.
-    `binding_kind` is one of: "explicit" (config binding to a valid provider),
-        "implicit" (sole provider, no config binding), "unbound" (0 or ≥2 providers, no binding),
+        For multi-provider service slots this is the first provider; use `bound_extensions`
+        for the full ordered list.
+    `bound_extensions` is the ordered list of bound provider names when more than
+        one is active. See the `bound_extensions` field docstring for details.
+    `binding_kind` is one of: "explicit" (config binding to a valid provider or list),
+        "implicit" (no config binding — sole provider, OR all candidates bound implicitly
+        when 2+ are installed), "unbound" (0 providers, no binding),
         "invalid" (config binding is broken — extension not installed, not providing, or
         entrypoint missing).
     `error` is a human-readable string for `binding_kind == "invalid"`; None otherwise.
@@ -65,9 +70,8 @@ class SlotResolution:
     asymmetry — it is deliberate: an explicit binding is a user assertion that must be valid,
     while an implicit provider is a discovery result that may be partially configured.
 
-    Note on ambiguity: there is no dedicated "ambiguous" kind. When
-    `binding_kind == "unbound"` and `len(candidates) >= 2`, the slot is ambiguous.
-    Use the `is_ambiguous` property rather than checking the combination inline.
+    Note on 2+ candidates without explicit binding: the slot is `implicit` (not unbound)
+    and all candidates are bound. `is_ambiguous` always returns False in this model.
     """
 
     slot: CapabilitySlot
@@ -75,6 +79,15 @@ class SlotResolution:
     bound_extension: str | None
     binding_kind: BindingKind
     error: str | None
+    bound_extensions: tuple[str, ...] = ()
+    """Ordered list of bound provider names.
+
+    Set when more than one provider is active for the slot. For an explicit
+    `capabilities.<slot> = [...]` list this is the config-declared order. For
+    implicit-all (2+ self-registered candidates, no explicit binding) this is
+    the deterministic sorted order of candidate extension names. Empty when a
+    single explicit or implicit binding is stored in `bound_extension` alone.
+    """
 
     @property
     def is_ambiguous(self) -> bool:
@@ -103,8 +116,9 @@ class ResolvedCapability:
 class CapabilityBindingError(RepoError):
     """Raised by `CapabilityRegistryService.resolve()` on any non-resolvable state.
 
-    Non-resolvable states: zero providers, invalid binding (extension not installed,
-    not providing the slot, or entrypoint file missing), ambiguous (two or more
-    providers with no explicit binding). Subclasses `RepoError` so the CLI boundary
-    renders it cleanly and tests/doctor can match on the specific type.
+    Non-resolvable states: zero providers (unbound), invalid binding (extension not
+    installed, not providing the slot, or entrypoint file missing). Two or more
+    providers with no explicit binding resolve to implicit-all (never raises).
+    Subclasses `RepoError` so the CLI boundary renders it cleanly and tests/doctor
+    can match on the specific type.
     """

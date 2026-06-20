@@ -107,9 +107,11 @@ class ExtScaffoldService:
         not hard-coded here — so the stub and the verifier always agree.
 
         Protocol:
-        - Known action → exits `refuse_exit` (recognized-but-unimplemented).
-        - Unknown action → exits `unknown_exit`.
-        - Echoes argv to stderr so the `forwards-params` check finds the sentinel.
+        - ``describe`` action → emits ``{"services": []}`` on stdout, exits 0
+          (required by the ``emits-describe-json`` conformance check).
+        - Other known actions → exit ``refuse_exit`` (recognized-but-unimplemented).
+        - Unknown actions → exit ``unknown_exit``.
+        - Echoes argv to stderr so the ``forwards-params`` check finds the sentinel.
         """
         lines = [
             "#!/usr/bin/env python3",
@@ -117,6 +119,7 @@ class ExtScaffoldService:
             "",
             "Every declared action is recognized but returns the refuse-all exit code.",
             "Unknown actions return the unknown-action exit code.",
+            'The describe action emits {"services": []} so emits-describe-json passes.',
             "Argv is echoed to stderr so `winter ext verify` forwards-params check passes.",
             '"""',
             "import sys",
@@ -133,6 +136,12 @@ class ExtScaffoldService:
             "action = sys.argv[1]",
             "if action not in _KNOWN_ACTIONS:",
             "    sys.exit(_UNKNOWN_EXIT)",
+            "",
+            '# describe must emit {"services": []} so the emits-describe-json check passes.',
+            'if action == "describe":',
+            "    print('{\"services\": []}')",
+            "    sys.exit(0)",
+            "",
             "sys.exit(_REFUSE_EXIT)",
         ]
         return "\n".join(lines) + "\n"

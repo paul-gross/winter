@@ -83,6 +83,22 @@ description = "RFC3339 absolute timestamp; empty string if not set."
 name        = "WINTER_LOG_TIMESTAMPS"
 description = "1 = per-line timestamps requested; 0 = not requested."
 
+[[action]]
+name    = "describe"
+arity   = "no-positionals"
+summary = "Emit a JSON object listing the service names owned by this provider."
+
+# Returns a single JSON object on stdout: {"services": ["name", ...]}
+# Unknown or empty → {"services": []} (an empty list is valid; missing key treated as empty).
+# Always-present WINTER_* env vars are set by winter on every dispatch.
+#
+# Ownership contract:
+#   Called ONLY when two or more providers are bound (explicit list or implicit-all).
+#   Single-provider workspaces are never asked to describe (single-provider short-circuit).
+#   Each service name must appear in exactly one provider's describe output — winter
+#   raises DuplicateOwnershipError if two providers claim the same service.
+#   An empty services list is valid: the provider declares it owns no named services.
+
 # Conformance checks. These drive winter ext verify (phase 2).
 [[check]]
 kind        = "accepts-action"
@@ -95,3 +111,7 @@ description = "The entrypoint exits non-zero for an action word not in the decla
 [[check]]
 kind        = "forwards-params"
 description = "The entrypoint echoes its argv back on stdout or stderr (confirming argv is forwarded). WINTER_* env vars are set on every dispatch but are not asserted by this check."
+
+[[check]]
+kind        = "emits-describe-json"
+description = "The entrypoint emits parseable {\"services\": [...]} JSON on stdout for the describe action. A provider whose describe output cannot be parsed would fail at runtime with a DescribeParseError when two or more providers are bound."

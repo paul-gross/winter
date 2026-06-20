@@ -15,11 +15,14 @@ from tests.conftest import (
 )
 from winter_cli.core.internal.click_cli_output_service import ClickCliOutputService
 from winter_cli.modules.capability.capability_registry_service import CapabilityRegistryService
+from winter_cli.modules.service.describe_parser import DescribeResultParser
 from winter_cli.modules.service.handler import ServiceHandler, ServiceParams
 from winter_cli.modules.service.models import LogOptions
 from winter_cli.modules.service.orchestrator_resolver import ServiceOrchestratorResolver
 from winter_cli.modules.service.service_dispatch_service import ServiceDispatchService
+from winter_cli.modules.service.service_fan_out_service import ServiceFanOutService
 from winter_cli.modules.service.service_logs_service import ServiceLogsService
+from winter_cli.modules.service.service_provider_index import ServiceDescribeService
 from winter_cli.modules.service.service_status_service import ServiceStatusService
 from winter_cli.modules.service.status_models import StatusOptions
 from winter_cli.modules.service.status_parser import StatusDocumentParser
@@ -62,7 +65,9 @@ class _StubRepoFactory:
         return self._repos
 
 
-def _resolver(runner: FakeSubprocessRunner) -> ServiceOrchestratorResolver:
+def _make_registry_and_resolver(
+    runner: FakeSubprocessRunner,
+) -> tuple[CapabilityRegistryService, ServiceOrchestratorResolver]:
     repo = StandaloneRepository(name="winter-service-tmux", path=WS / "winter-service-tmux")
     loader = ExtensionManifestLoader(
         config_file_reader=FakeConfigFileReader(
@@ -73,23 +78,45 @@ def _resolver(runner: FakeSubprocessRunner) -> ServiceOrchestratorResolver:
     registry = CapabilityRegistryService(
         repo_factory=_StubRepoFactory([repo]),
         manifest_loader=loader,
-        bindings={"service": "winter-service-tmux"},
+        bindings={"service": ["winter-service-tmux"]},
         fs=fs,
         spec_loader=FakeSpecLoader(),
     )
-    return ServiceOrchestratorResolver(
+    resolver = ServiceOrchestratorResolver(
         registry=registry,
         repo_factory=_StubRepoFactory([repo]),
         manifest_loader=loader,
         fs=fs,
     )
+    return registry, resolver
 
 
 def _handler(runner: FakeSubprocessRunner, click: Any = None) -> ServiceHandler:
-    res = _resolver(runner)
-    dispatch = ServiceDispatchService(subprocess_runner=runner, orchestrator_resolver=res, workspace_root=WS)
+    _registry, res = _make_registry_and_resolver(runner)
+    describe_svc = ServiceDescribeService(
+        subprocess_runner=runner,
+        describe_parser=DescribeResultParser(),
+        workspace_root=WS,
+    )
     click_obj = click or ClickRecorder()
-    logs = ServiceLogsService(subprocess_runner=runner, orchestrator_resolver=res, click=click_obj, workspace_root=WS)
+    fan_out = ServiceFanOutService(
+        subprocess_runner=runner,
+        workspace_root=WS,
+    )
+    dispatch = ServiceDispatchService(
+        subprocess_runner=runner,
+        orchestrator_resolver=res,
+        fan_out_service=fan_out,
+        describe_service=describe_svc,
+        workspace_root=WS,
+    )
+    logs = ServiceLogsService(
+        subprocess_runner=runner,
+        orchestrator_resolver=res,
+        describe_service=describe_svc,
+        click=click_obj,
+        workspace_root=WS,
+    )
     status = ServiceStatusService(
         subprocess_runner=runner,
         orchestrator_resolver=res,

@@ -7,6 +7,7 @@ from winter_cli.core.subprocess_runner import ISubprocessRunner
 from winter_cli.modules.capability.spec_loader import ISpecLoader
 from winter_cli.modules.capability.spec_models import ArityKind, CheckKind
 from winter_cli.modules.ext.models import CheckResult, VerifyReport
+from winter_cli.modules.service.describe_parser import DescribeParseError, DescribeResultParser
 from winter_cli.modules.service.orchestrator_resolver import ServiceOrchestratorResolver
 
 # Probe token used for accepts-action checks: a recognisable env name that no
@@ -49,11 +50,13 @@ class ConformanceVerifyService:
         orchestrator_resolver: ServiceOrchestratorResolver,
         spec_loader: ISpecLoader,
         workspace_root: Path,
+        describe_parser: DescribeResultParser | None = None,
     ) -> None:
         self._runner = subprocess_runner
         self._orchestrator_resolver = orchestrator_resolver
         self._spec_loader = spec_loader
         self._workspace_root = workspace_root
+        self._describe_parser = describe_parser if describe_parser is not None else DescribeResultParser()
 
     def verify(self, extension: str) -> VerifyReport:
         """Run all spec checks against `extension` and return a `VerifyReport`."""
@@ -133,6 +136,28 @@ class ConformanceVerifyService:
                     )
                 )
 
+            elif check.kind == CheckKind.emits_describe_json:
+                # Invoke describe and parse stdout through DescribeResultParser.
+                # A missing or malformed {"services": [...]} response fails this check.
+                argv = [str(entrypoint), "describe"]
+                result = self._runner.run(argv, cwd=self._workspace_root, env=env)
+                try:
+                    self._describe_parser.parse(result.stdout, provider_name=str(entrypoint))
+                    passed = True
+                    detail = f'describe emits parseable {{"services": [...]}} JSON (exit {result.returncode})'
+                except DescribeParseError as exc:
+                    passed = False
+                    detail = f'describe stdout is not a parseable {{"services": [...]}} object — {exc}'
+                results.append(
+                    CheckResult(
+                        check_id="emits-describe-json",
+                        passed=passed,
+                        detail=detail,
+                        argv=argv,
+                        observed_exit=result.returncode,
+                    )
+                )
+
         return VerifyReport(results=results)
 
     def _pick_version(self) -> str:
@@ -149,7 +174,7 @@ class ConformanceVerifyService:
             return [_PROBE_ENV]
         if arity == ArityKind.patterns_required:
             return [_PROBE_PATTERN]
-        # patterns_optional — zero args is valid
+        # no_positionals and patterns_optional — zero args is valid
         return []
 
     def _make_env(self, ext_dir: Path, prefix: str, spec_env_vars: tuple) -> dict[str, str]:

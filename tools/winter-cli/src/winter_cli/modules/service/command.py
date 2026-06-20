@@ -50,6 +50,10 @@ _HELP_LOGS = _SPEC_SUMMARIES.get(
     "logs",
     "Stream or emit the log backlog for matched services as NDJSON on stdout.",
 )
+_HELP_DESCRIBE = _SPEC_SUMMARIES.get(
+    "describe",
+    "Emit a JSON object listing the service names owned by this provider.",
+)
 
 
 def _service_handler(ctx: click.Context):
@@ -229,3 +233,21 @@ def logs_cmd(
     )
     handler = _service_handler(ctx)
     handler.run_logs(options)
+
+
+@service_group.command("describe", short_help=_HELP_DESCRIBE, hidden=True)
+@click.pass_context
+def describe_cmd(ctx: click.Context) -> None:
+    """Emit a JSON object listing the service names owned by this provider.
+
+    This is a provider-contract action used by winter internally when routing
+    across multiple service orchestrator providers (via ``capabilities.service = [...]``
+    in .winter/config.toml).  The provider entrypoint must emit
+    ``{"services": ["name", ...]}`` on stdout.  Unknown or empty → ``{"services": []}``.
+
+    Calling this subcommand directly dispatches to the single registered provider.
+    When multiple providers are bound, each is queried in turn by winter during
+    ``up``/``down``/``logs``/``restart`` to build the service ownership index.
+    """
+    handler = _service_handler(ctx)
+    handler.run(ServiceParams(action="describe"))

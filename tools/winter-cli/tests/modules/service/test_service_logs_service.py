@@ -8,11 +8,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tests.conftest import ClickRecorder, FakeSubprocessRunner
+from tests.conftest import ClickRecorder, FakeConfigFileReader, FakeFilesystem, FakeSpecLoader, FakeSubprocessRunner
 from winter_cli.core.subprocess_runner import SubprocessResult
+from winter_cli.modules.capability.capability_registry_service import CapabilityRegistryService
+from winter_cli.modules.service.describe_parser import DescribeResultParser
 from winter_cli.modules.service.models import LogOptions
-from winter_cli.modules.service.orchestrator_resolver import ResolvedOrchestrator
+from winter_cli.modules.service.orchestrator_resolver import ResolvedOrchestrator, ServiceOrchestratorResolver
 from winter_cli.modules.service.service_logs_service import ServiceLogsService
+from winter_cli.modules.service.service_provider_index import ServiceDescribeService
+from winter_cli.modules.workspace.extension_manifest import EXT_MANIFEST, ExtensionManifestLoader
+from winter_cli.modules.workspace.models import StandaloneRepository
 
 WS = Path("/ws")
 EXT = WS / "winter-service-tmux"
@@ -45,13 +50,54 @@ def _opts(**kwargs: Any) -> LogOptions:
     return LogOptions(**defaults)
 
 
+def _make_single_provider_registry(
+    runner: FakeSubprocessRunner,
+) -> tuple[CapabilityRegistryService, ServiceOrchestratorResolver]:
+    """Build a registry + resolver wired to a single tmux provider."""
+    repo = StandaloneRepository(name="winter-service-tmux", path=WS / "winter-service-tmux")
+    loader = ExtensionManifestLoader(
+        config_file_reader=FakeConfigFileReader({repo.path / EXT_MANIFEST: {"orchestrate_services": "workflow/logs"}})
+    )
+    fs = FakeFilesystem(files={repo.path / EXT_MANIFEST: "", repo.path / "workflow/logs": ""})
+    registry = CapabilityRegistryService(
+        repo_factory=_StubRepoFactory([repo]),
+        manifest_loader=loader,
+        bindings={"service": ["winter-service-tmux"]},
+        fs=fs,
+        spec_loader=FakeSpecLoader(),
+    )
+    resolver = ServiceOrchestratorResolver(
+        registry=registry,
+        repo_factory=_StubRepoFactory([repo]),
+        manifest_loader=loader,
+        fs=fs,
+    )
+    return registry, resolver
+
+
+class _StubRepoFactory:
+    def __init__(self, repos: list[StandaloneRepository]) -> None:
+        self._repos = repos
+
+    def get_standalone_repos(self) -> list[StandaloneRepository]:
+        return self._repos
+
+
 def _svc(
     runner: FakeSubprocessRunner | None = None,
     click: ClickRecorder | None = None,
 ) -> ServiceLogsService:
+    _runner = runner or FakeSubprocessRunner()
+    _registry, res = _make_single_provider_registry(_runner)
+    describe_svc = ServiceDescribeService(
+        subprocess_runner=_runner,
+        describe_parser=DescribeResultParser(),
+        workspace_root=WS,
+    )
     return ServiceLogsService(
-        subprocess_runner=runner or FakeSubprocessRunner(),
-        orchestrator_resolver=_resolver(),
+        subprocess_runner=_runner,
+        orchestrator_resolver=res,
+        describe_service=describe_svc,
         click=click or ClickRecorder(),
         workspace_root=WS,
     )
@@ -230,9 +276,17 @@ class _InterruptOnPopenRunner:
 
 def test_stream_returns_130_on_keyboard_interrupt_during_iteration() -> None:
     """KeyboardInterrupt raised while reading stdout_lines returns 130."""
+    interrupt_runner = _InterruptOnIterRunner()
+    _registry, res = _make_single_provider_registry(FakeSubprocessRunner())
+    describe_svc = ServiceDescribeService(
+        subprocess_runner=FakeSubprocessRunner(),
+        describe_parser=DescribeResultParser(),
+        workspace_root=WS,
+    )
     svc = ServiceLogsService(
-        subprocess_runner=_InterruptOnIterRunner(),
-        orchestrator_resolver=_resolver(),
+        subprocess_runner=interrupt_runner,
+        orchestrator_resolver=res,
+        describe_service=describe_svc,
         click=ClickRecorder(),
         workspace_root=WS,
     )
@@ -241,9 +295,17 @@ def test_stream_returns_130_on_keyboard_interrupt_during_iteration() -> None:
 
 def test_stream_returns_130_on_keyboard_interrupt_at_popen() -> None:
     """KeyboardInterrupt raised at popen entry returns 130."""
+    interrupt_runner = _InterruptOnPopenRunner()
+    _registry, res = _make_single_provider_registry(FakeSubprocessRunner())
+    describe_svc = ServiceDescribeService(
+        subprocess_runner=FakeSubprocessRunner(),
+        describe_parser=DescribeResultParser(),
+        workspace_root=WS,
+    )
     svc = ServiceLogsService(
-        subprocess_runner=_InterruptOnPopenRunner(),
-        orchestrator_resolver=_resolver(),
+        subprocess_runner=interrupt_runner,
+        orchestrator_resolver=res,
+        describe_service=describe_svc,
         click=ClickRecorder(),
         workspace_root=WS,
     )

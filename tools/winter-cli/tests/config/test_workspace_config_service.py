@@ -251,12 +251,34 @@ def test_keybindings_overlay_overrides_per_key() -> None:
     assert kb.timeoutlen == 1000
 
 
-def test_capabilities_parsed_from_table() -> None:
+def test_capabilities_parsed_from_table_string() -> None:
+    """capabilities.service = "tmux" (string) is normalized to a one-element list."""
     config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
     fs = FakeFilesystem(files={config_path: ""})
     svc = _service(fs, {config_path: {"capabilities": {"service": "winter-service-tmux"}}})
 
-    assert svc.load().capabilities == {"service": "winter-service-tmux"}
+    assert svc.load().capabilities == {"service": ["winter-service-tmux"]}
+
+
+def test_capabilities_parsed_from_table_list() -> None:
+    """capabilities.service = [...] (list) is stored as an ordered list."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {config_path: {"capabilities": {"service": ["winter-service-docker", "winter-service-tmux"]}}},
+    )
+
+    assert svc.load().capabilities == {"service": ["winter-service-docker", "winter-service-tmux"]}
+
+
+def test_capabilities_list_deduplicates_preserving_order() -> None:
+    """Duplicate entries in capabilities.service list are removed preserving first occurrence."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(fs, {config_path: {"capabilities": {"service": ["tmux", "docker", "tmux"]}}})
+
+    assert svc.load().capabilities == {"service": ["tmux", "docker"]}
 
 
 def test_capabilities_overlay_overrides_per_key() -> None:
@@ -272,16 +294,17 @@ def test_capabilities_overlay_overrides_per_key() -> None:
     )
 
     # Local overlay wins for the overridden slot.
-    assert svc.load().capabilities == {"service": "my-local-orchestrator"}
+    assert svc.load().capabilities == {"service": ["my-local-orchestrator"]}
 
 
 def test_capabilities_aliased_from_service_orchestrator() -> None:
+    """Legacy service_orchestrator key folds into capabilities["service"] as a one-element list."""
     config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
     fs = FakeFilesystem(files={config_path: ""})
     svc = _service(fs, {config_path: {"service_orchestrator": "winter-service-tmux"}})
 
     config = svc.load()
-    assert config.capabilities == {"service": "winter-service-tmux"}
+    assert config.capabilities == {"service": ["winter-service-tmux"]}
 
 
 def test_capabilities_explicit_wins_over_service_orchestrator_alias() -> None:
@@ -298,7 +321,7 @@ def test_capabilities_explicit_wins_over_service_orchestrator_alias() -> None:
     )
 
     config = svc.load()
-    assert config.capabilities["service"] == "A"
+    assert config.capabilities["service"] == ["A"]
 
 
 def test_capabilities_empty_when_neither_key_present() -> None:
@@ -555,3 +578,57 @@ def test_dashboard_layout_overlay_overrides_base() -> None:
     )
 
     assert svc.load().dashboard.layout == DashboardLayout.list
+
+
+# ── capabilities.<slot> = str | list[str] (R2) ────────────────────────────────
+
+
+def test_capabilities_service_string_folds_to_single_element_list() -> None:
+    """capabilities.service = "tmux" (bare string) → ["tmux"] internally."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(fs, {config_path: {"capabilities": {"service": "winter-service-tmux"}}})
+
+    config = svc.load()
+    assert config.capabilities["service"] == ["winter-service-tmux"]
+
+
+def test_service_orchestrator_single_string_normalizes_to_one_element_capabilities_list() -> None:
+    """Legacy service_orchestrator (singular) folds into capabilities["service"] as a one-element list."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(fs, {config_path: {"service_orchestrator": "winter-service-tmux"}})
+
+    config = svc.load()
+    assert config.capabilities["service"] == ["winter-service-tmux"]
+
+
+def test_capabilities_service_list_stored_in_declared_order() -> None:
+    """capabilities.service = ["tmux", "docker"] → list stored in declared order."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {config_path: {"capabilities": {"service": ["winter-service-tmux", "winter-service-docker"]}}},
+    )
+
+    config = svc.load()
+    assert config.capabilities["service"] == ["winter-service-tmux", "winter-service-docker"]
+
+
+def test_capabilities_service_list_explicit_wins_over_legacy_key() -> None:
+    """When capabilities.service is set, the legacy service_orchestrator key is ignored."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "capabilities": {"service": ["A", "B"]},
+                "service_orchestrator": "ignored",
+            }
+        },
+    )
+
+    config = svc.load()
+    assert config.capabilities["service"] == ["A", "B"]

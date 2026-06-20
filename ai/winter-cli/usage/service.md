@@ -30,7 +30,7 @@ winter service logs alpha --since=2026-06-13T10:00:00Z  # since absolute timesta
 winter service logs alpha -t                          # prefix each line with its timestamp
 ```
 
-`winter service` owns a stable `up`/`down`/`status`/`restart`/`logs` interface and dispatches each invocation to whichever orchestrator the workspace registers. Consumers depend on `winter service …` and never on the orchestrator's implementation, so a workspace can swap tmux for containers or a supervising daemon without re-teaching agents, docs, or habits.
+`winter service` owns a stable `up`/`down`/`status`/`restart`/`logs` interface and dispatches each invocation to the orchestrator(s) the workspace registers. Consumers depend on `winter service …` and never on the orchestrator's implementation, so a workspace can swap tmux for containers or a supervising daemon without re-teaching agents, docs, or habits.
 
 `status`, `restart`, and `logs` use **segment-aware glob PATTERNS** over `<env>/<service>` — the same vocabulary `winter ws` uses for `<env>/<repo>` (see [ws/patterns.md](./ws/patterns.md)). Within each segment, `*`, `?`, and `[...]` match as usual; `*` does not cross `/`. A bare `<env>` (no slash) expands to `<env>/*`. Multiple patterns can be passed in one invocation. Cross-environment selection is supported: `'*/backend'` selects the `backend` service across every env. `up` and `down` always operate on a whole env (no pattern syntax) — or on `workspace` (see below). For `restart` and `logs`, at least one pattern is required (action commands require an explicit target — no implicit "everything", mirroring `winter ws merge` requiring a source ref). For `status`, omitting all patterns selects every service in every env (read-shaped, defaults to all like `winter ws status`).
 
@@ -57,7 +57,52 @@ For `status`/`restart`/`logs`, `workspace` patterns are forwarded verbatim to th
 
 `workspace` is also a **reserved feature-environment name**: `winter ws init workspace` is rejected with an error. See [ws/init.md](./ws/init.md).
 
-Registering an orchestrator uses the capability registry: `capabilities.service = "<name>"` in the `[capabilities]` table of `.winter/config.toml` names the extension, and `provides.service = "<path>"` in that extension's `[provides]` table in `winter-ext.toml` declares the entrypoint. When exactly one extension provides the slot, the `capabilities.service` binding is optional (implicit sole-provider). Two providers with no explicit binding is an ambiguity error. The legacy keys `service_orchestrator` (config) and `orchestrate_services` (manifest) are still accepted as **deprecated** aliases — config-load folds `service_orchestrator` into `capabilities.service`; `capability_entrypoint()` falls back to `orchestrate_services` when `provides.service` is absent. See [setup.md#capability-registry](../setup.md#capability-registry) for the full resolution model and [capabilities.md](./capabilities.md) to introspect the current binding.
+### Registering orchestrator(s)
+
+A workspace can bind **one or more** service providers through the capability registry. The simplest form binds a single provider — for multi-provider workspaces, use the ordered list.
+
+**Single provider** — `capabilities.service = "<name>"` in the `[capabilities]` table of `.winter/config.toml`. When exactly one installed extension declares `provides.service`, the binding is optional (implicit sole-provider). When two or more extensions declare `provides.service` with no explicit binding, all are bound implicitly (implicit-all) — see [setup.md#capability-registry](../setup.md#capability-registry).
+
+**Multiple providers (ordered list)** — `capabilities.service = ["<name-1>", "<name-2>"]` in the `[capabilities]` table of `.winter/config.toml`. The list order is deterministic for stable output only — no dependency or startup-ordering semantics are implied. A single-entry list is equivalent to a single-provider binding and never triggers a `describe` call.
+
+**Back-compat:** the legacy single-string keys `service_orchestrator` (config) and `orchestrate_services` (manifest) are still accepted — see [setup.md#deprecated-keys](../setup.md#deprecated-keys) for the normalisation semantics. New workspaces should use `[capabilities].service`.
+
+See [setup.md#capability-registry](../setup.md#capability-registry) for the full resolution model and [capabilities.md](./capabilities.md) to introspect the current binding.
+
+### Adding a second provider
+
+Shipping `provides.service` in a new extension's `winter-ext.toml` auto-binds it alongside any existing provider with no further config change — the implicit-all rule kicks in. Each participating provider **must implement `describe`** (a provider that does not is rejected at index-build time when a targeted `logs` or `restart` is issued). After adding or updating a provider, verify conformance:
+
+```bash
+winter ext verify <path-to-extension-dir>
+```
+
+This checks that the extension implements every action required by the bundled service spec (including `describe`). Run it against each installed provider after changing the service contract. See [ext.md](./ext.md) for the full `winter ext verify` reference.
+
+### `up` / `down` fan-out (multi-provider)
+
+With a single provider, `up` and `down` are forwarded directly to that provider — no index, no polling.
+
+With multiple providers:
+
+- **`up` — forward fan-out.** Providers are started in a deterministic order (the order declared in `capabilities.service`). If a provider's `up` exits non-zero, the fan-out aborts and the remaining providers are not started. The first non-zero exit code is returned. No readiness polling occurs between providers.
+- **`down` — best-effort fan-out.** Providers are stopped in the same deterministic order. A non-zero exit from one provider is noted but does not prevent the others from being called. The first non-zero exit code is returned; 0 is returned if all providers succeeded.
+
+### Service→provider ownership (multi-provider)
+
+When two or more providers are bound, winter builds a **service→provider ownership index** before routing `logs` and `restart`. It does this by calling each provider's `describe` action (see [describe wire contract](#describe-wire-contract) below). If two providers claim the same service name, winter aborts with a `DuplicateOwnershipError` naming the service and both providers — each service must be owned by exactly one provider.
+
+With a single provider, `describe` is never called — the sole provider implicitly owns every service.
+
+### `logs` and `restart` routing (multi-provider)
+
+`logs` and `restart` are **routed to the owning provider** for each matched service via the ownership index. With a single provider, patterns are forwarded verbatim without building an index.
+
+`logs -f` (follow mode) is supported only when the matched services resolve to **a single owning provider**. If the selection would span multiple providers, winter writes an actionable error to stderr and returns 1 without opening any stream. Non-follow `logs` works across all providers (the streams are merged into a single output).
+
+### `status` (multi-provider)
+
+With multiple providers, each provider's `status` output is independently fetched, parsed, and **merged** into a single `StatusDocument` before filtering and rendering. A provider whose output cannot be parsed surfaces an actionable error naming that provider; the worst exit code across all providers is adopted.
 
 ## Local-path override
 
@@ -71,7 +116,9 @@ winter --service-orchestrator=alpha/winter-service-tmux service up alpha
 WINTER_SERVICE_ORCHESTRATOR=alpha/winter-service-tmux winter service status
 ```
 
-**Precedence (highest wins):** `--service-orchestrator` flag → `WINTER_SERVICE_ORCHESTRATOR` env var → `service_orchestrator` in `.winter/config.toml`.
+**Precedence (highest wins):** `--service-orchestrator` flag → `WINTER_SERVICE_ORCHESTRATOR` env var → `capabilities.service` / `service_orchestrator` key in `.winter/config.toml`.
+
+**Scope with multiple providers:** the override flag collapses fan-out to a single provider for that invocation — the configured providers are ignored and dispatch goes to the override target only.
 
 **Path-vs-name disambiguation:**
 - If the value contains an OS path separator (`/` on POSIX) or resolves to an existing directory → **path mode**: reads `winter-ext.toml` from that directory directly, skipping the config-key-present and matches-an-installed-extension checks. The directory must still declare a `service` entrypoint (`provides.service`, or the legacy `orchestrate_services`) in its `winter-ext.toml`, and that entrypoint file must exist on disk.
@@ -114,6 +161,7 @@ This is the full spec a service-orchestrator extension is written against — co
 winter invokes the entrypoint differently depending on the action:
 
 ```
+<entrypoint> <action>                         # describe
 <entrypoint> <action> <env>                   # up, down
 <entrypoint> <action> [<pattern>...]          # status, restart, logs
 ```
@@ -122,7 +170,9 @@ winter invokes the entrypoint differently depending on the action:
 
 **Patterns are raw user tokens on argv.** There is no `--` guard between the action and the patterns, so an orchestrator must tolerate a pattern that begins with `-`. (In practice, valid `<env>/<service>` patterns never start with `-`, but a robust implementation should not assume this.) Note: at the winter CLI boundary, Click rejects a bare `-`-leading token as an unknown option (exit 2); pass it after `--` (e.g. `winter service restart -- -weird`) so Click treats it as a positional. Winter then forwards the token verbatim to the orchestrator — without a `--` guard — so the orchestrator still receives the raw token and must tolerate it.
 
-An implementation **must accept all five action words** even if only to refuse one it does not implement: for an unsupported action it should exit non-zero with a message, which winter passes through.
+An implementation **must accept all six action words** even if only to refuse one it does not implement: for an unsupported action it should exit non-zero with a message, which winter passes through.
+
+The `describe` action takes no positionals and is called by winter internally when multiple providers are bound.  It returns a JSON object listing the service names owned by this provider.
 
 ### Always-present environment variables
 
@@ -212,6 +262,18 @@ Null / empty conventions:
 An empty `{"envs": []}` is a valid, non-error document (no services currently visible).
 
 The orchestrator's **stderr must reach winter's stderr** (diagnostics), NOT be merged into the JSON stdout — mirroring the `logs` contract.
+
+#### `describe` wire contract
+
+The orchestrator **must emit a single JSON object on stdout** for the `describe` action:
+
+```json
+{"services": ["api", "worker", "frontend"]}
+```
+
+`services` is the list of service names this provider owns. Unknown or empty → `{"services": []}`. Winter uses this to build a service-name → provider ownership index when multiple providers are bound (`capabilities.service = [...]`, or two or more self-registered candidates). Missing or non-list `services` key is treated as empty (shape-stability).
+
+`describe` is called **only when two or more providers are bound** (an explicit `capabilities.service` list of 2+, or 2+ self-registered candidates with no explicit binding). Single-provider workspaces are never asked to `describe`.
 
 ### Render contract (winter stdout → user/pipe)
 

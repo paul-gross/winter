@@ -26,7 +26,11 @@ adopt_extensions = "winter"                   # how aggressively standalone repo
 doctor = "ai/project/doctor.sh"               # optional; workspace-level `winter doctor` probe script (see Doctor below)
 
 [capabilities]
-service = "winter-service-tmux"               # bind the `service` capability slot to an installed provider extension
+service = "winter-service-tmux"               # bind the `service` slot to a single installed provider extension
+
+# Multi-provider alternative: bind a list of providers to the slot.
+# service = ["winter-service-tmux", "winter-service-docker"]
+# All bound providers participate; order carries no execution semantics.
 
 # Port allocation — all four keys are optional; shown here with their defaults.
 base_port = 4000          # start of this workspace's port band; set a different value to separate co-located workspaces
@@ -253,37 +257,42 @@ Winter routes capabilities (service orchestration and future slots) through a un
 | Explicit `capabilities.<slot>` binding → valid provider | **explicit** — dispatches to that extension |
 | No binding, exactly one extension provides the slot | **implicit** — dispatches to the sole provider |
 | No binding, exactly one provider but entrypoint file missing | **implicit** (describe) / dispatch error (resolve) — entrypoint validity re-checked at dispatch time |
-| No binding, two or more providers | **ambiguous** — any dispatch errors, naming all candidates and the `capabilities.<slot>` config key |
+| No binding, two or more providers | **implicit (all bound)** — every candidate is bound, in deterministic name order; all are dispatched |
 | Binding to an extension that is not installed, or installed but not declaring `provides.<slot>`, or entrypoint file missing | **invalid** — any dispatch errors with a specific message |
 | No provider installed | no dispatch possible |
 
-`winter capabilities` introspects the registry (read-only, always exits 0 — see [usage/capabilities.md](./usage/capabilities.md)). `winter doctor`'s `[capabilities]` probe group evaluates each slot: ambiguous or invalid → `fail`, implicit sole provider → `pass` (with a note), explicit valid binding → `pass`, no provider → `warn`.
+`winter capabilities` introspects the registry (read-only, always exits 0 — see [usage/capabilities.md](./usage/capabilities.md)). `winter doctor`'s `[capabilities]` probe group evaluates each slot: invalid → `fail`, implicit provider(s) → `pass` (with a note), explicit valid binding → `pass`, no provider → `warn`.
+
+After changing the service contract (adding, removing, or updating a provider), run `winter ext verify <path-to-extension-dir>` against each installed provider to confirm it conforms to the bundled spec (see [usage/ext.md](./usage/ext.md)).
 
 The only in-scope slot today is `service`. Future slots are added to `CapabilitySlot` in the code and the registry handles them uniformly.
 
 ### Deprecated keys
 
-- **`service_orchestrator`** in config — folded into `capabilities.service` automatically at config load; ignored when `capabilities.service` is already set explicitly. Use `[capabilities].service` for new workspaces.
+- **`service_orchestrator`** in config — single-string legacy key; normalised at config load into a one-element `capabilities.service` binding. Ignored when `capabilities.service` is already set explicitly. Use `[capabilities].service` for new workspaces.
 - **`orchestrate_services`** in manifest — the service-slot-only predecessor of `provides.service`; still read as a fallback via `capability_entrypoint()`. Use `[provides].service` for new extensions.
 
 ## Service orchestration
 
-`winter service` (see [usage/service.md](./usage/service.md)) owns a stable `up`/`down`/`status`/`restart`/`logs` interface and dispatches each invocation to the extension bound to the `service` capability slot. The interface lives in core winter; the implementation lives in whichever extension the workspace points at (tmux, containers, a daemon), so consumers never depend on the implementation.
+`winter service` (see [usage/service.md](./usage/service.md)) owns a stable `up`/`down`/`status`/`restart`/`logs` interface and dispatches each invocation to the extension(s) bound to the `service` capability slot. The interface lives in core winter; the implementation lives in whichever extension(s) the workspace points at (tmux, containers, a daemon), so consumers never depend on the implementation.
 
-### Registering an orchestrator
+### Registering orchestrator(s)
 
-Two keys connect the interface to an implementation:
+Three config paths connect the interface to an implementation:
 
-- **Workspace config** — `capabilities.service = "<extension-name>"` in the `[capabilities]` table in `.winter/config.toml` (or the `config.local.toml` overlay). The name must match a `[[standalone_repository]]` that ships a `winter-ext.toml`. If only one installed extension declares `provides.service`, the binding is implicit and the explicit config entry is optional.
-- **Extension manifest** — `provides.service = "<path>"` in the `[provides]` table in that extension's `winter-ext.toml`, an executable entrypoint relative to the extension's repo root.
+- **Single provider** — `capabilities.service = "<extension-name>"` in the `[capabilities]` table in `.winter/config.toml` (or the `config.local.toml` overlay). The name must match a `[[standalone_repository]]` that ships a `winter-ext.toml`. If only one installed extension declares `provides.service`, the binding is implicit and the explicit config entry is optional.
+- **Multiple providers** — `capabilities.service = ["<name-1>", "<name-2>"]` (a list value in the same `[capabilities]` table). Every named provider is bound; list order carries no execution semantics. Each provider must declare `provides.service` in its `winter-ext.toml`. Repeated names are de-duplicated (preserving order) at config load.
+- **Extension manifest** — `provides.service = "<path>"` in the `[provides]` table in each extension's `winter-ext.toml`, an executable entrypoint relative to the extension's repo root.
 
-With both in place, `winter service <action> …` resolves through the capability registry and runs the entrypoint. If the binding is ambiguous (two+ providers, no explicit config entry), the command errors naming all candidates and the `capabilities.service` config key. For the full resolution model and deprecated key handling, see [## Capability registry](#capability-registry) above.
+With binding and manifest in place, `winter service <action> …` resolves through the capability registry. Self-registration and explicit binding compose: an explicit `capabilities.service` (string or list) selects exactly those providers; with no explicit binding, **all** installed extensions that declare `provides.service` are bound (one → implicit; two or more → all bound, implicitly). For the full resolution model and deprecated key handling, see [## Capability registry](#capability-registry) above.
+
+For multi-provider fan-out behavior (`up` aborts on first failure, `down` is best-effort, the ownership index for targeted `logs`/`restart`, the `logs -f` single-owner restriction, and merged `status` — all with no readiness gate or ordering semantics), see [usage/service.md](./usage/service.md).
 
 The legacy keys `service_orchestrator` (config) and `orchestrate_services` (manifest) are still accepted as deprecated aliases — see the Capability registry section for the fallback semantics.
 
 ### Entrypoint contract
 
-The full implementer-facing contract — uniform argv rule, per-action env vars, NDJSON wire format for `logs`, structured JSON status document (schema, shape-stability rule, and graceful-degradation behavior) for `status`, plain-line and table render formats, idempotent backstop filters, tail-with-follow limitation, and exit codes — lives in [usage/service.md#orchestrator-contract](./usage/service.md#orchestrator-contract). A third-party orchestrator can conform without reading winter's source.
+The full implementer-facing contract — uniform argv rule, per-action env vars, NDJSON wire format for `logs`, structured JSON status document (schema, shape-stability rule, and graceful-degradation behavior) for `status`, `describe` action for multi-provider ownership, plain-line and table render formats, idempotent backstop filters, tail-with-follow limitation, and exit codes — lives in [usage/service.md#orchestrator-contract](./usage/service.md#orchestrator-contract). A third-party orchestrator can conform without reading winter's source.
 
 ## Doctor probes
 

@@ -24,11 +24,11 @@ The surface is two command groups plus seven standalone commands:
 - **`winter repo …`** — add, remove, and list the repositories declared in the config.
 - **`winter ext …`** — extension contract management: `verify` checks that an extension conforms to the bundled capability spec; `new` scaffolds a new extension skeleton that passes verification out of the box (see [usage/ext.md](./usage/ext.md)).
 - **`winter dashboard`** — interactive TUI for workspace status, with remappable keybindings.
-- **`winter service <action> [<env>/<service>…]`** — a stable `up`/`down`/`status`/`restart`/`logs` interface that dispatches to whichever orchestrator extension the workspace registers. `up`/`down` take a single `<env>`; `status`/`restart`/`logs` take `<env>/<service>` PATTERNS. All five also accept the reserved `workspace` scope (see [usage/service.md](./usage/service.md)).
+- **`winter service <action> [<env>/<service>…]`** — a stable `up`/`down`/`status`/`restart`/`logs` interface that dispatches to the orchestrator extension(s) the workspace registers. A single provider is dispatched directly; multiple bound providers are fanned out on `up` (abort on first failure) and `down` (best-effort, continues past failures). No readiness gate or ordering semantics between providers. `up`/`down` take a single `<env>`; `status`/`restart`/`logs` take `<env>/<service>` PATTERNS. All five also accept the reserved `workspace` scope (see [usage/service.md](./usage/service.md)).
 - **`winter doctor`** — preflight health checks.
 - **`winter lint`** — convention checks.
 - **`winter graph`** — the module dependency graph.
-- **`winter capabilities`** — list each capability slot, its bound provider extension, and other installed candidates.
+- **`winter capabilities`** — list each capability slot, its bound provider extension(s), and other installed candidates. For the service slot, `--json` emits a scalar `bound` for single-provider and an array for multi-provider (scalar-for-single preserves compatibility with single-provider machine clients).
 
 Most flows are multi-repo: a single `winter ws` invocation fans out over every matched worktree in parallel, honoring pinned-repo rules. Commands accept segment-aware glob `PATTERNS` over `<env>/<repo>`, emit `--json` for tooling, and never touch the network unless the command's purpose is to (`fetch`/`pull`/`push`, or `status --fetch`).
 

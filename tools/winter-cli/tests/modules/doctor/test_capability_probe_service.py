@@ -119,28 +119,6 @@ def test_implicit_binding_bad_entrypoint_emits_fail() -> None:
     assert r.remediation is not None
 
 
-# ── ambiguous (unbound, ≥2 candidates) → fail naming all candidates ──────────
-
-
-def test_ambiguous_emits_fail_naming_all_candidates() -> None:
-    res = _resolution(
-        binding_kind="unbound",
-        candidates=(_candidate("ext-a"), _candidate("ext-b")),
-    )
-    assert res.is_ambiguous
-    svc = _svc([res])
-
-    results = svc.run()
-
-    assert len(results) == 1
-    r = results[0]
-    assert r.status == ProbeStatus.fail
-    assert "ext-a" in r.message
-    assert "ext-b" in r.message
-    assert r.remediation is not None
-    assert "capabilities.service" in r.remediation
-
-
 # ── invalid binding → fail with error message ────────────────────────────────
 
 

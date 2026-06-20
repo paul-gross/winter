@@ -7,11 +7,13 @@ from dataclasses import dataclass, field
 class ArityKind(enum.Enum):
     """How the orchestrator entrypoint receives its target selection.
 
+    `no_positionals` — no positionals after the action word (`describe`).
     `single_env` — exactly one positional: the env name (`up`, `down`).
     `patterns_optional` — zero or more `<env>/<service>` glob patterns (`status`).
     `patterns_required` — one or more `<env>/<service>` glob patterns (`restart`, `logs`).
     """
 
+    no_positionals = "no-positionals"
     single_env = "single-env"
     patterns_optional = "patterns-optional"
     patterns_required = "patterns-required"
@@ -27,11 +29,16 @@ class CheckKind(enum.Enum):
     `forwards_params` — the entrypoint echoes its argv back on stdout or stderr.
         WINTER_* env vars are set on every dispatch but are not asserted by this
         check.
+    `emits_describe_json` — the entrypoint's stdout for the `describe` action is
+        parseable as the required ``{"services": [...]}`` JSON object. A provider
+        that passes ``accepts-action`` for ``describe`` but emits malformed JSON
+        would otherwise only fail at runtime via ``DescribeParseError``.
     """
 
     accepts_action = "accepts-action"
     refuses_unknown = "refuses-unknown"
     forwards_params = "forwards-params"
+    emits_describe_json = "emits-describe-json"
 
 
 @dataclass(frozen=True)
