@@ -432,5 +432,7 @@ async def test_worktree_action_context_carries_siblings_and_workspace():
     assert sibling_names == ["winter-cli", "winter-docs"]
     assert inv.context.environment_worktrees.environment.name == "alpha"
     # Explicit workspace handle (root_path, main_branch).
-    assert inv.context.workspace is _WORKSPACE
-    assert inv.context.workspace.main_branch == "main"
+    workspace = inv.context.workspace
+    assert workspace is not None
+    assert workspace is _WORKSPACE
+    assert workspace.main_branch == "main"

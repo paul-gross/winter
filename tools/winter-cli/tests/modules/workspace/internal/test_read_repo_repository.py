@@ -458,9 +458,9 @@ def _commit(path: Path, filename: str, content: str, message: str) -> None:
 
 
 def _project(path: Path, name: str = "demo", main_branch: str | None = "main") -> ProjectRepository:
-    # main_branch=None is deliberately out-of-contract: it exercises get_project_status's
-    # tolerance of a repo with no main branch (only the tracking probe runs).
-    return ProjectRepository(name=name, main_path=path, main_branch=main_branch)  # type: ignore[arg-type]
+    # main_branch=None models a repo with no configured main branch: get_project_status
+    # then runs only the tracking probe (no origin/<main> ahead/behind).
+    return ProjectRepository(name=name, main_path=path, main_branch=main_branch)
 
 
 def test_real_clean_tree(tmp_path: Path, repo: ReadRepoRepository) -> None:

@@ -54,7 +54,7 @@ class ProjectRepository:
 
     name: str
     main_path: Path
-    main_branch: str
+    main_branch: str | None
     pinned: bool = False
     url: str | None = None
     git_excludes: list[str] = dataclasses.field(default_factory=list)
