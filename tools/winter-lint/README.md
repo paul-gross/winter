@@ -47,6 +47,31 @@ entirely — code fences hold illustrative literals (sample commands, example
 prompts), not live dependencies, and can't carry an inline HTML-comment marker
 without corrupting the sample.
 
+## Remediating a failure
+
+When the check fails on a reference, fix it in this order — most-correct first:
+
+1. **It's a real dependency** → declare the target in the owner module's
+   `winter-ext.toml` `requires`. **This is a maintainer decision, not an
+   agent's:** a `requires` edge commits the module to needing that dependency
+   wherever it ships, so an agent must get explicit user sign-off before adding
+   one — it may *propose* the edge, never add it unilaterally.
+2. **It's purely illustrative** — a doc citing another module to show the
+   notation, not to depend on it → mark the line `<!-- winter-lint:example -->`.
+   An agent may do this on its own.
+3. **The reference is wrong or unwanted** → remove or rephrase it. Last resort,
+   only when the reference shouldn't exist at all — don't reach for deletion to
+   silence the check when (1) or (2) is the honest fix.
+
+A **core** module (`winter` / `winter-cli` / `workspace`) can't use option 1 —
+core must not depend on an extension — so its only honest fixes are (2) or (3).
+
+There is no first-class *optional dependency* tier yet: an optional integration
+(a module that references another only when it happens to be installed) is
+declared in `requires` today, the same as a hard dependency, with a comment
+noting it's optional. The same sign-off rule applies — only a maintainer adds
+the edge.
+
 ## How it gets the graph
 
 The check is graph-driven. It does not rebuild the ecosystem graph itself — it
