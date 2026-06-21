@@ -1,0 +1,294 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/paul-gross/winter/blob/master/tools/winter-cli/schemas/ws-status-v1.json",
+  "title": "WsStatusSnapshot",
+  "description": "JSON output of `winter ws status --json` (schema_version 1). All diagnostics go to stderr; this document appears on stdout only.",
+  "type": "object",
+  "required": ["schema_version", "environments", "source_checkouts", "workspace"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Consumers should reject or warn on unexpected values."
+    },
+    "environments": {
+      "type": "array",
+      "description": "One EnvSnapshot per matching feature environment. Filtered by patterns when patterns are given.",
+      "items": {
+        "$ref": "#/$defs/EnvSnapshot"
+      }
+    },
+    "source_checkouts": {
+      "type": "array",
+      "description": "One SourceCheckoutSnapshot per source checkout. Always the full workspace view regardless of patterns.",
+      "items": {
+        "$ref": "#/$defs/SourceCheckoutSnapshot"
+      }
+    },
+    "workspace": {
+      "$ref": "#/$defs/WorkspaceLevelSnapshot",
+      "description": "Workspace-level snapshot — extensions, orphans, config drift. Always the full workspace view."
+    }
+  },
+  "$defs": {
+    "EnvSnapshot": {
+      "type": "object",
+      "required": ["name", "index", "port_base", "feature_branch", "worktrees"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Environment name (e.g. \"alpha\")."
+        },
+        "index": {
+          "type": "integer",
+          "description": "Persisted port-offset index for this env (from .winter/state.toml)."
+        },
+        "port_base": {
+          "type": "integer",
+          "description": "Assigned port base (base_port + index * ports_per_env; defaults to 4000 + index * 20)."
+        },
+        "feature_branch": {
+          "type": ["string", "null"],
+          "description": "Remote feature branch this env tracks, or null when not connected."
+        },
+        "worktrees": {
+          "type": "array",
+          "description": "One WorktreeSnapshot per matching repo worktree. Filtered by patterns when patterns are given.",
+          "items": {
+            "$ref": "#/$defs/WorktreeSnapshot"
+          }
+        }
+      }
+    },
+    "WorktreeSnapshot": {
+      "type": "object",
+      "required": [
+        "repo",
+        "branch",
+        "upstream",
+        "ahead",
+        "behind",
+        "tracking_ahead",
+        "tracking_behind",
+        "tracking_ref_present",
+        "staged",
+        "unstaged",
+        "untracked",
+        "dirty",
+        "last_commit_subject",
+        "pinned"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "repo": {
+          "type": "string",
+          "description": "Repository name (e.g. \"winter\")."
+        },
+        "branch": {
+          "type": ["string", "null"],
+          "description": "Local branch name."
+        },
+        "upstream": {
+          "type": ["string", "null"],
+          "description": "Configured remote-tracking ref (e.g. \"origin/master\"), or null when none is set."
+        },
+        "ahead": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Commits ahead of origin/<main-branch>."
+        },
+        "behind": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Commits behind origin/<main-branch>."
+        },
+        "tracking_ahead": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Commits ahead of the configured upstream ref."
+        },
+        "tracking_behind": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Commits behind the configured upstream ref."
+        },
+        "tracking_ref_present": {
+          "type": "boolean",
+          "description": "Whether the upstream tracking ref resolves in the local git store."
+        },
+        "staged": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of staged files."
+        },
+        "unstaged": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of unstaged modified/deleted files."
+        },
+        "untracked": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of untracked files."
+        },
+        "dirty": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Deduplicated union: staged + unstaged + untracked."
+        },
+        "last_commit_subject": {
+          "type": ["string", "null"],
+          "description": "First line of the most recent commit message, or null when the branch has no commits beyond origin/<main>."
+        },
+        "pinned": {
+          "type": "boolean",
+          "description": "Whether the repo is pinned to its main branch."
+        }
+      }
+    },
+    "SourceCheckoutSnapshot": {
+      "type": "object",
+      "required": ["repo", "branch", "behind_origin", "ahead_origin", "dirty", "drift"],
+      "additionalProperties": false,
+      "properties": {
+        "repo": {
+          "type": "string",
+          "description": "Repository name."
+        },
+        "branch": {
+          "type": ["string", "null"],
+          "description": "Current local branch in the source checkout."
+        },
+        "behind_origin": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Commits behind origin/<main-branch>."
+        },
+        "ahead_origin": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Commits ahead of origin/<main-branch> (shouldn't happen on a well-managed main checkout)."
+        },
+        "dirty": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of changed files (staged + unstaged + untracked) in the source checkout."
+        },
+        "drift": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Drift findings for this checkout (e.g. missing declared sub-paths). Empty array when clean."
+        }
+      }
+    },
+    "WorkspaceLevelSnapshot": {
+      "type": "object",
+      "required": ["root_path", "extensions", "orphans", "drift_missing", "drift_undeclared", "standalone_pins"],
+      "additionalProperties": false,
+      "properties": {
+        "root_path": {
+          "type": "string",
+          "description": "Absolute path to the workspace root."
+        },
+        "extensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Names of installed standalone repos (extensions). A config-only read."
+        },
+        "orphans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OrphanSnapshot"
+          },
+          "description": "Filesystem entries with no declared owner."
+        },
+        "drift_missing": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Repo names declared in config but absent on disk (run `winter ws init` to fix)."
+        },
+        "drift_undeclared": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Directory names present under projects/ but not in config."
+        },
+        "standalone_pins": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StandalonePinSnapshot"
+          },
+          "description": "One StandalonePinSnapshot per declared standalone repo that has a ref configured."
+        }
+      }
+    },
+    "OrphanSnapshot": {
+      "type": "object",
+      "required": ["kind", "path", "safe_to_remove", "notes"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "Short label for the orphan type (e.g. \"worktree_dir\")."
+        },
+        "path": {
+          "type": "string",
+          "description": "Absolute path to the orphan."
+        },
+        "safe_to_remove": {
+          "type": "boolean",
+          "description": "Whether `winter ws prune` would remove this without a blocker."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Human-readable explanation of why this is an orphan or why it can't be removed."
+        }
+      }
+    },
+    "StandalonePinSnapshot": {
+      "type": "object",
+      "required": ["name", "ref", "kind", "locked_commit", "config_ref_drift", "head_drift", "head_commit"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Matches [[standalone_repository]].name in the config."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The ref string currently declared in the config (branch name, tag, or commit SHA)."
+        },
+        "kind": {
+          "type": ["string", "null"],
+          "enum": ["branch", "tag", "commit", null],
+          "description": "How the ref was classified at the last ws update or ws init. null when no lock entry exists yet."
+        },
+        "locked_commit": {
+          "type": ["string", "null"],
+          "description": "Full 40-char SHA recorded in .winter/config.lock at the last pin operation. null when no lock entry exists."
+        },
+        "config_ref_drift": {
+          "type": "boolean",
+          "description": "true when the config's ref differs from the ref recorded in the lock file."
+        },
+        "head_drift": {
+          "type": "boolean",
+          "description": "true when the standalone's current HEAD commit does not match locked_commit."
+        },
+        "head_commit": {
+          "type": ["string", "null"],
+          "description": "Current HEAD commit of the standalone repo (full 40-char SHA), or null when absent on disk."
+        }
+      }
+    }
+  }
+}

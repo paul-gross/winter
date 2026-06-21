@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 from pathlib import Path
@@ -9,7 +10,7 @@ import click
 import pytest
 
 from winter_cli import cli as cli_module
-from winter_cli.cli import LazyGroup, _bytecode_cache_prefix, _cli_group
+from winter_cli.cli import LazyGroup, _bytecode_cache_prefix, _cli_group, _configure_logging
 
 # ── LazyGroup (lazy subcommand imports) ──────────────────────────────────────
 
@@ -128,6 +129,75 @@ def test_dont_write_bytecode_is_not_forced_globally() -> None:
     # Importing the CLI redirects the cache rather than disabling it; the prefix
     # is set process-wide (here, or by a caller who pre-set it before import).
     assert sys.pycache_prefix is not None
+
+
+# ── Logging configuration ─────────────────────────────────────────────────────
+
+
+class TestConfigureLogging:
+    """Unit tests for _configure_logging — isolate by resetting the logger after each test."""
+
+    def setup_method(self) -> None:
+        """Reset the winter_cli logger to a clean state before each test."""
+        self._logger = logging.getLogger("winter_cli")
+        self._orig_level = self._logger.level
+        self._orig_handlers = self._logger.handlers[:]
+        self._logger.handlers.clear()
+        self._logger.setLevel(logging.NOTSET)
+
+    def teardown_method(self) -> None:
+        """Restore logger state after each test."""
+        self._logger.handlers.clear()
+        for h in self._orig_handlers:
+            self._logger.addHandler(h)
+        self._logger.setLevel(self._orig_level)
+
+    def test_verbose_flag_attaches_debug_handler_on_stderr(self) -> None:
+        """--verbose / -v wires a stderr StreamHandler at DEBUG."""
+        _configure_logging(verbose=True, log_level_env=None)
+        assert len(self._logger.handlers) == 1
+        handler = self._logger.handlers[0]
+        assert isinstance(handler, logging.StreamHandler)
+        assert handler.stream is sys.stderr
+        assert self._logger.level == logging.DEBUG
+
+    def test_env_var_info_attaches_info_handler(self) -> None:
+        """WINTER_LOG_LEVEL=INFO wires a StreamHandler at INFO."""
+        _configure_logging(verbose=False, log_level_env="INFO")
+        assert len(self._logger.handlers) == 1
+        assert self._logger.level == logging.INFO
+
+    def test_env_var_warning_attaches_warning_handler(self) -> None:
+        """WINTER_LOG_LEVEL=WARNING wires a StreamHandler at WARNING."""
+        _configure_logging(verbose=False, log_level_env="WARNING")
+        assert len(self._logger.handlers) == 1
+        assert self._logger.level == logging.WARNING
+
+    def test_env_var_case_insensitive(self) -> None:
+        """WINTER_LOG_LEVEL is case-insensitive (e.g. 'debug' works)."""
+        _configure_logging(verbose=False, log_level_env="debug")
+        assert len(self._logger.handlers) == 1
+        assert self._logger.level == logging.DEBUG
+
+    def test_verbose_takes_precedence_over_env_var(self) -> None:
+        """--verbose always sets DEBUG even when WINTER_LOG_LEVEL names a higher level."""
+        _configure_logging(verbose=True, log_level_env="WARNING")
+        assert self._logger.level == logging.DEBUG
+
+    def test_neither_flag_nor_env_attaches_no_handler(self) -> None:
+        """Without --verbose and without WINTER_LOG_LEVEL, no handler is added (silent)."""
+        _configure_logging(verbose=False, log_level_env=None)
+        assert len(self._logger.handlers) == 0
+
+    def test_unknown_env_var_level_attaches_no_handler(self) -> None:
+        """An unrecognised WINTER_LOG_LEVEL value is silently ignored — no handler, no crash."""
+        _configure_logging(verbose=False, log_level_env="BOGUS_LEVEL")
+        assert len(self._logger.handlers) == 0
+
+    def test_env_var_empty_string_attaches_no_handler(self) -> None:
+        """An empty WINTER_LOG_LEVEL (set but blank) is treated as not set."""
+        _configure_logging(verbose=False, log_level_env="")
+        assert len(self._logger.handlers) == 0
 
 
 # ── Config-error boundary ────────────────────────────────────────────────────

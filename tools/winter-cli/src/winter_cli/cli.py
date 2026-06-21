@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import os
 import sys
 from pathlib import Path
@@ -84,6 +85,34 @@ class LazyGroup(click.Group):
         return command
 
 
+def _configure_logging(verbose: bool, log_level_env: str | None) -> None:
+    """Attach a stderr StreamHandler to the winter_cli logger.
+
+    Resolution order (first wins):
+      1. ``--verbose`` / ``-v`` flag → DEBUG
+      2. ``WINTER_LOG_LEVEL`` env var (standard level name, case-insensitive)
+      3. Neither set → no handler attached (silent, matching previous behaviour)
+
+    All diagnostics go to **stderr** so that ``--json`` stdout stays pure JSON.
+    """
+    if verbose:
+        level = logging.DEBUG
+    elif log_level_env:
+        level = getattr(logging, log_level_env.upper(), None)
+        if not isinstance(level, int):
+            # Silently ignore an unrecognised level name — don't break the CLI.
+            return
+    else:
+        return
+
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    root_logger = logging.getLogger("winter_cli")
+    root_logger.setLevel(level)
+    root_logger.addHandler(handler)
+
+
 @click.group(cls=LazyGroup, lazy_subcommands=_LAZY_SUBCOMMANDS)
 @click.version_option(package_name="winter-cli", message="%(prog)s, version %(version)s")
 @click.option("--source-override", default=None, hidden=True)
@@ -100,10 +129,29 @@ class LazyGroup(click.Group):
         "service_orchestrator in .winter/config.toml."
     ),
 )
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    default=False,
+    help=(
+        "Enable DEBUG-level logging on stderr. "
+        "Equivalent to WINTER_LOG_LEVEL=DEBUG. "
+        "Diagnostics always go to stderr; --json stdout stays pure JSON."
+    ),
+)
 @click.pass_context
-def _cli_group(ctx: click.Context, source_override: str | None, service_orchestrator: str | None):
+def _cli_group(
+    ctx: click.Context,
+    source_override: str | None,
+    service_orchestrator: str | None,
+    verbose: bool,
+) -> None:
     """Winter — workspace management CLI."""
     from winter_cli.container import Container
+
+    # Wire logging before any subcommand runs.
+    _configure_logging(verbose, os.environ.get("WINTER_LOG_LEVEL"))
 
     # Resolve effective orchestrator override: flag > env var > config (config is
     # handled by the resolver itself; we only surface the boundary-level override here).

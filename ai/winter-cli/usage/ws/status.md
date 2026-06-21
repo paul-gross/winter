@@ -49,7 +49,16 @@ Shell reminder: quote patterns containing `*` or `?` to prevent shell glob expan
 
 ## JSON schema (`schema_version: 1`)
 
-`--json` emits a single JSON object (not NDJSON). Consumers should reject or warn on unexpected `schema_version` values.
+`--json` emits a single JSON object (not NDJSON) on **stdout**; all diagnostics (including those enabled by `-v`/`WINTER_LOG_LEVEL`) go to **stderr** and never appear in the JSON stream. Consumers should reject or warn on unexpected `schema_version` values.
+
+A machine-readable JSON Schema is checked into the repo at `tools/winter-cli/schemas/ws-status-v1.json`. Validate programmatically with `jsonschema`:
+
+```python
+import json, jsonschema
+schema = json.load(open("tools/winter-cli/schemas/ws-status-v1.json"))
+data   = json.loads(subprocess.check_output(["winter", "ws", "status", "--json"]))
+jsonschema.validate(data, schema)
+```
 
 **Top-level object:**
 
