@@ -12,7 +12,7 @@ Winter is a reusable workspace framework for AI-assisted development with Claude
 - **Multi-agent parallelism** — Multiple Claude instances run at once, each in their own environment. No collisions.
 - **Separation of App, Harness, and Workflow** — Three strictly separated layers: your application code, the AI harness (agents, skills, instructions), and the workflow scripts that orchestrate them. Each evolves independently. Your app codebases carry zero harness or workflow machinery.
 - **Shared, versioned workspace** — The workspace is itself a git repo. Share it across the team. Clone it and the entire setup — agents, skills, services, planning conventions — comes with it.
-- **Workspace visualization** — A TUI dashboard shows a matrix of statuses across dozens of repositories at a glance, with optional extensions for GitLab MR or GitHub PR information.
+- **Workspace visualization** — A TUI dashboard shows a matrix of statuses across dozens of repositories at a glance. The `winter-github` extension adds AI-native GitHub issue filing via the `/wg-issue` skill (GitLab MR / GitHub PR dashboard surfacing is planned, not yet available).
 
 ## 🚀 Quick Start
 
