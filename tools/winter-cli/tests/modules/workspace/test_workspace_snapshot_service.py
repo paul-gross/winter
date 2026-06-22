@@ -1177,3 +1177,99 @@ def test_dashboard_auto_empty_workspace_resolves_to_rows(
 
     assert snapshot.dashboard.configured_layout == "auto"
     assert snapshot.dashboard.resolved_layout == "repos-as-rows"
+
+
+# ── env decorator / extensions surface ───────────────────────────────────────
+
+
+def test_collect_env_decorator_populates_env_snapshot_extensions(
+    workspace: Workspace, workspace_config: WorkspaceConfig
+) -> None:
+    """An env decorator that writes into FeatureEnvironmentStatus.extensions is
+    serialised into the matching EnvSnapshot.extensions field.
+
+    This is the core Phase-1 Story-1 contract: the JSON status path runs
+    environment decorators and their badge strings are available in the
+    EnvSnapshot so `_env_snap_to_dict` can emit them.
+    """
+    alpha = _make_env(workspace, "alpha", 1)
+    worktree_statuses = {
+        "repo-a": _clean_repo_status("repo-a"),
+        "repo-b": _clean_repo_status("repo-b"),
+    }
+    svc = _service(
+        workspace,
+        workspace_config,
+        envs=[alpha],
+        feature_branch="feature/x",
+        worktree_statuses=worktree_statuses,
+    )
+
+    def badge_decorator(status: FeatureEnvironmentStatus, _path: Any) -> None:
+        status.extensions["test"] = "● 2/2"
+
+    snapshot = svc.collect(env_decorators=[badge_decorator])
+
+    env_snap = snapshot.environments[0]
+    assert env_snap.extensions == {"test": "● 2/2"}
+
+
+def test_collect_env_decorator_no_decorators_yields_empty_extensions(
+    workspace: Workspace, workspace_config: WorkspaceConfig
+) -> None:
+    """When no decorators are passed, EnvSnapshot.extensions is an empty dict."""
+    alpha = _make_env(workspace, "alpha", 1)
+    worktree_statuses = {
+        "repo-a": _clean_repo_status("repo-a"),
+        "repo-b": _clean_repo_status("repo-b"),
+    }
+    svc = _service(
+        workspace,
+        workspace_config,
+        envs=[alpha],
+        feature_branch="feature/x",
+        worktree_statuses=worktree_statuses,
+    )
+
+    snapshot = svc.collect()
+
+    assert snapshot.environments[0].extensions == {}
+
+
+def test_collect_raising_env_decorator_is_isolated(workspace: Workspace, workspace_config: WorkspaceConfig) -> None:
+    """A decorator that raises must not abort the snapshot — the exception is
+    swallowed per-decorator, and other decorators still run.
+
+    Mirrors the isolation contract already in get_environment_status for env
+    decorators, now exercised end-to-end through collect().
+    """
+    alpha = _make_env(workspace, "alpha", 1)
+    worktree_statuses = {
+        "repo-a": _clean_repo_status("repo-a"),
+        "repo-b": _clean_repo_status("repo-b"),
+    }
+    svc = _service(
+        workspace,
+        workspace_config,
+        envs=[alpha],
+        feature_branch="feature/x",
+        worktree_statuses=worktree_statuses,
+    )
+
+    bad_called: list[bool] = []
+    good_called: list[bool] = []
+
+    def bad_decorator(status: FeatureEnvironmentStatus, _path: Any) -> None:
+        bad_called.append(True)
+        raise RuntimeError("decorator exploded")
+
+    def good_decorator(status: FeatureEnvironmentStatus, _path: Any) -> None:
+        good_called.append(True)
+        status.extensions["ok"] = "running"
+
+    snapshot = svc.collect(env_decorators=[bad_decorator, good_decorator])
+
+    # bad_decorator ran (and was caught), good_decorator ran and wrote its badge.
+    assert bad_called == [True]
+    assert good_called == [True]
+    assert snapshot.environments[0].extensions == {"ok": "running"}

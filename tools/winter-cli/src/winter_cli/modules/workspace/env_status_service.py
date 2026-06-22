@@ -127,7 +127,10 @@ class EnvStatusService:
             for decorator in worktree_repo_decorators:
                 for wt_repo_status in wt_repo_statuses:
                     repo_path = env.path / wt_repo_status.worktree.repository.name
-                    decorator(wt_repo_status, repo_path)
+                    try:
+                        decorator(wt_repo_status, repo_path)
+                    except Exception:
+                        logger.warning("worktree repo decorator failed", exc_info=True)
 
         return wt_repo_statuses
 

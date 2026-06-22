@@ -79,6 +79,7 @@ jsonschema.validate(data, schema)
 | `port_base` | `int` | Assigned port base (`base_port + index * ports_per_env`; defaults to `4000 + index * 20`). |
 | `feature_branch` | `string \| null` | Remote feature branch this env tracks (e.g. `"feature/my-branch"`), or `null` when not connected. |
 | `worktrees` | `array` | One `WorktreeSnapshot` per matching repo worktree in the env. When patterns are given, only matched worktrees appear. |
+| `extensions` | `object` | Per-plugin badge dict keyed by plugin prefix (e.g. `"wst"`); values are short display strings (e.g. `"● 3/3"`). Empty object `{}` when no environment decorators ran or all wrote empty strings. Only populated on the `--json` path — the human table omits it. |
 
 **`environments[].worktrees[]` — `WorktreeSnapshot`:**
 
@@ -98,6 +99,9 @@ jsonschema.validate(data, schema)
 | `dirty` | `int` | Deduplicated union: staged ∪ unstaged ∪ untracked. |
 | `last_commit_subject` | `string \| null` | First line of the most recent commit message, or `null` when the branch has no commits beyond `origin/<main>`. |
 | `pinned` | `bool` | Whether the repo is pinned to its main branch (does not participate in feature branching). |
+| `main_branch` | `string \| null` | The repo's configured main branch (e.g. `"master"` or `"main"`), or `null` when unknown. Non-TUI clients use this to reproduce the `tracking_differs_from_main` divergence-marker logic without re-reading config. |
+
+> **Note — per-worktree extension badges:** `WorktreeRepoStatus.extensions` is populated by worktree-repo decorator plugins (used by the Textual TUI to render per-cell badges), but is deliberately not serialized into the JSON contract. If you are building a non-TUI client and need per-worktree extension data, open a contract proposal — the field will be added when a tested decorator exists to drive it.
 
 **`source_checkouts[]` — `SourceCheckoutSnapshot`:**
 

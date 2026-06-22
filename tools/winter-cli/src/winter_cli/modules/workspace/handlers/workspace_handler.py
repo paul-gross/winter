@@ -45,6 +45,7 @@ from winter_cli.modules.workspace.workspace_push_service import WorkspacePushSer
 from winter_cli.modules.workspace.workspace_repository import IReadWorkspaceRepository
 from winter_cli.modules.workspace.workspace_snapshot_service import WorkspaceSnapshotService
 from winter_cli.modules.workspace.workspace_sync_service import WorkspaceSyncService
+from winter_cli.plugins.loader import PluginRegistry
 
 
 @dataclasses.dataclass
@@ -191,6 +192,7 @@ class WorkspaceHandler:
         env_aliases: list[str] | None = None,
         envs_per_workspace: int | None = None,
         env_index_registry: IEnvIndexRegistry | None = None,
+        plugin_registry: PluginRegistry | None = None,
     ) -> None:
         self._env_status_svc = env_status_svc
         self._workspace_sync_svc = workspace_sync_svc
@@ -209,6 +211,7 @@ class WorkspaceHandler:
         self._env_aliases = env_aliases
         self._envs_per_workspace = envs_per_workspace
         self._env_index_registry = env_index_registry
+        self._plugin_registry = plugin_registry
 
     def list(self, params: EnvListParams) -> None:
         project_repos = self._repo_factory.get_project_repos()
@@ -242,10 +245,19 @@ class WorkspaceHandler:
                 reporter=reporter,
             )
 
+        if params.output_json and self._plugin_registry:
+            env_decorators: list | None = list(self._plugin_registry.environment_decorators)
+            worktree_repo_decorators: list | None = list(self._plugin_registry.worktree_repo_decorators)
+        else:
+            env_decorators = None
+            worktree_repo_decorators = None
+
         try:
             snapshot = self._workspace_snapshot_svc.collect(
                 patterns=params.patterns,
                 on_repo_error=None,
+                env_decorators=env_decorators or None,
+                worktree_repo_decorators=worktree_repo_decorators or None,
             )
         except click.ClickException as exc:
             click.echo(f"Error: {exc.format_message()}", err=True)
@@ -1026,6 +1038,7 @@ def _env_snap_to_dict(env: EnvSnapshot) -> dict[str, Any]:
         "port_base": env.port_base,
         "feature_branch": env.feature_branch,
         "worktrees": [_worktree_snap_to_dict(wt) for wt in env.worktrees],
+        "extensions": dict(env.extensions),
     }
 
 
@@ -1045,6 +1058,7 @@ def _worktree_snap_to_dict(wt: WorktreeSnapshot) -> dict[str, Any]:
         "dirty": wt.dirty,
         "last_commit_subject": wt.last_commit_subject,
         "pinned": wt.pinned,
+        "main_branch": wt.main_branch,
     }
 
 

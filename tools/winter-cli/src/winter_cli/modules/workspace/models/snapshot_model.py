@@ -107,6 +107,12 @@ class WorktreeSnapshot:
     dirty: int
     last_commit_subject: str | None
     pinned: bool = False
+    main_branch: str | None = None
+    # NOTE: WorktreeRepoStatus.extensions (per-worktree plugin badges) is intentionally
+    # NOT serialized into WorktreeSnapshot. The TUI renders per-cell badges directly from
+    # WorktreeRepoStatus; the JSON contract omits them because no tested serialization
+    # path exists yet. Add an `extensions: dict[str, str]` field here when a worktree-level
+    # decorator is available to drive it end-to-end.
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -119,6 +125,10 @@ class EnvSnapshot:
     worktree's target independently from its own tracking config, so a worktree
     re-pointed to a different branch is not reflected here.
     `port_base` is the env's assigned port base derived from its index.
+    `extensions` carries per-plugin badge strings contributed by environment
+    decorator plugins (e.g. service status badges from winter-service-tmux). The
+    dict is keyed by plugin prefix (e.g. ``"wst"``); values are short display
+    strings (e.g. ``"● 3/3"``). Empty when no decorators ran or all wrote "".
     """
 
     name: str
@@ -126,6 +136,7 @@ class EnvSnapshot:
     port_base: int
     feature_branch: str | None
     worktrees: list[WorktreeSnapshot]
+    extensions: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

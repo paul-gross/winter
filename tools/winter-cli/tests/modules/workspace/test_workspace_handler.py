@@ -1118,6 +1118,7 @@ def _pinned_wt_snapshot(repo: str = "repo-a") -> WorktreeSnapshot:
         dirty=6,
         last_commit_subject="feat: add thing",
         pinned=True,
+        main_branch="master",
     )
 
 
@@ -1160,6 +1161,107 @@ def test_status_json_emits_v1_schema(capsys: pytest.CaptureFixture[Any]) -> None
     assert wt["dirty"] == 6
     assert wt["last_commit_subject"] == "feat: add thing"
     assert wt["pinned"] is True
+    assert wt["main_branch"] == "master"
+
+
+# ---------------------------------------------------------------------------
+# status() JSON — extensions key present on env (Fix 5)
+# ---------------------------------------------------------------------------
+
+
+def test_status_json_env_includes_extensions_key(capsys: pytest.CaptureFixture[Any]) -> None:
+    """The `extensions` key is always present on each env in --json output.
+
+    An EnvSnapshot with a non-empty extensions dict surfaces it verbatim; an
+    env with no decorators emits an empty dict.
+    """
+    env_with_badge = EnvSnapshot(
+        name="alpha",
+        index=1,
+        port_base=4020,
+        feature_branch="feature/x",
+        worktrees=[_clean_wt_snapshot()],
+        extensions={"wst": "● 3/3"},
+    )
+    env_empty = EnvSnapshot(
+        name="beta",
+        index=2,
+        port_base=4040,
+        feature_branch=None,
+        worktrees=[],
+        extensions={},
+    )
+    snapshot = _make_snapshot(envs=[env_with_badge, env_empty])
+    handler = _make_status_handler(snapshot)
+
+    handler.status(EnvStatusParams(patterns=[], output_json=True))
+
+    out = json.loads(capsys.readouterr().out)
+    assert "extensions" in out["environments"][0]
+    assert out["environments"][0]["extensions"] == {"wst": "● 3/3"}
+    assert "extensions" in out["environments"][1]
+    assert out["environments"][1]["extensions"] == {}
+
+
+# ---------------------------------------------------------------------------
+# status() JSON — schema parity (Fix 2): live output satisfies ws-status-v1.json
+# ---------------------------------------------------------------------------
+
+
+def test_status_json_keys_match_ws_status_v1_schema(capsys: pytest.CaptureFixture[Any]) -> None:
+    """ws status --json output keys must stay in sync with the checked-in schema.
+
+    Stdlib-only parity guard (no third-party validator dependency): the schema's
+    object defs are `additionalProperties: false`, so this is the root-cause fix
+    for silent schema drift — any field serialized into `ws status --json` that is
+    not declared in schemas/ws-status-v1.json (or any schema-`required` field
+    dropped from the output) makes this test red, forcing schema and serializer to
+    stay in sync.
+    """
+    schema_path = Path(__file__).parents[3] / "schemas" / "ws-status-v1.json"
+    assert schema_path.exists(), f"Schema not found at {schema_path}"
+    schema = json.loads(schema_path.read_text())
+    defs = schema.get("$defs") or schema.get("definitions") or {}
+
+    def check(obj: dict[str, Any], def_name: str) -> None:
+        d = defs[def_name]
+        declared = set(d.get("properties", {}))
+        required = set(d.get("required", []))
+        keys = set(obj)
+        assert not (keys - declared), f"{def_name}: serialized keys not declared in schema: {sorted(keys - declared)}"
+        assert not (required - keys), f"{def_name}: schema-required keys missing from output: {sorted(required - keys)}"
+
+    env = EnvSnapshot(
+        name="alpha",
+        index=1,
+        port_base=4020,
+        feature_branch="feature/my-branch",
+        worktrees=[_pinned_wt_snapshot("repo-a")],
+        extensions={"wst": "● 2/2"},
+    )
+    snapshot = _make_snapshot(envs=[env])
+    handler = _make_status_handler(snapshot)
+
+    with pytest.raises(SystemExit):
+        handler.status(EnvStatusParams(patterns=[], output_json=True))
+
+    doc = json.loads(capsys.readouterr().out)
+
+    top_declared = set(schema.get("properties", {}))
+    assert not (set(doc) - top_declared), f"top-level keys not declared in schema: {sorted(set(doc) - top_declared)}"
+
+    for env_obj in doc["environments"]:
+        check(env_obj, "EnvSnapshot")
+        for wt in env_obj["worktrees"]:
+            check(wt, "WorktreeSnapshot")
+    for sc in doc.get("source_checkouts", []):
+        check(sc, "SourceCheckoutSnapshot")
+    check(doc["workspace"], "WorkspaceLevelSnapshot")
+    for orphan in doc["workspace"].get("orphans", []):
+        check(orphan, "OrphanSnapshot")
+    for pin in doc["workspace"].get("standalone_pins", []):
+        check(pin, "StandalonePinSnapshot")
+    check(doc["dashboard"], "DashboardSnapshot")
 
 
 # ── connect ──────────────────────────────────────────────────────────────────

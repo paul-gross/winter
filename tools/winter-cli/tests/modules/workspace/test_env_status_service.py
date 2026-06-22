@@ -240,3 +240,42 @@ def test_get_worktree_repo_statuses_runs_concurrently(workspace: Workspace) -> N
     ).get_worktree_repo_statuses(env_wts)
 
     assert [r.worktree.repository.name for r in rows] == names
+
+
+# ── worktree-repo decorator isolation ────────────────────────────────────────
+
+
+def test_get_worktree_repo_statuses_raising_worktree_decorator_is_isolated(workspace: Workspace) -> None:
+    """A worktree-repo decorator that raises must not abort the whole call.
+
+    Each decorator is wrapped in its own try/except so one bad decorator
+    does not prevent the next decorator (or the returned statuses) from
+    being usable.
+    """
+    names = ["r1", "r2"]
+    env_wts = _env_worktrees(workspace, names)
+    repo = StatusByRepoRepository(statuses={n: _status(n) for n in names})
+
+    bad_called: list[str] = []
+    good_written: list[str] = []
+
+    def bad_decorator(wt_status: WorktreeRepoStatus, _path: Path) -> None:
+        bad_called.append(wt_status.worktree.repository.name)
+        raise RuntimeError("decorator exploded")
+
+    def good_decorator(wt_status: WorktreeRepoStatus, _path: Path) -> None:
+        good_written.append(wt_status.worktree.repository.name)
+        wt_status.extensions["ok"] = True
+
+    rows = EnvStatusService(
+        worktree_repo=FakeReadWorkspaceRepository(),  # type: ignore[arg-type]
+        repo_repo=repo,  # type: ignore[arg-type]
+    ).get_worktree_repo_statuses(env_wts, worktree_repo_decorators=[bad_decorator, good_decorator])
+
+    # All statuses still returned.
+    assert [r.worktree.repository.name for r in rows] == names
+    # bad_decorator was called for each worktree, exceptions isolated.
+    assert sorted(bad_called) == names
+    # good_decorator ran for every worktree and wrote its extension flag.
+    assert sorted(good_written) == names
+    assert all(r.extensions.get("ok") is True for r in rows)

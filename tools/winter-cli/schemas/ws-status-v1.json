@@ -55,7 +55,7 @@
     },
     "EnvSnapshot": {
       "type": "object",
-      "required": ["name", "index", "port_base", "feature_branch", "worktrees"],
+      "required": ["name", "index", "port_base", "feature_branch", "worktrees", "extensions"],
       "additionalProperties": false,
       "properties": {
         "name": {
@@ -80,6 +80,13 @@
           "items": {
             "$ref": "#/$defs/WorktreeSnapshot"
           }
+        },
+        "extensions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Per-plugin badge strings contributed by environment decorator plugins. Keyed by plugin prefix (e.g. \"wst\"); values are short display strings (e.g. \"● 3/3\"). Empty object when no decorators ran or all wrote empty strings."
         }
       }
     },
@@ -99,7 +106,8 @@
         "untracked",
         "dirty",
         "last_commit_subject",
-        "pinned"
+        "pinned",
+        "main_branch"
       ],
       "additionalProperties": false,
       "properties": {
@@ -166,6 +174,10 @@
         "pinned": {
           "type": "boolean",
           "description": "Whether the repo is pinned to its main branch."
+        },
+        "main_branch": {
+          "type": ["string", "null"],
+          "description": "The repo's configured main branch (e.g. \"master\" or \"main\"), or null when unknown. Used by non-TUI clients to reproduce the tracking_differs_from_main divergence-marker logic."
         }
       }
     },

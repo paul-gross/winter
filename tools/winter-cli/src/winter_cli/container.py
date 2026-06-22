@@ -390,6 +390,7 @@ class Container(containers.DeclarativeContainer):
         env_aliases=workspace_config.provided.env_aliases,
         envs_per_workspace=workspace_config.provided.envs_per_workspace,
         env_index_registry=env_index_registry,
+        plugin_registry=plugin_registry,
     )
 
     repo_handler = providers.Factory(

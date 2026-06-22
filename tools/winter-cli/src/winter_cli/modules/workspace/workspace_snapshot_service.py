@@ -176,6 +176,7 @@ class WorkspaceSnapshotService:
                         dirty=len(rs.dirty_files),
                         last_commit_subject=last_subject,
                         pinned=wt_status.worktree.repository.pinned,
+                        main_branch=wt_status.worktree.repository.main_branch,
                     )
                 )
 
@@ -191,6 +192,7 @@ class WorkspaceSnapshotService:
                     port_base=self._workspace.port_base_for(env.index),
                     feature_branch=env_status.feature_branch,
                     worktrees=worktree_snapshots,
+                    extensions=dict(env_status.extensions),
                 )
             )
 
