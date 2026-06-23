@@ -80,3 +80,36 @@ The directories under `./projects/` and the standalone directories at the worksp
 ```bash
 winter repo list
 ```
+
+## Feature environments and Greek letters
+
+Feature environments are named after Greek letters: `alpha/`, `beta/`, `gamma/`, etc. Each env contains a feature worktree for every project repository, all on a branch matching the env name. For example, `./alpha/my-app/` is a worktree of `my-app` on branch `alpha`.
+
+Each env has an index used to assign unique ports per env. The port layout is config-driven: `per-env port base = base_port + index * ports_per_env`. With defaults (`base_port=4000`, `ports_per_env=20`): alpha (1) → 4020, beta (2) → 4040, gamma (3) → 4060, and so on. This ensures multiple envs can run services simultaneously without port conflicts.
+
+The first 10 Greek letters (`alpha`…`kappa`) are configured as `env_aliases` with fixed indices `1..10`. Other Greek letters and non-Greek env names hash into a higher index band. To look up the index for any name:
+
+```bash
+winter ws index <name>
+```
+
+For an existing env this returns the **persisted** index from `.winter/state.toml`. For a hypothetical name it returns the **suggested** slot (which may shift on create if there is a collision).
+
+Default to **alpha**. Use **beta** if alpha is occupied. Only create additional envs when needed, and confirm with the user first.
+
+Conventional names: alpha, beta, gamma, delta, epsilon, zeta, eta, theta, iota, kappa, lambda, mu, nu, xi, omicron, pi, rho, sigma, tau, upsilon, phi, chi, psi, omega
+
+## Path notation
+
+Paths use a `<context>:<path>` prefix to clarify which repo/branch a file lives in:
+- `workspace:` — the workspace root (this repo's workspace branch)
+- `<env>:` — a feature environment (e.g., `alpha:` resolves to a per-repo worktree inside `alpha/`)
+- `<extension-name>:` — a winter extension (e.g., `winter-product:`)
+
+## Rules
+
+1. **Never work in source checkouts directly** — use feature environments for all code changes (see the [Source Checkouts](#source-checkouts) section for which directories are source checkouts)
+2. **Local branch = Greek letter, remote branch = feature name** — each env's worktrees use a Greek-letter branch locally (e.g., `alpha`). The remote feature branch (e.g., `feature/basic-addon`) is a separate name configured via tracking. See [worktree-ops.md](./worktree-ops.md) for how to connect an env to a remote feature branch.
+3. **Confirm before working** — always verify which env to work in
+4. **Always spawn subagents from the workspace root** — subagents and teammates must be created while the working directory is the workspace root. Spawning from a project subdirectory causes the subagent to lose workspace context including this CLAUDE.md, agent definitions, and skills.
+5. **Follow the project's contributing conventions when completing work** — see [project/contributing.md](./project/contributing.md). If that file doesn't exist, guide the user to establish one documenting how completed work should be merged, pushed, and delivered for their specific projects.
