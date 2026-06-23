@@ -87,6 +87,26 @@ _SCOPE_RANK: dict[ProvisionScope, int] = {
 }
 
 
+def _service_check_preview(handler: ProvisionHandler, env_name: str) -> str | None:
+    """Return a human/machine-readable preview of the service check for a handler.
+
+    Returns ``None`` when the handler declares no ``required_services``.
+    Returns a comma-separated list of owning scopes that WOULD be checked/started
+    (e.g. ``"workspace"`` or ``"alpha"`` or ``"workspace,alpha"``).
+    """
+    if not handler.required_services:
+        return None
+    scopes: set[str] = set()
+    for token in handler.required_services:
+        parts = token.split("/", 1)
+        if len(parts) == 2 and parts[0]:
+            scopes.add(parts[0])
+        else:
+            # Malformed token — include it verbatim so the plan is still informative.
+            scopes.add(token)
+    return ",".join(sorted(scopes))
+
+
 def _sort_key(handler: ProvisionHandler, index: int) -> tuple[int, int, int]:
     """Sort key for handlers within a single sub-target.
 
@@ -162,11 +182,16 @@ class ProvisionService:
         seed: bool,
         no_service_check: bool,
         reporter: IProvisionReporter,
+        dry_run: bool = False,
     ) -> ProvisionSummary:
         """Run the provision chain (or a single sub-target) for *env_name*.
 
         ``subtarget`` is the explicit sub-target name when given, or ``None``
         for the full dependency→resource→data chain.
+
+        When ``dry_run`` is ``True``, no handler scripts are executed, no
+        services are started, and the reporter receives ``plan_handler`` events
+        describing the ordered list of handlers that would run.
         """
         # Validate the env directory exists before collecting handlers, so a
         # typo gives one clean error instead of per-handler OSError on missing cwds.
@@ -183,6 +208,16 @@ class ProvisionService:
         reporter.provision_started(env_name, list(subtargets_to_run))
 
         all_handlers = self._collect_all_handlers()
+
+        if dry_run:
+            return self._run_dry(
+                subtargets_to_run=subtargets_to_run,
+                all_handlers=all_handlers,
+                env_name=env_name,
+                reset=reset,
+                destroy=destroy,
+                reporter=reporter,
+            )
 
         for st in subtargets_to_run:
             handlers = self._filter_and_sort(all_handlers, st)
@@ -215,6 +250,74 @@ class ProvisionService:
         reporter.provision_finished(status="ok", aborted_at=None)
         return ProvisionSummary(status="ok")
 
+    # ── Dry-run path ──────────────────────────────────────────────────────
+
+    def _run_dry(
+        self,
+        *,
+        subtargets_to_run: tuple[str, ...],
+        all_handlers: list[ProvisionHandler],
+        env_name: str,
+        reset: bool,
+        destroy: bool,
+        reporter: IProvisionReporter,
+    ) -> ProvisionSummary:
+        """Emit plan events for every handler that would run; no scripts executed."""
+        for st in subtargets_to_run:
+            handlers = self._filter_and_sort(all_handlers, st)
+
+            reporter.subtarget_started(st)
+
+            if not handlers:
+                reporter.no_handlers(st)
+                continue
+
+            for handler in handlers:
+                actions = self._resolve_dry_actions(handler, reset=reset, destroy=destroy)
+                service_check_preview = _service_check_preview(handler, env_name)
+                for action, script in actions:
+                    reporter.plan_handler(
+                        subtarget=handler.subtarget,
+                        scope=handler.scope.value,
+                        source=handler.source,
+                        script=script,
+                        action=action,
+                        required_services=list(handler.required_services),
+                        service_check_preview=service_check_preview,
+                    )
+
+        reporter.provision_finished(status="ok", aborted_at=None)
+        return ProvisionSummary(status="ok")
+
+    @staticmethod
+    def _resolve_dry_actions(
+        handler: ProvisionHandler,
+        reset: bool,
+        destroy: bool,
+    ) -> list[tuple[str, str]]:
+        """Return the (action, script) pairs that would run for this handler.
+
+        Mirrors the real action-resolution logic in ``_run_handler_with_action``
+        / ``_run_destroy`` / ``_run_reset`` but returns the plan without executing.
+        """
+        if destroy:
+            if handler.destroy is not None:
+                return [("destroy", handler.destroy)]
+            # No destroy script — would warn and no-op.
+            return []
+
+        if reset:
+            if handler.reset is not None:
+                return [("reset", handler.reset)]
+            if handler.destroy is not None:
+                # Compose: destroy then apply.
+                return [("destroy", handler.destroy), ("apply", handler.apply)]
+            # No reset and no destroy — would warn and degrade to apply.
+            return [("apply", handler.apply)]
+
+        # Bare apply.
+        return [("apply", handler.apply)]
+
     # ── Internal helpers ──────────────────────────────────────────────────
 
     @staticmethod
@@ -236,9 +339,7 @@ class ProvisionService:
         try:
             handlers.extend(parse_provision(self._config, source="project"))
         except ConfigError as exc:
-            raise click.ClickException(
-                f"Malformed workspace [provision] config: {exc}"
-            ) from exc
+            raise click.ClickException(f"Malformed workspace [provision] config: {exc}") from exc
 
         # 2) Extension manifests — iterate standalone repos declared in config.
         for repo in self._repo_factory.get_standalone_repos():
@@ -469,12 +570,8 @@ class ProvisionService:
         sub-targets, ``"error"`` when a destroy or reset script exits non-zero,
         or ``None`` when the action succeeded.
         """
-        result: HandlerExecutionResult = self._execution_svc.run_handler(
-            handler, action, env_name, reporter
-        )
-        runs_json: list[dict[str, Any]] = [
-            {"cwd": str(r.cwd), "exit_status": r.exit_code} for r in result.runs
-        ]
+        result: HandlerExecutionResult = self._execution_svc.run_handler(handler, action, env_name, reporter)
+        runs_json: list[dict[str, Any]] = [{"cwd": str(r.cwd), "exit_status": r.exit_code} for r in result.runs]
         overall_exit = 0 if result.ok else 1
         reporter.handler_result(
             subtarget=st,

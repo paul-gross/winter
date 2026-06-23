@@ -21,6 +21,8 @@ winter provision alpha data --destroy         # delete data only
 # Global flags
 winter provision alpha --no-service-check     # skip the required_services check entirely
 winter provision alpha --json                 # NDJSON event stream (see below)
+winter provision alpha --dry-run              # print plan; no scripts run, no services started
+winter provision alpha --dry-run --json       # structured plan as NDJSON (see below)
 ```
 
 `winter provision` owns **feature-environment readiness** as a re-runnable lifecycle, decoupled from `winter ws init`. It reads `[[provision.*]]` handlers declared in the workspace config (`.winter/config.toml`) and in each installed extension's `winter-ext.toml`, and runs them in a defined order against the named env.
@@ -48,6 +50,7 @@ Authors guarantee idempotency; winter tracks no state between runs.
 - `--reset` and `--destroy` together are rejected.
 - `--seed` is valid only on `resource`, not on `dependency` or `data`.
 - Any action flag (`--reset`, `--destroy`, `--seed`) requires an explicit sub-target — not the bare full-chain form.
+- `--dry-run` may be combined with any action flag or sub-target: it previews what the given invocation would do.
 
 ## Manifest schema
 
@@ -159,6 +162,17 @@ A `required_services` token must be scoped as `workspace/<service>` or `<current
 
 **Missing orchestrator:** if `required_services` is declared but no service orchestrator is registered in the workspace, `winter provision` exits non-zero with a clean error message. Cross-link: see [service.md](./service.md) for the service contract, including how orchestrators are registered.
 
+## `--dry-run`
+
+`--dry-run` prints the ordered list of handlers that **would** run without executing any script or starting any service:
+
+- Per-handler output: sub-target, scope, source, script path, resolved action (apply / destroy / reset), and which `required_services` it would check (if any).
+- A sub-target with no declared handlers is reported as a no-op.
+- No mutation occurs: no scripts run, no `winter service up` calls are made.
+- `--dry-run` may be combined with any action flag (`--reset`, `--destroy`, `--seed`) or sub-target to preview that specific path.
+
+`--dry-run --json` emits the same NDJSON stream as a real run (see below), replacing `execution_*` and `handler_result` events with `plan_handler` events — one per resolved action in plan order. (A handler with `--reset` that has no `reset` script but does have a `destroy` script emits two events: a `destroy` then an `apply`.)
+
 ## `--json` output
 
 `--json` emits NDJSON, one JSON object per line. The event stream:
@@ -175,6 +189,20 @@ A `required_services` token must be scoped as `workspace/<service>` or `<current
 | `handler_result` | Summary after a handler completes | `subtarget`, `scope`, `source`, `action`, `service_check`, `runs:[{cwd, exit_status}]`, `exit_status` |
 | `handler_warn` | Degraded action (e.g. no destroy handler) | `subtarget`, `scope`, `source`, `message` |
 | `finished` | End of the run | `status` (`"ok"` / `"aborted"` / `"error"`), `aborted_at` (sub-target name when aborted, else absent) |
+| `plan_handler` | (`--dry-run` only) Handler that would run | `would_run: true`, `subtarget`, `scope`, `source`, `script`, `action`, `required_services`, `service_check_preview` |
+
+**`plan_handler` fields** (emitted only with `--dry-run --json`):
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `would_run` | `true` | Always `true`; distinguishes plan events from real-run events |
+| `subtarget` | string | Sub-target name (`dependency`, `resource`, `data`) |
+| `scope` | string | Handler scope (`workspace`, `feature-environment`, `feature-worktree`) |
+| `source` | string | Declaring source (`project` or extension prefix) |
+| `script` | string | Path to the script that would be invoked |
+| `action` | string | Resolved action (`apply`, `destroy`, or `reset`) |
+| `required_services` | list of strings | `required_services` tokens from the handler declaration |
+| `service_check_preview` | string or null | Comma-separated owning scopes that would be checked/started; `null` when no `required_services` |
 
 **`service_check` field values in `handler_result`:**
 

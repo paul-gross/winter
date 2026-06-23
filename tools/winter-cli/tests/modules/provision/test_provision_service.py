@@ -1,4 +1,5 @@
 """Tests for ProvisionService — ordering, abort semantics, action vocabulary."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -90,6 +91,7 @@ class _FakeReporter:
         self.no_handlers_calls: list[str] = []
         self.handler_result_calls: list[dict[str, Any]] = []
         self.handler_warn_calls: list[dict[str, Any]] = []
+        self.plan_handler_calls: list[dict[str, Any]] = []
         self.provision_finished_calls: list[tuple[str, str | None]] = []
         # Execution sink events
         self.execution_started: list[Any] = []
@@ -128,8 +130,28 @@ class _FakeReporter:
         )
 
     def handler_warn(self, subtarget: str, scope: str, source: str, message: str) -> None:
-        self.handler_warn_calls.append(
-            {"subtarget": subtarget, "scope": scope, "source": source, "message": message}
+        self.handler_warn_calls.append({"subtarget": subtarget, "scope": scope, "source": source, "message": message})
+
+    def plan_handler(
+        self,
+        subtarget: str,
+        scope: str,
+        source: str,
+        script: str,
+        action: str,
+        required_services: list[str],
+        service_check_preview: str | None,
+    ) -> None:
+        self.plan_handler_calls.append(
+            {
+                "subtarget": subtarget,
+                "scope": scope,
+                "source": source,
+                "script": script,
+                "action": action,
+                "required_services": required_services,
+                "service_check_preview": service_check_preview,
+            }
         )
 
     def provision_finished(self, status: str, aborted_at: str | None) -> None:
@@ -227,7 +249,9 @@ def test_full_chain_runs_subtargets_in_order() -> None:
         }
     )
     svc, exec_svc, reporter = _make_service(config=config)
-    summary = svc.run(ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     # Reporter sees subtarget_started in order
@@ -251,7 +275,15 @@ def test_scope_substrate_first_within_subtarget() -> None:
         }
     )
     svc, exec_svc, reporter = _make_service(config=config)
-    svc.run(ENV_NAME, subtarget="dependency", reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        reset=False,
+        destroy=False,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
 
     scopes = [call[0].scope for call in exec_svc.calls]
     assert scopes == [ProvisionScope.workspace, ProvisionScope.feature_environment, ProvisionScope.feature_worktree]
@@ -293,7 +325,15 @@ def test_project_before_extension_within_same_scope() -> None:
         service_check=NoOpServiceCheck(),
         fs=fs,
     )
-    svc.run(ENV_NAME, subtarget="dependency", reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        reset=False,
+        destroy=False,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
 
     sources = [call[0].source for call in exec_svc.calls]
     assert sources[0] == "project"
@@ -312,7 +352,15 @@ def test_declaration_order_tiebreak() -> None:
         }
     )
     svc, exec_svc, reporter = _make_service(config=config)
-    svc.run(ENV_NAME, subtarget="dependency", reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        reset=False,
+        destroy=False,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
 
     apply_scripts = [call[0].apply for call in exec_svc.calls]
     assert apply_scripts == ["scripts/first.sh", "scripts/second.sh", "scripts/third.sh"]
@@ -357,7 +405,9 @@ def test_apply_failure_in_dependency_aborts_resource_and_data() -> None:
         service_check=NoOpServiceCheck(),
         fs=_make_fs_with_env(),
     )
-    summary = svc2.run(ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc2.run(
+        ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
 
     assert summary.status == "aborted"
     assert summary.aborted_at == "dependency"
@@ -404,7 +454,15 @@ def test_apply_failure_stops_within_subtarget_too() -> None:
         service_check=NoOpServiceCheck(),
         fs=_make_fs_with_env(),
     )
-    summary = svc.run(ENV_NAME, subtarget="dependency", reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        reset=False,
+        destroy=False,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
 
     # Second handler never ran
     assert len(fail_exec.calls) == 1
@@ -420,7 +478,9 @@ def test_no_handlers_emits_no_handlers_event_and_finishes_ok() -> None:
     """Empty manifest → three no_handlers events, finished ok."""
     config = _make_config(provision_raw={})
     svc, exec_svc, reporter = _make_service(config=config)
-    summary = svc.run(ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert summary.exit_code == 0
@@ -433,7 +493,15 @@ def test_single_subtarget_no_handlers_emits_one_no_handlers_event() -> None:
     """Explicit single sub-target with no handlers → one no_handlers event, ok."""
     config = _make_config(provision_raw={})
     svc, exec_svc, reporter = _make_service(config=config)
-    summary = svc.run(ENV_NAME, subtarget="dependency", reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        reset=False,
+        destroy=False,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert reporter.no_handlers_calls == ["dependency"]
@@ -452,7 +520,9 @@ def test_destroy_flag_runs_destroy_script_when_declared() -> None:
         }
     )
     svc, exec_svc, reporter = _make_service(config=config)
-    summary = svc.run(ENV_NAME, subtarget="resource", reset=False, destroy=True, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME, subtarget="resource", reset=False, destroy=True, seed=False, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert len(exec_svc.calls) == 1
@@ -467,7 +537,9 @@ def test_destroy_flag_warns_and_noop_when_no_destroy_declared() -> None:
         }
     )
     svc, exec_svc, reporter = _make_service(config=config)
-    summary = svc.run(ENV_NAME, subtarget="resource", reset=False, destroy=True, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME, subtarget="resource", reset=False, destroy=True, seed=False, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert len(exec_svc.calls) == 0
@@ -488,7 +560,9 @@ def test_reset_uses_declared_reset_script() -> None:
         }
     )
     svc, exec_svc, reporter = _make_service(config=config)
-    summary = svc.run(ENV_NAME, subtarget="data", reset=True, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME, subtarget="data", reset=True, destroy=False, seed=False, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert len(exec_svc.calls) == 1
@@ -503,7 +577,9 @@ def test_reset_composes_destroy_then_apply_when_no_reset_but_destroy_declared() 
         }
     )
     svc, exec_svc, reporter = _make_service(config=config)
-    summary = svc.run(ENV_NAME, subtarget="resource", reset=True, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME, subtarget="resource", reset=True, destroy=False, seed=False, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert len(exec_svc.calls) == 2
@@ -519,7 +595,9 @@ def test_reset_warns_and_degrades_to_apply_when_neither_reset_nor_destroy() -> N
         }
     )
     svc, exec_svc, reporter = _make_service(config=config)
-    summary = svc.run(ENV_NAME, subtarget="data", reset=True, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME, subtarget="data", reset=True, destroy=False, seed=False, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert len(exec_svc.calls) == 1
@@ -542,7 +620,9 @@ def test_seed_runs_resource_apply_then_data_apply() -> None:
         }
     )
     svc, exec_svc, reporter = _make_service(config=config)
-    summary = svc.run(ENV_NAME, subtarget="resource", reset=False, destroy=False, seed=True, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME, subtarget="resource", reset=False, destroy=False, seed=True, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert reporter.subtarget_started_calls == ["resource", "data"]
@@ -568,7 +648,15 @@ def test_explicit_subtarget_runs_only_that_one() -> None:
         }
     )
     svc, exec_svc, reporter = _make_service(config=config)
-    summary = svc.run(ENV_NAME, subtarget="resource", reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME,
+        subtarget="resource",
+        reset=False,
+        destroy=False,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert reporter.subtarget_started_calls == ["resource"]
@@ -718,7 +806,15 @@ def test_service_check_ensure_called_before_resource_handlers() -> None:
         service_check=sc,
         fs=_make_fs_with_env(),
     )
-    svc2.run(ENV_NAME, subtarget="resource", reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    svc2.run(
+        ENV_NAME,
+        subtarget="resource",
+        reset=False,
+        destroy=False,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
 
     # ensure must appear before any exec call in the event log
     assert call_order.index("ensure") < call_order.index("exec:resource")
@@ -734,7 +830,15 @@ def test_service_check_ensure_not_called_for_dependency_subtarget() -> None:
     )
     sc = _RecordingServiceCheck(result=None)
     svc, exec_svc, reporter = _make_service_with_check(config, sc)
-    summary = svc.run(ENV_NAME, subtarget="dependency", reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        reset=False,
+        destroy=False,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     # ensure() is called; it returns None (no required_services) → service_check=None in handler_result
@@ -762,7 +866,15 @@ def test_orchestrator_error_in_ensure_aborts_run_cleanly() -> None:
 
     # ProvisionService itself does not catch the ClickException — it propagates.
     with pytest.raises(click.ClickException) as exc_info:
-        svc.run(ENV_NAME, subtarget="resource", reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+        svc.run(
+            ENV_NAME,
+            subtarget="resource",
+            reset=False,
+            destroy=False,
+            seed=False,
+            no_service_check=False,
+            reporter=reporter,
+        )  # type: ignore[arg-type]
 
     assert "no service orchestrator" in exc_info.value.format_message()
     # No handler was executed
@@ -778,7 +890,15 @@ def test_service_check_result_appears_in_handler_result_event() -> None:
     )
     sc = _RecordingServiceCheck(result="started:workspace")
     svc, exec_svc, reporter = _make_service_with_check(config, sc)
-    summary = svc.run(ENV_NAME, subtarget="resource", reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME,
+        subtarget="resource",
+        reset=False,
+        destroy=False,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert len(reporter.handler_result_calls) == 1
@@ -794,7 +914,9 @@ def test_no_service_check_flag_forwarded_to_ensure() -> None:
     )
     sc = _RecordingServiceCheck(result="skipped")
     svc, exec_svc, reporter = _make_service_with_check(config, sc)
-    svc.run(ENV_NAME, subtarget="resource", reset=False, destroy=False, seed=False, no_service_check=True, reporter=reporter)  # type: ignore[arg-type]
+    svc.run(
+        ENV_NAME, subtarget="resource", reset=False, destroy=False, seed=False, no_service_check=True, reporter=reporter
+    )  # type: ignore[arg-type]
 
     assert len(sc.ensure_calls) == 1
     _handlers, _env, no_svc_check = sc.ensure_calls[0]
@@ -835,7 +957,15 @@ def test_failing_destroy_produces_error_summary() -> None:
         service_check=NoOpServiceCheck(),
         fs=_make_fs_with_env(),
     )
-    summary = svc2.run(ENV_NAME, subtarget="resource", reset=False, destroy=True, seed=False, no_service_check=False, reporter=reporter2)  # type: ignore[arg-type]
+    summary = svc2.run(
+        ENV_NAME,
+        subtarget="resource",
+        reset=False,
+        destroy=True,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter2,
+    )  # type: ignore[arg-type]
 
     assert summary.status == "error"
     assert summary.exit_code == 1
@@ -872,7 +1002,9 @@ def test_failing_reset_compose_destroy_does_not_run_apply() -> None:
         service_check=NoOpServiceCheck(),
         fs=_make_fs_with_env(),
     )
-    summary = svc.run(ENV_NAME, subtarget="resource", reset=True, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME, subtarget="resource", reset=True, destroy=False, seed=False, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
 
     assert summary.status == "error"
     assert summary.exit_code == 1
@@ -910,7 +1042,9 @@ def test_existing_apply_abort_semantics_unchanged() -> None:
         service_check=NoOpServiceCheck(),
         fs=_make_fs_with_env(),
     )
-    summary = svc.run(ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
 
     assert summary.status == "aborted"
     assert summary.aborted_at == "dependency"
@@ -936,7 +1070,9 @@ def test_missing_env_raises_click_exception() -> None:
     svc, exec_svc, reporter = _make_service(config=config, fs=fs)
 
     with pytest.raises(click.ClickException) as exc_info:
-        svc.run("alpah", subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+        svc.run(
+            "alpah", subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+        )  # type: ignore[arg-type]
 
     assert "alpah" in exc_info.value.format_message()
     assert len(exec_svc.calls) == 0  # no handlers ran
@@ -947,7 +1083,9 @@ def test_valid_env_does_not_raise() -> None:
     config = _make_config(provision_raw={})
     svc, exec_svc, reporter = _make_service(config=config)
     # _make_service uses _make_fs_with_env() which includes WORKSPACE_ROOT/alpha
-    summary = svc.run(ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+    summary = svc.run(
+        ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
 
@@ -962,13 +1100,13 @@ def test_malformed_workspace_provision_raises_click_exception() -> None:
     import click
 
     # "unknown_subtarget" is not a valid provision sub-target key
-    config = _make_config(
-        provision_raw={"unknown_subtarget": [{"scope": "workspace", "apply": "scripts/apply.sh"}]}
-    )
+    config = _make_config(provision_raw={"unknown_subtarget": [{"scope": "workspace", "apply": "scripts/apply.sh"}]})
     svc, exec_svc, reporter = _make_service(config=config)
 
     with pytest.raises(click.ClickException) as exc_info:
-        svc.run(ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter)  # type: ignore[arg-type]
+        svc.run(
+            ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+        )  # type: ignore[arg-type]
 
     msg = exc_info.value.format_message()
     assert "provision" in msg.lower() or "unknown_subtarget" in msg
@@ -982,8 +1120,8 @@ def test_workspace_config_load_does_not_raise_on_malformed_provision() -> None:
     invariant holds — general commands (ws status, etc.) remain unaffected by a
     bad [provision] entry.
     """
-    from winter_cli.config.workspace import parse_provision
     from winter_cli.config.models import AdoptExtensions, WorkspaceConfig
+    from winter_cli.config.workspace import parse_provision
 
     # WorkspaceConfig stores provision_raw without parsing
     config = WorkspaceConfig(
@@ -998,6 +1136,8 @@ def test_workspace_config_load_does_not_raise_on_malformed_provision() -> None:
 
     # parse_provision() raises ConfigError on demand
     import pytest
+
     from winter_cli.core.config_file import ConfigError
+
     with pytest.raises(ConfigError):
         parse_provision(config, source="project")

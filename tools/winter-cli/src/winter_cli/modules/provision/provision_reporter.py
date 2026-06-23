@@ -45,6 +45,19 @@ class IProvisionReporter(Protocol):
     def handler_warn(self, subtarget: str, scope: str, source: str, message: str) -> None: ...
     def provision_finished(self, status: str, aborted_at: str | None) -> None: ...
 
+    # ── Dry-run plan event ────────────────────────────────────────────────
+
+    def plan_handler(
+        self,
+        subtarget: str,
+        scope: str,
+        source: str,
+        script: str,
+        action: str,
+        required_services: list[str],
+        service_check_preview: str | None,
+    ) -> None: ...
+
 
 # ---------------------------------------------------------------------------
 # StreamProvisionReporter
@@ -124,6 +137,21 @@ class StreamProvisionReporter:
                 err=True,
             )
 
+    def plan_handler(
+        self,
+        subtarget: str,
+        scope: str,
+        source: str,
+        script: str,
+        action: str,
+        required_services: list[str],
+        service_check_preview: str | None,
+    ) -> None:
+        svc_info = ""
+        if required_services:
+            svc_info = f" [requires: {', '.join(required_services)}]"
+        self._click.echo(f"  would {action}: {source}/{subtarget}[{scope}] → {script}{svc_info}")
+
 
 # ---------------------------------------------------------------------------
 # JsonProvisionReporter
@@ -176,6 +204,17 @@ class JsonProvisionReporter:
        "aborted_at":str|null}``
         Emitted once at the end.  ``aborted_at`` is the sub-target name when
         ``status`` is ``"aborted"``, otherwise null.
+
+    ``{"type":"plan_handler", "would_run":true, "subtarget":str, "scope":str,
+       "source":str, "script":str, "action":str,
+       "required_services":[str,...], "service_check_preview":str|null}``
+        Emitted in dry-run mode instead of ``execution_started`` / ``handler_result``.
+        One event per handler in plan order.  ``would_run`` is always ``true``
+        so agents can distinguish plan events from real-run events.
+        ``service_check_preview`` describes the service-check that WOULD run:
+        ``null`` when no ``required_services`` are declared, or a scope string
+        such as ``"workspace"`` / the env name indicating which scope would be
+        started if needed.
     """
 
     def __init__(self, click: Any) -> None:
@@ -247,3 +286,27 @@ class JsonProvisionReporter:
 
     def provision_finished(self, status: str, aborted_at: str | None) -> None:
         self._emit({"type": "finished", "status": status, "aborted_at": aborted_at})
+
+    def plan_handler(
+        self,
+        subtarget: str,
+        scope: str,
+        source: str,
+        script: str,
+        action: str,
+        required_services: list[str],
+        service_check_preview: str | None,
+    ) -> None:
+        self._emit(
+            {
+                "type": "plan_handler",
+                "would_run": True,
+                "subtarget": subtarget,
+                "scope": scope,
+                "source": source,
+                "script": script,
+                "action": action,
+                "required_services": required_services,
+                "service_check_preview": service_check_preview,
+            }
+        )

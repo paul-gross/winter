@@ -3,7 +3,11 @@ from __future__ import annotations
 import dataclasses
 import sys
 
-from winter_cli.modules.provision.provision_reporter import IProvisionReporter, JsonProvisionReporter, StreamProvisionReporter
+from winter_cli.modules.provision.provision_reporter import (
+    IProvisionReporter,
+    JsonProvisionReporter,
+    StreamProvisionReporter,
+)
 from winter_cli.modules.provision.provision_service import ProvisionService
 
 
@@ -17,6 +21,7 @@ class ProvisionParams:
     destroy: bool = False
     seed: bool = False
     no_service_check: bool = False
+    dry_run: bool = False
     output_json: bool = False
 
 
@@ -48,6 +53,7 @@ class ProvisionCommandHandler:
             seed=params.seed,
             no_service_check=params.no_service_check,
             reporter=reporter,  # type: ignore[arg-type]
+            dry_run=params.dry_run,
         )
         if summary.exit_code != 0:
             sys.exit(summary.exit_code)
