@@ -29,6 +29,7 @@ from winter_cli.modules.workspace.destroy_service import DestroyService
 from winter_cli.modules.workspace.drift import DriftWarningService
 from winter_cli.modules.workspace.env_checkout_service import EnvCheckoutService
 from winter_cli.modules.workspace.env_status_service import EnvStatusService
+from winter_cli.modules.workspace.agents_md_service import AgentsMdService
 from winter_cli.modules.workspace.extension_claudemd_service import ExtensionClaudemdService
 from winter_cli.modules.workspace.extension_exclude_service import ExtensionExcludeService
 from winter_cli.modules.workspace.extension_hook_service import ExtensionHookService
@@ -270,6 +271,12 @@ class Container(containers.DeclarativeContainer):
         fs=fs,
     )
 
+    agents_md_svc = providers.Singleton(
+        AgentsMdService,
+        config=workspace_config,
+        fs=fs,
+    )
+
     prune_svc = providers.Factory(
         PruneService,
         config=workspace_config,
@@ -301,6 +308,7 @@ class Container(containers.DeclarativeContainer):
         extension_hook_svc=extension_hook_svc,
         extension_exclude_svc=extension_exclude_svc,
         extension_claudemd_svc=extension_claudemd_svc,
+        agents_md_svc=agents_md_svc,
         fs=fs,
         subprocess_runner=subprocess_runner,
         git_repo=git_repo,
@@ -470,6 +478,13 @@ class Container(containers.DeclarativeContainer):
         manifest_loader=extension_manifest_loader,
     )
 
+    agents_md_probe_svc = providers.Factory(
+        _lazy("winter_cli.modules.doctor.agents_md_probe_service:AgentsMdProbeService"),
+        config=workspace_config,
+        fs=fs,
+        agents_md_svc=agents_md_svc,
+    )
+
     doctor_svc = providers.Factory(
         _lazy("winter_cli.modules.doctor.doctor_service:DoctorService"),
         core_probe_svc=core_probe_svc,
@@ -480,6 +495,7 @@ class Container(containers.DeclarativeContainer):
         port_probe_svc=port_probe_svc,
         provision_manifest_probe_svc=provision_manifest_probe_svc,
         skill_probe_svc=skill_probe_svc,
+        agents_md_probe_svc=agents_md_probe_svc,
     )
 
     stream_doctor_reporter = providers.Factory(

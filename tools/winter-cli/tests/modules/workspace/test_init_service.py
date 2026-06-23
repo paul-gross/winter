@@ -22,6 +22,7 @@ from winter_cli.config.models import (
     WorkspaceConfig,
 )
 from winter_cli.core.subprocess_runner import SubprocessResult
+from winter_cli.modules.workspace.agents_md_service import AgentsMdService
 from winter_cli.modules.workspace.extension_claudemd_service import ExtensionClaudemdService
 from winter_cli.modules.workspace.extension_exclude_service import ExtensionExcludeService
 from winter_cli.modules.workspace.extension_hook_service import ExtensionHookService
@@ -81,6 +82,10 @@ def _service(
             manifest_loader=manifest_loader,
         ),
         extension_claudemd_svc=ExtensionClaudemdService(
+            config=workspace_config,
+            fs=fs,
+        ),
+        agents_md_svc=AgentsMdService(
             config=workspace_config,
             fs=fs,
         ),
@@ -483,6 +488,10 @@ def _service_with_ext(
             manifest_loader=manifest_loader,
         ),
         extension_claudemd_svc=ExtensionClaudemdService(
+            config=workspace_config,
+            fs=fs,
+        ),
+        agents_md_svc=AgentsMdService(
             config=workspace_config,
             fs=fs,
         ),

@@ -11,6 +11,7 @@ from winter_cli.core.subprocess_runner import ISubprocessRunner
 from winter_cli.modules.workspace.config_lock_repository import IConfigLockRepository
 from winter_cli.modules.workspace.env_index import EnvIndexAllocator
 from winter_cli.modules.workspace.env_index_registry import IEnvIndexRegistry
+from winter_cli.modules.workspace.agents_md_service import AgentsMdService
 from winter_cli.modules.workspace.extension_claudemd_service import ExtensionClaudemdService
 from winter_cli.modules.workspace.extension_exclude_service import ExtensionExcludeService
 from winter_cli.modules.workspace.extension_hook_service import ExtensionHookService
@@ -76,6 +77,7 @@ class InitService:
         extension_hook_svc: ExtensionHookService,
         extension_exclude_svc: ExtensionExcludeService,
         extension_claudemd_svc: ExtensionClaudemdService,
+        agents_md_svc: AgentsMdService,
         fs: IFilesystemWriter,
         subprocess_runner: ISubprocessRunner,
         git_repo: IGitRepository,
@@ -89,6 +91,7 @@ class InitService:
         self._extension_hook_svc = extension_hook_svc
         self._extension_exclude_svc = extension_exclude_svc
         self._extension_claudemd_svc = extension_claudemd_svc
+        self._agents_md_svc = agents_md_svc
         self._fs = fs
         self._subprocess = subprocess_runner
         self._git_repo = git_repo
@@ -141,6 +144,11 @@ class InitService:
         if not self._extension_exclude_svc.finalize_excludes(present_repos, reporter):
             success = False
 
+        # Generate AGENTS.md at the workspace root after CLAUDE.winter.md is
+        # in place (finalize_claudemd above) so the full @import graph resolves.
+        if not self._agents_md_svc.generate(self._config.workspace_root, reporter):
+            success = False
+
         reporter.target_completed(target, success)
         return success
 
@@ -181,6 +189,10 @@ class InitService:
             name,
             reporter,
         ):
+            success = False
+
+        # Generate AGENTS.md at the feature-env root (mirrors workspace root).
+        if not self._agents_md_svc.generate(env_root, reporter):
             success = False
 
         reporter.target_completed(name, success)
