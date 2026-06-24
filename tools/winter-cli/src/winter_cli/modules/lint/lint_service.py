@@ -34,9 +34,7 @@ class LintService:
         reporter.started(scope)
 
         outcomes: list[LintCheckOutcome] = []
-        core_outcome = self._core_lint_svc.run(scope)
-        if core_outcome is not None:
-            outcomes.append(core_outcome)
+        outcomes.extend(self._core_lint_svc.run(scope))
         workspace_outcome = self._workspace_lint_svc.run(scope)
         if workspace_outcome is not None:
             outcomes.append(workspace_outcome)

@@ -19,8 +19,20 @@ def _finding(source: str, status: LintStatus, check: str = "c") -> LintFinding:
     return LintFinding(source=source, check=check, status=status)
 
 
+class _FakeCoreLint:
+    """A core lint service fake: `run(scope) -> list[LintCheckOutcome]`."""
+
+    def __init__(self, outcomes: list[LintCheckOutcome]) -> None:
+        self._outcomes = outcomes
+        self.calls: list[LintScope] = []
+
+    def run(self, scope: LintScope) -> list[LintCheckOutcome]:
+        self.calls.append(scope)
+        return list(self._outcomes)
+
+
 class _FakeScalarLint:
-    """A core- or workspace-style lint service: `run(scope) -> outcome | None`."""
+    """A workspace-style lint service: `run(scope) -> outcome | None`."""
 
     def __init__(self, outcome: LintCheckOutcome | None) -> None:
         self._outcome = outcome
@@ -67,8 +79,9 @@ def _make(
     extensions: list[LintCheckOutcome],
     core: LintCheckOutcome | None = None,
 ) -> tuple[LintService, _RecordingReporter]:
+    core_outcomes = [core] if core is not None else []
     svc = LintService(
-        core_lint_svc=_FakeScalarLint(core),  # type: ignore[arg-type]
+        core_lint_svc=_FakeCoreLint(core_outcomes),  # type: ignore[arg-type]
         workspace_lint_svc=_FakeScalarLint(workspace),  # type: ignore[arg-type]
         extension_lint_svc=_FakeExtensionLint(extensions),  # type: ignore[arg-type]
         repo_factory=_FakeRepoFactory(),  # type: ignore[arg-type]
@@ -140,7 +153,7 @@ def test_only_warnings_keeps_exit_zero() -> None:
 def test_passes_standalone_repos_to_extension_service() -> None:
     ext_svc = _FakeExtensionLint([])
     svc = LintService(
-        core_lint_svc=_FakeScalarLint(None),  # type: ignore[arg-type]
+        core_lint_svc=_FakeCoreLint([]),  # type: ignore[arg-type]
         workspace_lint_svc=_FakeScalarLint(None),  # type: ignore[arg-type]
         extension_lint_svc=ext_svc,  # type: ignore[arg-type]
         repo_factory=_FakeRepoFactory(),  # type: ignore[arg-type]

@@ -7,6 +7,7 @@ from winter_cli.config.models import (
     AdoptExtensions,
     DashboardConfig,
     DashboardLayout,
+    FileSizeLintConfig,
     GitIdentity,
     KeybindingsConfig,
     ProjectRepositoryConfig,
@@ -218,6 +219,8 @@ class WorkspaceConfigService:
         if not isinstance(provision_raw, dict):
             provision_raw = {}
 
+        file_size_lint = self._parse_file_size_lint(merged.get("core_checks"))
+
         return WorkspaceConfig(
             workspace_root=workspace_root,
             session_prefix=merged.get("session_prefix", "winter"),
@@ -234,6 +237,7 @@ class WorkspaceConfigService:
             capabilities=capabilities,
             doctor=merged.get("doctor") if isinstance(merged.get("doctor"), str) else None,
             lint=_coerce_str_list(merged.get("lint")),
+            file_size_lint=file_size_lint,
             keybindings=keybindings,
             dashboard=dashboard,
             base_port=base_port,
@@ -285,6 +289,28 @@ class WorkspaceConfigService:
                 f"Invalid tui.dashboard.layout value: {layout_value!r}. Must be one of: {valid}."
             ) from exc
         return DashboardConfig(layout=layout)
+
+    @staticmethod
+    def _parse_file_size_lint(core_checks_raw: object) -> FileSizeLintConfig:
+        """Build a FileSizeLintConfig from the ``[core_checks.file_size]`` sub-table.
+
+        Falls back to defaults when the table is absent or any value is missing.
+        Non-integer values are silently ignored in favour of the default so a
+        stray typo in a threshold does not break unrelated commands.
+        """
+        if not isinstance(core_checks_raw, dict):
+            return FileSizeLintConfig()
+        file_size_raw = core_checks_raw.get("file_size")
+        if not isinstance(file_size_raw, dict):
+            return FileSizeLintConfig()
+        kwargs: dict = {}
+        injected = file_size_raw.get("injected_bytes")
+        if isinstance(injected, int) and not isinstance(injected, bool):
+            kwargs["injected_bytes"] = injected
+        reference = file_size_raw.get("reference_bytes")
+        if isinstance(reference, int) and not isinstance(reference, bool):
+            kwargs["reference_bytes"] = reference
+        return FileSizeLintConfig(**kwargs)
 
     def _read_config(self, path: Path) -> dict:
         if not self._fs.is_file(path):

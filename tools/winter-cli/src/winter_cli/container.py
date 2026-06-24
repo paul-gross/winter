@@ -715,6 +715,7 @@ class Container(containers.DeclarativeContainer):
         subprocess_runner=subprocess_runner,
         winter_cli_path=winter_cli_path,
         script_path=extractability_script_path,
+        file_size_config=workspace_config.provided.file_size_lint,
     )
 
     workspace_lint_svc = providers.Factory(

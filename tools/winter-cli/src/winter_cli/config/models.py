@@ -248,6 +248,34 @@ class StandaloneRepositoryConfig(BaseModel):
     `winter provision` instead."""
 
 
+class FileSizeLintConfig(BaseModel):
+    """Byte-size thresholds for the built-in agent-facing markdown file-size check.
+
+    The check measures every ``.md`` file in scope and compares it to one of
+    two thresholds: the tighter ``injected_bytes`` threshold for files that
+    appear in the auto-injected ``@import`` graph (roots: workspace
+    ``CLAUDE.md`` and ``CLAUDE.winter.md``), and the looser
+    ``reference_bytes`` threshold for all other agent-facing markdown.
+
+    Default values are calibrated to the ~1.5 k-token target from issue #96
+    (1 token ≈ 4 bytes → 1 500 tokens ≈ 6 000 bytes for injected files) with a
+    2x headroom for reference docs that are consulted on demand rather than
+    always loaded into context.
+
+    Configure under ``[core_checks.file_size]`` in ``.winter/config.toml``::
+
+        [core_checks.file_size]
+        injected_bytes = 6000
+        reference_bytes = 12000
+    """
+
+    injected_bytes: int = 6000
+    """Maximum byte size for files in the auto-injected @import graph (default 6 000)."""
+
+    reference_bytes: int = 12000
+    """Maximum byte size for non-injected agent-facing markdown files (default 12 000)."""
+
+
 class DashboardConfig(BaseModel):
     """Dashboard layout configuration from the `[tui.dashboard]` config table.
 
@@ -377,6 +405,12 @@ class WorkspaceConfig(BaseModel):
     script runs before extension checks and emits one NDJSON finding per stdout
     line (optionally with `file`/`line`). Hosts ecosystem-general checks the
     workspace owns but no single extension does. Empty by default."""
+
+    file_size_lint: FileSizeLintConfig = Field(default_factory=FileSizeLintConfig)
+    """Byte-size thresholds for the built-in agent-facing markdown file-size check.
+
+    Configure under ``[core_checks.file_size]`` in ``.winter/config.toml`` to
+    override the 6 000-byte (injected) and 12 000-byte (reference) defaults."""
 
     keybindings: KeybindingsConfig = Field(default_factory=KeybindingsConfig)
     """Dashboard keybinding overrides from the `[keybindings]` table."""
