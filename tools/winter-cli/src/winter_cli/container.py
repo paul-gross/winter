@@ -716,6 +716,7 @@ class Container(containers.DeclarativeContainer):
         winter_cli_path=winter_cli_path,
         script_path=extractability_script_path,
         file_size_config=workspace_config.provided.file_size_lint,
+        orchestrator_resolver=service_orchestrator_resolver,
     )
 
     workspace_lint_svc = providers.Factory(

@@ -102,13 +102,14 @@ def _conforming_runner(ep: Path = ENTRYPOINT) -> FakeSubprocessRunner:
         return SubprocessResult(returncode=0, stdout=argv_str, stderr="")
 
     responses: dict[str, SubprocessResult] = {
-        # accepts-action checks (exit 0 for each of the 6 declared actions)
+        # accepts-action checks (exit 0 for each of the 7 declared actions)
         f"{ep_str} up {_PROBE_ENV}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} down {_PROBE_ENV}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} status": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
+        f"{ep_str} catalog": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         # refuses-unknown check (exit 2 = non-zero)
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
         # forwards-params check (echo sentinel back in stdout)
@@ -137,6 +138,7 @@ def test_conforming_extension_reports_accepts_action_checks() -> None:
     assert "accepts-restart" in check_ids
     assert "accepts-logs" in check_ids
     assert "accepts-describe" in check_ids
+    assert "accepts-catalog" in check_ids
 
 
 def test_conforming_extension_reports_refuses_unknown_check() -> None:
@@ -167,6 +169,7 @@ def test_action_rejected_with_exit_2_fails_accepts_check() -> None:
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
+        f"{ep_str} catalog": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
             returncode=0, stdout=f"{_SENTINEL}/__svc__", stderr=""
@@ -189,6 +192,7 @@ def test_action_rejected_report_has_descriptive_detail() -> None:
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
+        f"{ep_str} catalog": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
             returncode=0, stdout=f"{_SENTINEL}/__svc__", stderr=""
@@ -214,6 +218,7 @@ def test_accepts_unknown_action_fails_refuses_check() -> None:
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
+        f"{ep_str} catalog": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         # Returns exit 0 for the unknown action — fails the refuses-unknown check.
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
@@ -237,6 +242,7 @@ def test_accepts_unknown_action_detail_mentions_exit_0() -> None:
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
+        f"{ep_str} catalog": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
             returncode=0, stdout=f"{_SENTINEL}/__svc__", stderr=""
@@ -261,6 +267,7 @@ def test_drops_params_fails_forwards_check() -> None:
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
+        f"{ep_str} catalog": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
         # Empty stdout/stderr — sentinel not echoed, drops params.
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(returncode=0, stdout="", stderr=""),
@@ -281,6 +288,7 @@ def test_drops_params_detail_mentions_sentinel() -> None:
         f"{ep_str} restart {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
+        f"{ep_str} catalog": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(returncode=0, stdout="", stderr=""),
     }
@@ -416,6 +424,7 @@ def _runner_with_bad_describe_json(ep: Path = ENTRYPOINT) -> FakeSubprocessRunne
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         # describe emits malformed JSON — not a valid {"services": [...]} object.
         f"{ep_str} describe": SubprocessResult(returncode=0, stdout="this is not json", stderr=""),
+        f"{ep_str} catalog": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
             returncode=0, stdout=f"{_SENTINEL}/__svc__", stderr=""
@@ -435,6 +444,7 @@ def _runner_with_non_object_describe(ep: Path = ENTRYPOINT) -> FakeSubprocessRun
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         # describe emits a JSON array, not an object — fails the check.
         f"{ep_str} describe": SubprocessResult(returncode=0, stdout='["service-a", "service-b"]', stderr=""),
+        f"{ep_str} catalog": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
             returncode=0, stdout=f"{_SENTINEL}/__svc__", stderr=""
@@ -484,6 +494,7 @@ def test_valid_services_list_passes_emits_describe_json_check() -> None:
         f"{ep_str} logs {_PROBE_PATTERN}": SubprocessResult(returncode=0, stdout="", stderr=""),
         # Valid: non-empty services list.
         f"{ep_str} describe": SubprocessResult(returncode=0, stdout='{"services":["api","worker"]}', stderr=""),
+        f"{ep_str} catalog": SubprocessResult(returncode=0, stdout='{"services":[]}', stderr=""),
         f"{ep_str} {_UNKNOWN_ACTION}": SubprocessResult(returncode=2, stdout="", stderr=""),
         f"{ep_str} status {_SENTINEL}/__svc__": SubprocessResult(
             returncode=0, stdout=f"{_SENTINEL}/__svc__", stderr=""

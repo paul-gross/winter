@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from datetime import UTC, datetime
 
@@ -55,6 +56,7 @@ _HELP_DESCRIBE = _SPEC_SUMMARIES.get(
     "describe",
     "Emit a JSON object listing the service names owned by this provider.",
 )
+_HELP_CATALOG = "Emit scope-qualified service names from all providers as JSON."
 
 
 def _service_handler(ctx: click.Context):
@@ -259,6 +261,50 @@ def logs_cmd(
     )
     handler = _service_handler(ctx)
     handler.run_logs(options)
+
+
+@service_group.command("catalog", short_help=_HELP_CATALOG, hidden=True)
+@click.pass_context
+def catalog_cmd(ctx: click.Context) -> None:
+    """Emit the merged service catalog from all bound providers as JSON.
+
+    Each provider is queried with the ``catalog`` action and returns its
+    declared services as scope-qualified names.  Winter merges the results
+    across all providers and emits a single JSON object::
+
+        {"services": ["workspace/postgres", "*/api", "*/worker"]}
+
+    ``workspace/<name>`` means the service runs in the shared workspace scope.
+    ``*/<name>`` means the service runs per feature env (any env name matches).
+
+    Used by ``winter lint`` to validate ``required_services`` references in
+    provision manifests.
+    """
+    from winter_cli.modules.service.service_catalog_service import ServiceCatalogService
+
+    cli_context = cli_ctx(ctx)
+    container = cli_context.container
+    override = cli_context.service_orchestrator_override
+    if override is not None:
+        print(f"using service orchestrator override: {override}", file=sys.stderr)
+        container.service_orchestrator_override.override(providers.Object(override))
+    try:
+        resolver = container.service_orchestrator_resolver()
+        all_providers = resolver.resolve_all()
+    except Exception as exc:
+        print(json.dumps({"services": [], "error": str(exc)}))
+        if override is not None:
+            container.service_orchestrator_override.reset_override()
+        return
+    finally:
+        if override is not None:
+            container.service_orchestrator_override.reset_override()
+
+    subprocess_runner = container.subprocess_runner()
+    workspace_config = container.workspace_config()
+    catalog_svc = ServiceCatalogService(subprocess_runner, workspace_config.workspace_root)
+    catalog = catalog_svc.build(all_providers)
+    print(json.dumps({"services": catalog.all_qualified_names()}))
 
 
 @service_group.command("describe", short_help=_HELP_DESCRIBE, hidden=True)

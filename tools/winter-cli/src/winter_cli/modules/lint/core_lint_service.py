@@ -26,6 +26,9 @@ EXTRACTABILITY_CHECK = "extractability"
 # Built-in check name for the agent-facing markdown file-size guard.
 FILE_SIZE_CHECK = "file-size"
 
+# Built-in check name for the provision required_services reference check.
+REQUIRED_SERVICES_CHECK = "required-services"
+
 # Claude @import pattern — line-leading or inline, same as extractability.py.
 # Matches `@<path>` where path contains a `/` or `.` (filters out @param-style
 # mentions that are not path imports).
@@ -187,6 +190,9 @@ class CoreLintService:
       graph (``tools/winter-lint/extractability.py``).
     * **file-size** — flags agent-facing markdown files exceeding configurable
       byte-size thresholds, with a tighter limit for auto-injected files.
+    * **required-services** — validates ``required_services`` references in
+      provision manifests against the merged service catalog from all bound
+      service-orchestrator providers.
 
     Returns one `LintCheckOutcome` tagged `source="core"` per check that
     contributed (even when a check finds nothing), so the dispatcher counts each
@@ -203,12 +209,14 @@ class CoreLintService:
         winter_cli_path: str,
         script_path: Path,
         file_size_config: FileSizeLintConfig | None = None,
+        orchestrator_resolver: object | None = None,
     ) -> None:
         self._workspace_root = workspace_root
         self._fs = fs
         self._subprocess = subprocess_runner
         self._winter_cli_path = winter_cli_path
         self._script_path = script_path
+        self._orchestrator_resolver = orchestrator_resolver
         self._file_size_check = FileSizeLintCheck(
             workspace_root,
             file_size_config if file_size_config is not None else FileSizeLintConfig(),
@@ -264,4 +272,32 @@ class CoreLintService:
         file_size_findings = self._file_size_check.check(scope)
         outcomes.append(LintCheckOutcome(source=CORE_SOURCE, findings=file_size_findings))
 
+        # ── required-services ────────────────────────────────────────────────
+        req_svc_findings = self._run_required_services_check(scope)
+        outcomes.append(LintCheckOutcome(source=CORE_SOURCE, findings=req_svc_findings))
+
         return outcomes
+
+    def _run_required_services_check(self, scope: LintScope) -> list[LintFinding]:
+        """Build and run the required-services lint check."""
+        from winter_cli.modules.lint.required_services_check import RequiredServicesLintCheck
+        from winter_cli.modules.service.service_catalog_service import ServiceCatalogService
+
+        # Resolve providers from the orchestrator resolver; gracefully degrade
+        # to an empty list if none is registered or resolution fails.
+        providers: list = []
+        if self._orchestrator_resolver is not None:
+            try:
+                providers = self._orchestrator_resolver.resolve_all()  # type: ignore[union-attr]
+            except Exception:
+                # No orchestrator registered or binding error — the check
+                # handles the empty-providers case by emitting a warning finding.
+                providers = []
+
+        catalog_svc = ServiceCatalogService(self._subprocess, self._workspace_root)
+        check = RequiredServicesLintCheck(
+            workspace_root=self._workspace_root,
+            catalog_service=catalog_svc,
+            providers=providers,
+        )
+        return check.check(scope)

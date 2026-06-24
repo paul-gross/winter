@@ -95,6 +95,30 @@ summary = "Emit a JSON object listing the service names owned by this provider."
 #   raises DuplicateOwnershipError if two providers claim the same service.
 #   An empty services list is valid: the provider declares it owns no named services.
 
+[[action]]
+name    = "catalog"
+arity   = "no-positionals"
+summary = "Emit scope-qualified service names declared by this provider as JSON."
+
+# Returns a single JSON object on stdout:
+#   {"services": ["workspace/<name>", "*/<name>", ...]}
+#
+# Scope prefixes:
+#   "workspace/<name>" — the service runs in the shared workspace scope (matches
+#                        "workspace/<name>" references in provision manifests).
+#   "*/<name>"         — the service runs per feature env (matches "<any-env>/<name>"
+#                        references in provision manifests, where env != "workspace").
+#
+# Winter invokes catalog for EACH bound provider when running `winter lint` to
+# build the merged service catalog used by the required-services check.  A provider
+# that does not implement catalog returns exit 2 or 3; winter's ServiceCatalogService
+# silently omits that provider's names from the catalog, which causes required_services
+# references to "fail: unknown service" findings even when the service is real.
+# Therefore: IMPLEMENT catalog on every provider that declares services.
+#
+# Unknown or empty → {"services": []}
+# Missing or non-list "services" key treated as empty (shape-stability).
+
 # Conformance checks. These drive winter ext verify (phase 2).
 [[check]]
 kind        = "accepts-action"

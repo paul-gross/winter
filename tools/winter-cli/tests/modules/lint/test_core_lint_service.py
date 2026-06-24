@@ -87,8 +87,8 @@ def test_parses_findings_under_core_source() -> None:
 def test_clean_run_still_contributes_outcomes() -> None:
     svc, _ = _build_service(run_response=SubprocessResult(0, "", ""))
     outcomes = svc.run(SCOPE)
-    # Both extractability and file-size outcomes are present (two core checks).
-    assert len(outcomes) == 2
+    # extractability, file-size, and required-services outcomes are all present.
+    assert len(outcomes) == 3
     assert all(o.source == CORE_SOURCE for o in outcomes)
 
 

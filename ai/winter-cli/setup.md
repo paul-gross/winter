@@ -252,7 +252,28 @@ required_services = ["workspace/postgres"]
 scope             = "feature-environment"
 apply             = "scripts/seed.sh"
 reset             = "scripts/reseed.sh"
+
+# Extension-declared services — merged by winter into WINTER_SERVICE_MANIFEST on `service up`.
+# The service orchestrator reads the manifest and adds these services to its live session.
+[[service]]
+name    = "worker"              # required; must be unique across all sources (workspace + all extensions)
+scope   = "feature-environment" # "feature-environment" (default) or "workspace"
+command = "python -m worker"    # required; the command to run
+target  = "2.0"                 # provider-specific routing key (required by the tmux provider: window.pane)
+# image = "myorg/worker:latest" # optional; for container-based providers
+# ports = [8080]                # optional; port numbers declared by this service
 ```
+
+**`[[service]]` declaration rules:**
+
+- `name` is required and must be unique across all sources (the workspace config and every installed extension). A name collision across sources is a fatal error at `service up` time.
+- `scope` defaults to `"feature-environment"` when omitted. Accepted values: `"feature-environment"` (one instance per active env), `"workspace"` (one shared instance). Unknown scope values are rejected.
+- `command` is required.
+- `target` is required by the tmux provider (window.pane address, e.g. `"2.0"`). Container-based providers use `image` instead. Unknown keys are rejected.
+- `ports` is an optional list of integer port numbers the service listens on; used by status rendering.
+- `image` is optional; used by container-based providers.
+
+The extension's `[[service]]` entries are aggregated by `winter service up` alongside any `[[service]]` entries in the workspace's `.winter/config.toml`, deduplication is enforced by name, and the result is written to a temporary TOML file whose path is injected into each provider subprocess as `WINTER_SERVICE_MANIFEST`. See [usage/service.md](./usage/service.md#per-action-env-var-winter_service_manifest) for the full manifest format and consume-or-ignore rule.
 
 `requires` declares the other winter modules this one references and therefore needs when installed on its own. Each entry is a module name — the `<context>` half of a `<context>:/path` reference. It is the data `winter graph` aggregates and the module-extractability lint check validates references against.
 
@@ -458,7 +479,15 @@ Results appear under a `[<ext-prefix>]` source group, one block per installed ex
 
 These ship with winter-cli and run on every `winter lint`, the same way `winter doctor` runs its built-in core probes — no `.winter/config.toml` or `winter-ext.toml` registration needed. They run first, before the workspace and extension checks, and their findings appear under a `[core]` source group.
 
-The current core check is **module extractability** (`tools/winter-lint/extractability.py`): it validates dependency direction across the ecosystem graph, flagging a `<context>:/path` reference whose target a module isn't guaranteed to have when shipped standalone — a core module pointing at an extension (a layering inversion) or an undeclared sibling (a dead pointer at the consumption edge). It is graph-driven (it calls back into `$WINTER_CLI graph --json` rather than rebuilding the graph) and honors the `<!-- winter-lint:example -->` line exemption and fenced-code-block skip. Full rules in [tools/winter-lint/README.md](../../tools/winter-lint/README.md).
+**Unlike contributed lint scripts, core checks are not confined to `WINTER_LINT_PATHS`.** Core checks may read workspace-root injection roots (`CLAUDE.md`, `CLAUDE.winter.md`) and `.winter/` manifests directly to do their work. This is intentional — the file-size check walks the `@import` graph rooted at those files regardless of scope, and the required-services check reads every manifest to find `required_services` declarations. Contributed scripts MUST confine themselves to `WINTER_LINT_PATHS`; core checks operate at a higher privilege tier because they ship with winter-cli and their scope is the whole workspace by design.
+
+The three built-in core checks are:
+
+- **module extractability** (`tools/winter-lint/extractability.py`): validates dependency direction across the ecosystem graph, flagging a `<context>:/path` reference whose target a module isn't guaranteed to have when shipped standalone — a core module pointing at an extension (a layering inversion) or an undeclared sibling (a dead pointer at the consumption edge). It is graph-driven (it calls back into `$WINTER_CLI graph --json` rather than rebuilding the graph) and honors the `<!-- winter-lint:example -->` line exemption and fenced-code-block skip. Full rules in [tools/winter-lint/README.md](../../tools/winter-lint/README.md).
+
+- **file-size**: checks agent-facing markdown files against configurable byte-size thresholds. Files in the auto-injected `@import` graph (rooted at `CLAUDE.md` and `CLAUDE.winter.md` in the workspace root) are held to the tighter `injected_bytes` threshold; all other `.md` files in scope are checked against the looser `reference_bytes` threshold. Override thresholds in `.winter/config.toml` under `[core_checks.file_size]`.
+
+- **required-services**: validates `required_services` entries in `[[provision.resource]]` and `[[provision.data]]` handlers (in `.winter/config.toml` and each installed extension's `winter-ext.toml`) against the merged service catalog from all bound service-orchestrator providers. Each entry must be scope-qualified (`workspace/<name>` or `<env>/<name>`), and the named service must appear in at least one provider's `catalog` output. See [usage/provision.md](./usage/provision.md#service-check-required_services) for the runtime `required_services` enforcement; this static lint check is a separate, complementary surface — it validates catalog membership ahead of time and runs even when no env is provisioned.
 
 ### Finding output contract
 

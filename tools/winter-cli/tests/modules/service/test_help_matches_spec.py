@@ -32,11 +32,20 @@ def _click_subcommands() -> dict[str, click.Command]:
 
 # ── action set parity ────────────────────────────────────────────────────────
 
+# Winter-internal hidden subcommands that are NOT part of the provider contract
+# (i.e., not in service-v1.toml) but are valid CLI entrypoints.  These are
+# excluded from the spec-parity check.
+_WINTER_INTERNAL_SUBCOMMANDS = frozenset({"ext-services"})
+
 
 def test_service_subcommand_names_match_spec_action_names() -> None:
-    """Every spec action has a click subcommand; no extra subcommands exist."""
+    """Every spec action has a click subcommand; no extra subcommands exist.
+
+    Winter-internal hidden subcommands (e.g. ``ext-services``) are excluded from
+    this check because they are not part of the provider contract.
+    """
     spec_names = set(_spec_actions())
-    click_names = set(_click_subcommands())
+    click_names = set(_click_subcommands()) - _WINTER_INTERNAL_SUBCOMMANDS
     assert click_names == spec_names, (
         f"Click subcommands {sorted(click_names)} do not match spec actions {sorted(spec_names)}. "
         "Update service/command.py or service-v1.toml to bring them back in sync."

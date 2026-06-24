@@ -38,10 +38,10 @@ def test_load_service_v1_slot_and_version() -> None:
     assert spec.version == "v1"
 
 
-def test_load_service_v1_has_six_actions() -> None:
+def test_load_service_v1_has_seven_actions() -> None:
     spec = _loader_real().load("service", "v1")
     action_names = {a.name for a in spec.actions}
-    assert action_names == {"up", "down", "status", "restart", "logs", "describe"}
+    assert action_names == {"up", "down", "status", "restart", "logs", "describe", "catalog"}
 
 
 def test_load_service_v1_action_arities() -> None:
@@ -54,6 +54,7 @@ def test_load_service_v1_action_arities() -> None:
     assert by_name["restart"].arity == ArityKind.patterns_required
     assert by_name["logs"].arity == ArityKind.patterns_required
     assert by_name["describe"].arity == ArityKind.no_positionals
+    assert by_name["catalog"].arity == ArityKind.no_positionals
 
 
 def test_load_service_v1_always_present_env_vars() -> None:
