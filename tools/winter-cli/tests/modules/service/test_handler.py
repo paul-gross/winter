@@ -13,6 +13,7 @@ from tests.conftest import (
     FakeSpecLoader,
     FakeSubprocessRunner,
 )
+from winter_cli.config.models import ProjectRepositoryConfig, SingletonRepository, SingletonType, WorkspaceConfig
 from winter_cli.core.internal.click_cli_output_service import ClickCliOutputService
 from winter_cli.modules.capability.capability_registry_service import CapabilityRegistryService
 from winter_cli.modules.service.describe_parser import DescribeResultParser
@@ -25,6 +26,7 @@ from winter_cli.modules.service.service_logs_service import ServiceLogsService
 from winter_cli.modules.service.service_provider_index import ServiceDescribeService
 from winter_cli.modules.service.service_readiness_service import ServiceReadinessService
 from winter_cli.modules.service.service_reporter import JsonServiceReporter, StreamServiceReporter
+from winter_cli.modules.service.service_status_matrix_service import ServiceStatusMatrixService
 from winter_cli.modules.service.service_status_service import ServiceStatusService
 from winter_cli.modules.service.status_models import StatusOptions
 from winter_cli.modules.service.status_parser import StatusDocumentParser
@@ -65,6 +67,40 @@ class _StubRepoFactory:
 
     def get_standalone_repos(self) -> list[StandaloneRepository]:
         return self._repos
+
+
+class _FakeEnvFileSourcer:
+    def source(self, scope: str, ws_root: Path) -> dict[str, str]:
+        return {}
+
+
+class _FakeEnvIndexRegistry:
+    def __init__(self, assignments: dict[str, int]) -> None:
+        self._data: dict[str, int] = dict(assignments)
+
+    def get_index(self, name: str) -> int | None:
+        return self._data.get(name)
+
+    def all_assignments(self) -> dict[str, int]:
+        return dict(self._data)
+
+    def assign(self, name: str, index: int) -> None:
+        self._data[name] = index
+
+    def remove(self, name: str) -> None:
+        self._data.pop(name, None)
+
+
+def _ws_config() -> WorkspaceConfig:
+    return WorkspaceConfig(
+        workspace_root=WS,
+        session_prefix="test",
+        main_branch="main",
+        base_port=4000,
+        ports_per_env=20,
+        singleton_repos=[SingletonRepository(name="ws", type=SingletonType.workspace)],
+        project_repos=[ProjectRepositoryConfig(name="demo", url="git@example.com:demo.git")],
+    )
 
 
 def _make_registry_and_resolver(
@@ -119,11 +155,19 @@ def _handler(runner: FakeSubprocessRunner, click: Any = None) -> ServiceHandler:
         describe_service=describe_svc,
         workspace_root=WS,
     )
-    status = ServiceStatusService(
+    matrix = ServiceStatusMatrixService(
         subprocess_runner=runner,
+        describe_service=describe_svc,
+        env_file_sourcer=_FakeEnvFileSourcer(),
+        status_parser=StatusDocumentParser(),
+        workspace_config=_ws_config(),
+        env_index_registry=_FakeEnvIndexRegistry({"alpha": 1}),
+        workspace_root=WS,
+    )
+    status = ServiceStatusService(
         orchestrator_resolver=res,
         status_parser=StatusDocumentParser(),
-        workspace_root=WS,
+        matrix_service=matrix,
     )
     readiness = ServiceReadinessService(
         status_service=status,
@@ -219,21 +263,42 @@ def test_handler_restart_workspace_service_pattern_forwarded_verbatim() -> None:
 
 
 def test_handler_status_with_patterns_forwards_them_on_argv() -> None:
-    runner = FakeSubprocessRunner(
-        popen_responses={f"{STATUS_ENTRYPOINT} status alpha/web alpha/api": ([_SIMPLE_STATUS_DOC], 0)}
-    )
+    """Multiple scope-qualified patterns for the same scope expand to <scope>/*.
+
+    When two patterns target the same scope (alpha/web, alpha/api), the matrix
+    forwards alpha/* to the provider so neither service is silently dropped.
+    The post-merge filter_status backstop then narrows the result to web+api.
+    The workspace scope is not included because no pattern targets 'workspace'.
+    """
+    runner = FakeSubprocessRunner(popen_responses={f"{STATUS_ENTRYPOINT} status alpha/*": ([_SIMPLE_STATUS_DOC], 0)})
     _handler(runner).run_status(StatusOptions(patterns=("alpha/web", "alpha/api"), as_json=False))
     assert len(runner.popen_calls) == 1
     cmd = runner.popen_calls[0][0]
-    assert cmd == [STATUS_ENTRYPOINT, "status", "alpha/web", "alpha/api"]
+    assert cmd == [STATUS_ENTRYPOINT, "status", "alpha/*"]
 
 
 def test_handler_status_with_no_patterns_sends_bare_action() -> None:
-    runner = FakeSubprocessRunner(popen_responses={f"{STATUS_ENTRYPOINT} status": ([_SIMPLE_STATUS_DOC], 0)})
+    """No patterns → full matrix: one cell per configured env + workspace cell.
+
+    The sole provider is called with 'alpha/*' and 'workspace/*' (registry has alpha=1).
+    """
+    runner = FakeSubprocessRunner(
+        popen_responses={
+            f"{STATUS_ENTRYPOINT} status alpha/*": ([_SIMPLE_STATUS_DOC], 0),
+            f"{STATUS_ENTRYPOINT} status workspace/*": (
+                [
+                    json.dumps({"envs": []}),
+                ],
+                0,
+            ),
+        }
+    )
     _handler(runner).run_status(StatusOptions(patterns=(), as_json=False))
-    assert len(runner.popen_calls) == 1
-    cmd = runner.popen_calls[0][0]
-    assert cmd == [STATUS_ENTRYPOINT, "status"]
+    # Two cells: alpha/* and workspace/*, both invoked.
+    assert len(runner.popen_calls) == 2
+    cmds = [calls[0] for calls in runner.popen_calls]
+    assert any(cmd == [STATUS_ENTRYPOINT, "status", "alpha/*"] for cmd in cmds)
+    assert any(cmd == [STATUS_ENTRYPOINT, "status", "workspace/*"] for cmd in cmds)
 
 
 def test_handler_adopts_nonzero_exit_code() -> None:
@@ -251,8 +316,22 @@ def test_handler_adopts_nonzero_exit_code_for_restart() -> None:
 
 
 def test_handler_run_status_adopts_nonzero_exit_code() -> None:
-    """run_status exits with the orchestrator's non-zero exit code regardless of stdout validity."""
-    runner = FakeSubprocessRunner(popen_responses={f"{STATUS_ENTRYPOINT} status": (["not valid json"], 3)})
+    """run_status exits with the orchestrator's non-zero exit code regardless of stdout validity.
+
+    Both matrix cells are called; workspace/* returns an empty valid doc; alpha/* returns
+    invalid JSON with exit code 3.  The worst exit code (3) is propagated.
+    """
+    runner = FakeSubprocessRunner(
+        popen_responses={
+            f"{STATUS_ENTRYPOINT} status alpha/*": (["not valid json"], 3),
+            f"{STATUS_ENTRYPOINT} status workspace/*": (
+                [
+                    json.dumps({"envs": []}),
+                ],
+                0,
+            ),
+        }
+    )
     with pytest.raises(SystemExit) as excinfo:
         _handler(runner).run_status(StatusOptions(patterns=(), as_json=False))
     assert excinfo.value.code == 3
@@ -264,7 +343,17 @@ def test_handler_up_exits_zero_without_raising() -> None:
 
 
 def test_handler_status_exits_zero_without_raising() -> None:
-    runner = FakeSubprocessRunner(popen_responses={f"{STATUS_ENTRYPOINT} status": ([_SIMPLE_STATUS_DOC], 0)})
+    runner = FakeSubprocessRunner(
+        popen_responses={
+            f"{STATUS_ENTRYPOINT} status alpha/*": ([_SIMPLE_STATUS_DOC], 0),
+            f"{STATUS_ENTRYPOINT} status workspace/*": (
+                [
+                    json.dumps({"envs": []}),
+                ],
+                0,
+            ),
+        }
+    )
     _handler(runner).run_status(StatusOptions(patterns=(), as_json=False))
 
 
@@ -431,8 +520,9 @@ def _status_doc(env: str, services: list[tuple[str, str]]) -> str:
 
 
 def test_handler_up_wait_exits_zero_when_healthy() -> None:
+    """Readiness poll uses collect("alpha") → matrix cell alpha/* for the sole provider."""
     runner = FakeSubprocessRunner(
-        popen_responses={f"{STATUS_ENTRYPOINT} status alpha": ([_status_doc("alpha", [("api", "healthy")])], 0)},
+        popen_responses={f"{STATUS_ENTRYPOINT} status alpha/*": ([_status_doc("alpha", [("api", "healthy")])], 0)},
     )
     # No SystemExit: ready before timeout → success.
     _handler(runner).run(ServiceParams(action="up", env="alpha", wait=True, timeout_s=30.0))
@@ -441,28 +531,28 @@ def test_handler_up_wait_exits_zero_when_healthy() -> None:
         ([ENTRYPOINT, "up", "workspace"], WS),
         ([ENTRYPOINT, "up", "alpha"], WS),
     ]
-    assert runner.popen_calls == [([STATUS_ENTRYPOINT, "status", "alpha"], WS)]
+    assert runner.popen_calls == [([STATUS_ENTRYPOINT, "status", "alpha/*"], WS)]
 
 
 def test_handler_up_wait_returns_promptly_with_no_declared_probes() -> None:
     # Every service reports "unknown" (no probe) → no blocking, exit 0 on first poll.
     runner = FakeSubprocessRunner(
         popen_responses={
-            f"{STATUS_ENTRYPOINT} status alpha": (
+            f"{STATUS_ENTRYPOINT} status alpha/*": (
                 [_status_doc("alpha", [("api", "unknown"), ("web", "unknown")])],
                 0,
             )
         },
     )
     _handler(runner).run(ServiceParams(action="up", env="alpha", wait=True, timeout_s=30.0))
-    assert runner.popen_calls == [([STATUS_ENTRYPOINT, "status", "alpha"], WS)]
+    assert runner.popen_calls == [([STATUS_ENTRYPOINT, "status", "alpha/*"], WS)]
 
 
 def test_handler_up_wait_times_out_and_names_unhealthy_services() -> None:
     click = ClickRecorder()
     runner = FakeSubprocessRunner(
         popen_responses={
-            f"{STATUS_ENTRYPOINT} status alpha": (
+            f"{STATUS_ENTRYPOINT} status alpha/*": (
                 [_status_doc("alpha", [("api", "unhealthy"), ("web", "healthy")])],
                 0,
             )

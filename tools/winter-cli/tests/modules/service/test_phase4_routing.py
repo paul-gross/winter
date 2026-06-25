@@ -23,6 +23,7 @@ from tests.conftest import (
     FakeSpecLoader,
     FakeSubprocessRunner,
 )
+from winter_cli.config.models import ProjectRepositoryConfig, SingletonRepository, SingletonType, WorkspaceConfig
 from winter_cli.core.internal.click_cli_output_service import ClickCliOutputService
 from winter_cli.core.subprocess_runner import SubprocessResult
 from winter_cli.modules.capability.capability_registry_service import CapabilityRegistryService
@@ -34,6 +35,7 @@ from winter_cli.modules.service.service_fan_out_service import ServiceFanOutServ
 from winter_cli.modules.service.service_logs_service import ServiceLogsService
 from winter_cli.modules.service.service_provider_index import ServiceDescribeService
 from winter_cli.modules.service.service_reporter import JsonServiceReporter
+from winter_cli.modules.service.service_status_matrix_service import ServiceStatusMatrixService
 from winter_cli.modules.service.service_status_service import ServiceStatusService
 from winter_cli.modules.service.status_models import StatusOptions
 from winter_cli.modules.service.status_parser import StatusDocumentParser
@@ -48,6 +50,44 @@ ENTRYPOINT_B = EXT_B / "workflow/service"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+
+class _FakeEnvFileSourcer:
+    """Fake IEnvFileSourcer that returns empty dicts for all scopes."""
+
+    def source(self, scope: str, ws_root: Path) -> dict[str, str]:
+        return {}
+
+
+class _FakeEnvIndexRegistry:
+    """IEnvIndexRegistry fake backed by a simple dict."""
+
+    def __init__(self, assignments: dict[str, int]) -> None:
+        self._data: dict[str, int] = dict(assignments)
+
+    def get_index(self, name: str) -> int | None:
+        return self._data.get(name)
+
+    def all_assignments(self) -> dict[str, int]:
+        return dict(self._data)
+
+    def assign(self, name: str, index: int) -> None:
+        self._data[name] = index
+
+    def remove(self, name: str) -> None:
+        self._data.pop(name, None)
+
+
+def _ws_config(base_port: int = 4000, ports_per_env: int = 20) -> WorkspaceConfig:
+    return WorkspaceConfig(
+        workspace_root=WS,
+        session_prefix="test",
+        main_branch="main",
+        base_port=base_port,
+        ports_per_env=ports_per_env,
+        singleton_repos=[SingletonRepository(name="ws", type=SingletonType.workspace)],
+        project_repos=[ProjectRepositoryConfig(name="demo", url="git@example.com:demo.git")],
+    )
 
 
 class _StubRepoFactory:
@@ -208,20 +248,27 @@ def _make_status(
     resolver: ServiceOrchestratorResolver,
     as_json: bool = False,
     with_describe: bool = False,
+    registry_assignments: dict[str, int] | None = None,
 ) -> tuple[ServiceStatusService, FakeServiceReporter]:
-    describe_svc: ServiceDescribeService | None = None
-    if with_describe:
-        describe_svc = ServiceDescribeService(
-            subprocess_runner=runner,
-            describe_parser=DescribeResultParser(),
-            workspace_root=WS,
-        )
-    svc = ServiceStatusService(
+    describe_svc = ServiceDescribeService(
         subprocess_runner=runner,
+        describe_parser=DescribeResultParser(),
+        workspace_root=WS,
+    )
+    assignments = registry_assignments if registry_assignments is not None else {"alpha": 1}
+    matrix_svc = ServiceStatusMatrixService(
+        subprocess_runner=runner,
+        describe_service=describe_svc,
+        env_file_sourcer=_FakeEnvFileSourcer(),
+        status_parser=StatusDocumentParser(),
+        workspace_config=_ws_config(),
+        env_index_registry=_FakeEnvIndexRegistry(assignments),
+        workspace_root=WS,
+    )
+    svc = ServiceStatusService(
         orchestrator_resolver=resolver,
         status_parser=StatusDocumentParser(),
-        workspace_root=WS,
-        describe_service=describe_svc,
+        matrix_service=matrix_svc,
     )
     reporter = FakeServiceReporter()
     return svc, reporter
@@ -499,20 +546,29 @@ def test_logs_single_provider_no_describe_call() -> None:
 
 
 def test_status_merge_same_env_from_two_providers() -> None:
-    """Two providers each reporting the same env → merged into one env with both providers' services."""
+    """Two providers each reporting the same env → merged into one env with both providers' services.
+
+    Matrix path: describe identifies which providers own env services; each owning provider
+    gets one cell per configured env.  Both providers own */something, so both get an alpha/*
+    cell. Their responses are merged into one document.
+    """
     registry, resolver = _make_two_provider_registry()
 
     runner = FakeSubprocessRunner(
+        run_responses={
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("*/frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("*/backend")),
+        },
         popen_responses={
-            f"{ENTRYPOINT_A} status": (
+            f"{ENTRYPOINT_A} status alpha/*": (
                 [_status_doc("alpha", [_svc_entry("frontend")])],
                 0,
             ),
-            f"{ENTRYPOINT_B} status": (
+            f"{ENTRYPOINT_B} status alpha/*": (
                 [_status_doc("alpha", [_svc_entry("backend")])],
                 0,
             ),
-        }
+        },
     )
     svc, reporter = _make_status(runner, registry, resolver)
     code = svc.report(_status_opts(), reporter)
@@ -528,22 +584,43 @@ def test_status_merge_same_env_from_two_providers() -> None:
 
 
 def test_status_merge_different_envs_concatenated() -> None:
-    """Different envs from different providers → concatenated in the merged document."""
+    """Different envs from different providers → concatenated in the merged document.
+
+    Matrix path: registry has alpha + beta.  Provider-A reports frontend for alpha;
+    provider-B reports backend for beta.  Both providers own env services, so each
+    gets cells for both envs.  The alpha/frontend and beta/backend docs are merged.
+    """
     registry, resolver = _make_two_provider_registry()
 
     runner = FakeSubprocessRunner(
+        run_responses={
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("*/frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("*/backend")),
+        },
         popen_responses={
-            f"{ENTRYPOINT_A} status": (
+            f"{ENTRYPOINT_A} status alpha/*": (
                 [_status_doc("alpha", [_svc_entry("frontend")])],
                 0,
             ),
-            f"{ENTRYPOINT_B} status": (
+            f"{ENTRYPOINT_A} status beta/*": (
+                [
+                    json.dumps({"envs": []}),
+                ],
+                0,
+            ),
+            f"{ENTRYPOINT_B} status alpha/*": (
+                [
+                    json.dumps({"envs": []}),
+                ],
+                0,
+            ),
+            f"{ENTRYPOINT_B} status beta/*": (
                 [_status_doc("beta", [_svc_entry("backend")])],
                 0,
             ),
-        }
+        },
     )
-    svc, reporter = _make_status(runner, registry, resolver)
+    svc, reporter = _make_status(runner, registry, resolver, registry_assignments={"alpha": 1, "beta": 2})
     code = svc.report(_status_opts(), reporter)
 
     assert code == 0
@@ -555,28 +632,49 @@ def test_status_merge_different_envs_concatenated() -> None:
 
 
 def test_status_merge_json_output_merged() -> None:
-    """Merged status with --json emits a single merged JSON document."""
+    """Merged status with --json emits a single merged JSON document.
+
+    Matrix path: two providers each own a different service in the same env (alpha).
+    Their alpha/* responses are merged and re-serialised as JSON.
+    """
     from tests.conftest import ClickRecorder
 
     _registry, resolver = _make_two_provider_registry()
 
     runner = FakeSubprocessRunner(
+        run_responses={
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("*/frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("*/backend")),
+        },
         popen_responses={
-            f"{ENTRYPOINT_A} status": (
+            f"{ENTRYPOINT_A} status alpha/*": (
                 [_status_doc("alpha", [_svc_entry("frontend")])],
                 0,
             ),
-            f"{ENTRYPOINT_B} status": (
+            f"{ENTRYPOINT_B} status alpha/*": (
                 [_status_doc("alpha", [_svc_entry("backend")])],
                 0,
             ),
-        }
+        },
+    )
+    describe_svc = ServiceDescribeService(
+        subprocess_runner=runner,
+        describe_parser=DescribeResultParser(),
+        workspace_root=WS,
+    )
+    matrix_svc = ServiceStatusMatrixService(
+        subprocess_runner=runner,
+        describe_service=describe_svc,
+        env_file_sourcer=_FakeEnvFileSourcer(),
+        status_parser=StatusDocumentParser(),
+        workspace_config=_ws_config(),
+        env_index_registry=_FakeEnvIndexRegistry({"alpha": 1}),
+        workspace_root=WS,
     )
     svc = ServiceStatusService(
-        subprocess_runner=runner,
         orchestrator_resolver=resolver,
         status_parser=StatusDocumentParser(),
-        workspace_root=WS,
+        matrix_service=matrix_svc,
     )
     click_rec = ClickRecorder()
     json_reporter = JsonServiceReporter(click=click_rec, cli_output=ClickCliOutputService())
@@ -594,14 +692,22 @@ def test_status_merge_json_output_merged() -> None:
 
 
 def test_status_nonconformant_provider_names_that_provider() -> None:
-    """A non-conformant provider doc → error names THAT provider specifically."""
+    """A non-conformant provider doc → error names THAT provider specifically.
+
+    Matrix path: provider-a's alpha/* cell returns garbage; provider-b's cell succeeds.
+    The error must name provider-a's entrypoint.
+    """
     registry, resolver = _make_two_provider_registry()
 
     runner = FakeSubprocessRunner(
+        run_responses={
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("*/frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("*/backend")),
+        },
         popen_responses={
-            f"{ENTRYPOINT_A} status": (["not valid json"], 0),
-            f"{ENTRYPOINT_B} status": ([_status_doc("alpha", [_svc_entry("backend")])], 0),
-        }
+            f"{ENTRYPOINT_A} status alpha/*": (["not valid json"], 0),
+            f"{ENTRYPOINT_B} status alpha/*": ([_status_doc("alpha", [_svc_entry("backend")])], 0),
+        },
     )
     svc, reporter = _make_status(runner, registry, resolver)
     code = svc.report(_status_opts(), reporter)
@@ -614,13 +720,24 @@ def test_status_nonconformant_provider_names_that_provider() -> None:
 
 
 def test_status_single_provider_no_merge() -> None:
-    """D1: single provider status → existing single-provider behavior unchanged."""
+    """D1: single provider status (matrix path) → one cell per scope.
+
+    With the matrix path and one configured env (alpha), the sole provider gets
+    two cells: alpha/* and workspace/*.  Both are called; the result is merged.
+    """
     registry, resolver = _make_single_provider_registry()
+    ep = EXT_A / "workflow/service"
 
     runner = FakeSubprocessRunner(
         popen_responses={
-            f"{EXT_A / 'workflow/service'} status": (
+            f"{ep} status alpha/*": (
                 [_status_doc("alpha", [_svc_entry("frontend")])],
+                0,
+            ),
+            f"{ep} status workspace/*": (
+                [
+                    json.dumps({"envs": []}),
+                ],
                 0,
             ),
         }
@@ -629,8 +746,8 @@ def test_status_single_provider_no_merge() -> None:
     code = svc.report(_status_opts(), reporter)
 
     assert code == 0
-    # Only one popen call — no fan-out.
-    assert len(runner.popen_calls) == 1
+    # Two popen calls: alpha/* and workspace/*.
+    assert len(runner.popen_calls) == 2
     assert len(reporter.status_documents) == 1
     doc, _ = reporter.status_documents[0]
     svc_names = [s.name for e in doc.envs for s in e.services]
@@ -763,14 +880,28 @@ def test_override_wins_over_configured_list_for_status() -> None:
 
     runner2 = FakeSubprocessRunner(
         popen_responses={
-            override_ep + " status": ([_empty_status_doc()], 0),
+            f"{override_ep} status alpha/*": ([_empty_status_doc()], 0),
+            f"{override_ep} status workspace/*": ([_empty_status_doc()], 0),
         }
     )
-    status_svc2 = ServiceStatusService(
+    describe_svc2 = ServiceDescribeService(
         subprocess_runner=runner2,
+        describe_parser=DescribeResultParser(),
+        workspace_root=WS,
+    )
+    matrix_svc2 = ServiceStatusMatrixService(
+        subprocess_runner=runner2,
+        describe_service=describe_svc2,
+        env_file_sourcer=_FakeEnvFileSourcer(),
+        status_parser=StatusDocumentParser(),
+        workspace_config=_ws_config(),
+        env_index_registry=_FakeEnvIndexRegistry({"alpha": 1}),
+        workspace_root=WS,
+    )
+    status_svc2 = ServiceStatusService(
         orchestrator_resolver=override_resolver,
         status_parser=StatusDocumentParser(),
-        workspace_root=WS,
+        matrix_service=matrix_svc2,
     )
     reporter = FakeServiceReporter()
     from winter_cli.modules.service.status_models import StatusOptions
@@ -1009,15 +1140,15 @@ def test_logs_both_providers_good_streams_correctly() -> None:
 def test_status_scope_qualified_routes_only_to_owning_provider() -> None:
     """Scope-qualified status pattern dispatches only to the provider that owns the service.
 
-    workspace/rabbitmq is owned by provider-b.  Provider-a must NOT be invoked,
-    so it never emits the spurious 'matched no services' warning.
+    workspace/rabbitmq is owned by provider-b (declared as "workspace/rabbitmq" in describe).
+    Provider-a must NOT be invoked, so it never emits the spurious 'matched no services' warning.
     """
     registry, resolver = _make_two_provider_registry()
 
     runner = FakeSubprocessRunner(
         run_responses={
-            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("frontend")),
-            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("rabbitmq")),
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("*/frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("workspace/rabbitmq")),
         },
         popen_responses={
             # Only provider-b should be invoked.
@@ -1045,8 +1176,8 @@ def test_status_scope_qualified_non_owning_provider_not_invoked() -> None:
 
     runner = FakeSubprocessRunner(
         run_responses={
-            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("frontend")),
-            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("rabbitmq")),
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("*/frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("workspace/rabbitmq")),
         },
         popen_responses={
             f"{ENTRYPOINT_B} status workspace/rabbitmq": (
@@ -1063,17 +1194,24 @@ def test_status_scope_qualified_non_owning_provider_not_invoked() -> None:
 
 
 def test_status_bare_pattern_retains_full_fan_out() -> None:
-    """Bare patterns (no '/') fan out to all providers unchanged."""
+    """Bare patterns (no '/') fan out to all providers that own services for the given scope.
+
+    No patterns → full matrix.  Both providers own env services, so both get alpha/* cells.
+    """
     registry, resolver = _make_two_provider_registry()
 
     runner = FakeSubprocessRunner(
+        run_responses={
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("*/frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("*/rabbitmq")),
+        },
         popen_responses={
-            # Both providers must be invoked for a bare pattern.
-            f"{ENTRYPOINT_A} status": (
+            # Both providers must be invoked for the alpha env.
+            f"{ENTRYPOINT_A} status alpha/*": (
                 [_status_doc("alpha", [_svc_entry("frontend")])],
                 0,
             ),
-            f"{ENTRYPOINT_B} status": (
+            f"{ENTRYPOINT_B} status alpha/*": (
                 [_status_doc("alpha", [_svc_entry("rabbitmq")])],
                 0,
             ),
@@ -1101,8 +1239,8 @@ def test_status_collect_scope_qualified_routes_to_owning_provider_only() -> None
 
     runner = FakeSubprocessRunner(
         run_responses={
-            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("frontend")),
-            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("rabbitmq")),
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("*/frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("workspace/rabbitmq")),
         },
         popen_responses={
             f"{ENTRYPOINT_B} status workspace/rabbitmq": (

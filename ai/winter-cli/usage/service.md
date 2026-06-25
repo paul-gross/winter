@@ -129,12 +129,20 @@ With a single provider, `describe` is never called — the sole provider implici
 
 ### `status` (multi-provider)
 
-With multiple providers, `status` routing depends on the pattern type:
+`status` is always built as a **two-dimensional call-matrix** (rows = scope instances, columns = owning providers), regardless of whether one or many providers are bound.  Core enumerates the matrix, sources per-scope env files, injects `WINTER_ENV`/`WINTER_ENV_INDEX`/`WINTER_PORT_BASE` and the sourced vars into each provider subprocess, runs cells in parallel, and merges the per-cell `StatusDocument` results into a single document before filtering and rendering.
 
-- **Bare patterns** (no `/` in the pattern, or no patterns at all) — full fan-out across all providers. Each provider's output is independently fetched, parsed, and **merged** into a single `StatusDocument` before filtering and rendering. This is also the behavior when no describe index is available.
-- **Scope-qualified patterns** (all patterns contain `/`, e.g. `alpha/web`) — dispatched only to the provider(s) that own the matching service(s) per the describe ownership index. Providers with a broken or empty describe emit the same stderr warning as `logs` and contribute no services to the index. If no provider owns any of the requested services, winter emits a single `no service matched` diagnostic and returns non-zero; for the `required_services` gate, this unowned pattern is classified as not-running/startable.
+**Registry-driven enumeration:** scope rows are the **configured env names** from the workspace env-index registry (not a filesystem scan) plus the `workspace` scope.  Core owns enumeration — the orchestrator is called once per `(provider, scope)` cell with an explicit `<scope>/*` pattern so that it can report configured-but-stopped envs without needing to scan the file system itself.
 
-A provider whose output cannot be parsed surfaces an actionable error naming that provider; the worst exit code across all providers is adopted.
+**Provider axis:** when two or more providers are bound, `describe` is called on each provider to build an ownership index (`service-name → provider`).  A provider that owns env-scoped services (described with a `*/` prefix) gets one ENV cell per configured env; a provider that owns workspace-scoped services gets one WORKSPACE cell.  Providers that emit no valid `describe` document are skipped with a warning.  When exactly one provider is bound, `describe` is skipped and that provider gets all cells unconditionally (one per configured env + one workspace cell).
+
+**Pattern narrowing:**
+
+- **No patterns / bare env patterns** (e.g. `alpha`) — the matrix is narrowed to the matching scope axis only.  Every provider that owns services for those scopes is included.  The argv token forwarded to each provider is `<scope>/*`.
+- **Scope-qualified patterns** (all patterns contain `/`, e.g. `alpha/web`) — the matrix is narrowed to the matching scope AND provider axes.  Only the provider(s) that own the named service(s) per the describe index get cells; non-owning providers are not called.  The argv token is the scope-qualified pattern itself (`alpha/web`).  If no provider owns any of the requested services, winter emits a single `no service matched` diagnostic and returns non-zero.
+
+**Merge and rendering:** all cell results are merged (first-non-null wins for scalar fields; services are concatenated) into one `StatusDocument`, the pattern backstop filter is applied, and then the document is rendered as a table or re-serialised as `--json`.  A provider cell whose output cannot be parsed surfaces an actionable error naming that provider; the worst exit code across all cells is adopted.
+
+**`--json` is winter-side only.** The `--json` flag is a winter render toggle — it is never propagated to the orchestrator as an env var or an argv token.  The orchestrator argv is byte-identical with and without `--json`.
 
 ## Local-path override
 

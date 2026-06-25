@@ -525,6 +525,12 @@ class Container(containers.DeclarativeContainer):
         json_reporter=json_graph_reporter,
     )
 
+    # ── service: env-file sourcer (shell-sources per-scope .winter.env files) ─
+
+    env_file_sourcer = providers.Singleton(
+        _lazy("winter_cli.modules.service.internal.shell_env_file_sourcer:ShellEnvFileSourcer")
+    )
+
     # ── service: dispatch to the registered orchestrator extension ──────────
 
     # Holds the effective `--service-orchestrator` / WINTER_SERVICE_ORCHESTRATOR
@@ -627,13 +633,22 @@ class Container(containers.DeclarativeContainer):
         workspace_root=workspace_config.provided.workspace_root,
     )
 
+    service_status_matrix_svc = providers.Factory(
+        _lazy("winter_cli.modules.service.service_status_matrix_service:ServiceStatusMatrixService"),
+        subprocess_runner=subprocess_runner,
+        describe_service=service_describe_svc,
+        env_file_sourcer=env_file_sourcer,
+        status_parser=status_document_parser,
+        workspace_config=workspace_config,
+        env_index_registry=env_index_registry,
+        workspace_root=workspace_config.provided.workspace_root,
+    )
+
     service_status_svc = providers.Factory(
         _lazy("winter_cli.modules.service.service_status_service:ServiceStatusService"),
-        subprocess_runner=subprocess_runner,
         orchestrator_resolver=service_orchestrator_resolver,
         status_parser=status_document_parser,
-        workspace_root=workspace_config.provided.workspace_root,
-        describe_service=service_describe_svc,
+        matrix_service=service_status_matrix_svc,
     )
 
     service_readiness_svc = providers.Factory(
