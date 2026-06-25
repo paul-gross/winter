@@ -13,8 +13,6 @@ from winter_cli.config.workspace import (
 )
 from winter_cli.core.config_file import ConfigError
 from winter_cli.modules.provision.manifest import (
-    PROVISION_SUBTARGETS,
-    ProvisionHandler,
     ProvisionManifestParser,
     ProvisionScope,
 )
@@ -247,7 +245,7 @@ def test_parse_required_services_on_dependency_rejected() -> None:
             }
         ]
     }
-    with pytest.raises(ConfigError, match="'required_services' is not allowed on provision.dependency"):
+    with pytest.raises(ConfigError, match=r"'required_services' is not allowed on provision\.dependency"):
         parser.parse(raw, SOURCE)
 
 

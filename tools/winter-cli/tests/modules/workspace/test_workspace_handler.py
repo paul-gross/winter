@@ -1125,10 +1125,14 @@ def test_compute_status_exit_code_dirty_project_scoped_returns_zero() -> None:
 
 def test_compute_status_exit_code_diverged_standalone_returns_one() -> None:
     """An unscoped run flips to exit 1 when a standalone is dirty/ahead/behind."""
-    for kwargs in ({"dirty": 2}, {"ahead": 1}, {"behind": 4}):
+    for standalone in (
+        _diverged_standalone_snapshot(dirty=2),
+        _diverged_standalone_snapshot(ahead=1),
+        _diverged_standalone_snapshot(behind=4),
+    ):
         snapshot = _make_snapshot(
             envs=[_clean_env_snapshot()],
-            standalones=[_diverged_standalone_snapshot(**kwargs)],
+            standalones=[standalone],
         )
         assert compute_status_exit_code(snapshot, scoped=False) == 1
 

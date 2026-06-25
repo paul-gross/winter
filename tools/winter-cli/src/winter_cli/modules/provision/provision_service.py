@@ -13,9 +13,9 @@ from winter_cli.core.filesystem import IFilesystemReader
 from winter_cli.modules.provision.execution_service import HandlerExecutionResult, ProvisionExecutionService
 from winter_cli.modules.provision.manifest import PROVISION_SUBTARGETS, ProvisionHandler, ProvisionScope
 from winter_cli.modules.provision.provision_reporter import IProvisionReporter
-from winter_cli.modules.workspace.extension_manifest import EXT_MANIFEST, ExtensionManifestLoader
+from winter_cli.modules.workspace.extension_manifest import EXT_MANIFEST, IExtensionManifestLoader
 from winter_cli.modules.workspace.models import RepoError
-from winter_cli.modules.workspace.repository_factory import RepositoryFactory
+from winter_cli.modules.workspace.repository_factory import IStandaloneRepoProvider
 
 logger = logging.getLogger(__name__)
 
@@ -161,8 +161,8 @@ class ProvisionService:
         self,
         config: WorkspaceConfig,
         execution_svc: ProvisionExecutionService,
-        manifest_loader: ExtensionManifestLoader,
-        repo_factory: RepositoryFactory,
+        manifest_loader: IExtensionManifestLoader,
+        repo_factory: IStandaloneRepoProvider,
         service_check: IProvisionServiceCheck,
         fs: IFilesystemReader | None = None,
     ) -> None:

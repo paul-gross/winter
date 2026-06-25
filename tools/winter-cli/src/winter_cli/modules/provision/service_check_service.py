@@ -24,7 +24,6 @@ from winter_cli.modules.service.service_status_service import ServiceStatusServi
 from winter_cli.modules.service.status_models import StatusDocument
 from winter_cli.modules.workspace.models import RepoError
 
-
 # The state value reported by the orchestrator when a service is running.
 _RUNNING_STATE = "running"
 

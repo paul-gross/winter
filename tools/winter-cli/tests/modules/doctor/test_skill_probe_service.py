@@ -15,8 +15,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
-import pytest
-
 from tests.conftest import FakeFilesystem
 from winter_cli.config.models import AdoptExtensions, CodeAgentVendor, WorkspaceConfig
 from winter_cli.core.filesystem import IFilesystemReader

@@ -38,14 +38,11 @@ class _FakeHandlerExecutionResult:
         self.action = action
         self.runs: tuple[Any, ...] = ()
         self.error: str | None = None
-
-        @property
-        def ok(self) -> bool:
-            return ok
+        self._ok = ok
 
     @property
     def ok(self) -> bool:
-        return True
+        return self._ok
 
 
 class _RecordingExecutionService:
@@ -85,7 +82,7 @@ class _FakeManifestLoader:
     def __init__(self, manifests: dict[Path, Any] | None = None) -> None:
         self._manifests = manifests or {}
 
-    def load(self, repo: Any, manifest_path: Path) -> Any:
+    def load(self, repo: Any, manifest_path: Path | None) -> Any:
         if manifest_path in self._manifests:
             return self._manifests[manifest_path]
         raise ValueError(f"no manifest registered for {manifest_path}")
@@ -348,7 +345,7 @@ def test_dry_run_destroy_emits_destroy_action_when_declared() -> None:
             "resource": [{"scope": "workspace", "apply": "scripts/res.sh", "destroy": "scripts/drop.sh"}],
         }
     )
-    svc, exec_svc, sc, reporter = _make_service(config)
+    svc, exec_svc, _sc, reporter = _make_service(config)
     summary = svc.run(
         ENV_NAME,
         subtarget="resource",
@@ -374,7 +371,7 @@ def test_dry_run_destroy_emits_no_plan_event_when_no_destroy_declared() -> None:
             "resource": [{"scope": "workspace", "apply": "scripts/res.sh"}],
         }
     )
-    svc, exec_svc, sc, reporter = _make_service(config)
+    svc, exec_svc, _sc, reporter = _make_service(config)
     svc.run(
         ENV_NAME,
         subtarget="resource",
@@ -398,7 +395,7 @@ def test_dry_run_reset_with_dedicated_reset_script() -> None:
             "data": [{"scope": "workspace", "apply": "scripts/seed.sh", "reset": "scripts/reseed.sh"}],
         }
     )
-    svc, exec_svc, sc, reporter = _make_service(config)
+    svc, exec_svc, _sc, reporter = _make_service(config)
     svc.run(
         ENV_NAME,
         subtarget="data",
@@ -423,7 +420,7 @@ def test_dry_run_reset_compose_destroy_then_apply() -> None:
             "resource": [{"scope": "workspace", "apply": "scripts/apply.sh", "destroy": "scripts/drop.sh"}],
         }
     )
-    svc, exec_svc, sc, reporter = _make_service(config)
+    svc, exec_svc, _sc, reporter = _make_service(config)
     svc.run(
         ENV_NAME,
         subtarget="resource",
@@ -450,7 +447,7 @@ def test_dry_run_reset_degrades_to_apply_when_neither_reset_nor_destroy() -> Non
             "data": [{"scope": "workspace", "apply": "scripts/seed.sh"}],
         }
     )
-    svc, exec_svc, sc, reporter = _make_service(config)
+    svc, exec_svc, _sc, reporter = _make_service(config)
     svc.run(
         ENV_NAME,
         subtarget="data",
@@ -475,7 +472,7 @@ def test_dry_run_seed_shows_resource_then_data() -> None:
             "data": [{"scope": "workspace", "apply": "scripts/seed.sh"}],
         }
     )
-    svc, exec_svc, sc, reporter = _make_service(config)
+    svc, exec_svc, _sc, reporter = _make_service(config)
     svc.run(
         ENV_NAME,
         subtarget="resource",
@@ -594,7 +591,7 @@ def test_dry_run_service_check_preview_includes_env_scope() -> None:
 def test_dry_run_no_handlers_reports_no_op_for_all_subtargets() -> None:
     """Empty manifest with dry_run=True reports no_handlers for all sub-targets, no plan events."""
     config = _make_config(provision_raw={})
-    svc, exec_svc, sc, reporter = _make_service(config)
+    svc, exec_svc, _sc, reporter = _make_service(config)
     summary = svc.run(
         ENV_NAME,
         subtarget=None,

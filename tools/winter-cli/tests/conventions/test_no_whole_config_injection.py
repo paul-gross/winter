@@ -80,6 +80,9 @@ ALLOWED_FILES = frozenset(
         # workspace config (parse_provision) and walks every standalone repo to gather
         # extension provision manifests; needs workspace_root to locate manifests.
         "modules/provision/provision_service.py",
+        # Env-index utility — workspace-lifecycle carve-out: reads base_port, ports_per_env,
+        # env_aliases, and envs_per_workspace to compute per-env port assignments.
+        "modules/workspace/env_index.py",
     }
 )
 

@@ -154,7 +154,8 @@ def ws_destroy(
     no_provision_teardown: bool,
     output_json: bool,
 ):
-    """Tear down a feature env: run provision teardown, fire on_env_destroy hooks, then remove every per-repo worktree and the env dir.
+    """Tear down a feature env: run provision teardown, fire on_env_destroy hooks,
+    then remove every per-repo worktree and the env dir.
 
     \b
       winter ws destroy alpha                          # standard teardown (includes provision teardown)

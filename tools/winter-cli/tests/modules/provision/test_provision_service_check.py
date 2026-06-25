@@ -7,9 +7,8 @@ Injects fakes for:
 
 Cross-env token policy: only workspace/<svc> and <env>/<svc> tokens allowed.
 """
-from __future__ import annotations
 
-from typing import Any
+from __future__ import annotations
 
 import pytest
 
@@ -94,7 +93,7 @@ def _handler(required_services: tuple[str, ...] = (), subtarget: str = "resource
     return ProvisionHandler(
         subtarget=subtarget,
         scope=ProvisionScope.workspace,
-        apply="scripts/apply.sh",
+        apply=("scripts/apply.sh",),
         source="project",
         required_services=required_services,
     )
@@ -370,7 +369,7 @@ def test_dispatch_up_failure_raises_click_exception() -> None:
     import click
 
     doc = _make_doc("workspace", [_make_service_status("postgres", state="stopped")])
-    check, _, dispatch_svc = _make_check(doc=doc, dispatch_exit=1)
+    check, _, _dispatch_svc = _make_check(doc=doc, dispatch_exit=1)
     handlers = [_handler(required_services=("workspace/postgres",))]
     with pytest.raises(click.ClickException) as exc_info:
         check.ensure(handlers, ENV_NAME, no_service_check=False)

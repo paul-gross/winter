@@ -319,9 +319,7 @@ def test_handler_run_logs_sets_workspace_context_env_vars() -> None:
 
 def test_handler_run_logs_patterns_on_argv_not_env_var() -> None:
     """Patterns appear as positional argv tokens (before render flags); WINTER_LOG_SERVICES is absent."""
-    runner = FakeSubprocessRunner(
-        popen_responses={f"{ENTRYPOINT} logs alpha/api beta/worker-* --tail 200": ([], 0)}
-    )
+    runner = FakeSubprocessRunner(popen_responses={f"{ENTRYPOINT} logs alpha/api beta/worker-* --tail 200": ([], 0)})
     _handler(runner, ClickRecorder()).run_logs(_default_log_options(patterns=("alpha/api", "beta/worker-*")))
     assert len(runner.popen_calls) == 1
     cmd = runner.popen_calls[0][0]

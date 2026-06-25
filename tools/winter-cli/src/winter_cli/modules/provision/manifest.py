@@ -120,12 +120,12 @@ class ProvisionManifestParser:
                     raise ConfigError(f"provision.{key}[{i}] in {source!r} is missing required field 'scope'.")
                 try:
                     scope = ProvisionScope(scope_raw)
-                except ValueError:
+                except ValueError as exc:
                     valid_scopes = ", ".join(repr(s.value) for s in ProvisionScope)
                     raise ConfigError(
                         f"Invalid scope {scope_raw!r} in provision.{key}[{i}] in {source!r}. "
                         f"Must be one of: {valid_scopes}."
-                    )
+                    ) from exc
 
                 apply_raw = entry.get("apply")
                 apply = _parse_commands(apply_raw, f"provision.{key}[{i}]", "apply", source, required=True)

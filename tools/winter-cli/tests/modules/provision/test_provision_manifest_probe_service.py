@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
-
-import pytest
 
 from tests.conftest import FakeConfigFileReader, FakeFilesystem
 from winter_cli.config.models import AdoptExtensions, WorkspaceConfig
-from winter_cli.modules.doctor.models import ProbeResult, ProbeStatus
+from winter_cli.modules.doctor.models import ProbeStatus
 from winter_cli.modules.provision.manifest_probe_service import (
     PROVISION_SOURCE,
     ProvisionManifestProbeService,
@@ -84,7 +81,7 @@ def test_well_formed_workspace_manifest_emits_single_pass() -> None:
         ],
     }
     config = _build_config(provision_raw=raw)
-    svc, repo = _build_service(config)
+    svc, _repo = _build_service(config)
 
     results = svc.run([])
 
@@ -99,7 +96,7 @@ def test_bad_scope_emits_fail_naming_location() -> None:
         "dependency": [{"scope": "bad-scope", "apply": "scripts/install.sh"}],
     }
     config = _build_config(provision_raw=raw)
-    svc, repo = _build_service(config)
+    svc, _repo = _build_service(config)
 
     results = svc.run([])
 
@@ -117,7 +114,7 @@ def test_missing_apply_emits_fail() -> None:
         "resource": [{"scope": "workspace"}],
     }
     config = _build_config(provision_raw=raw)
-    svc, repo = _build_service(config)
+    svc, _repo = _build_service(config)
 
     results = svc.run([])
 
@@ -139,7 +136,7 @@ def test_required_services_on_dependency_emits_fail() -> None:
         ],
     }
     config = _build_config(provision_raw=raw)
-    svc, repo = _build_service(config)
+    svc, _repo = _build_service(config)
 
     results = svc.run([])
 
@@ -161,7 +158,7 @@ def test_unknown_key_in_entry_emits_fail() -> None:
         ],
     }
     config = _build_config(provision_raw=raw)
-    svc, repo = _build_service(config)
+    svc, _repo = _build_service(config)
 
     results = svc.run([])
 
@@ -182,7 +179,7 @@ def test_multiple_bad_entries_emit_multiple_fail_results() -> None:
         ],
     }
     config = _build_config(provision_raw=raw)
-    svc, repo = _build_service(config)
+    svc, _repo = _build_service(config)
 
     results = svc.run([])
 
@@ -212,7 +209,7 @@ def test_mixed_good_and_bad_entries_all_bad_are_reported() -> None:
         ],
     }
     config = _build_config(provision_raw=raw)
-    svc, repo = _build_service(config)
+    svc, _repo = _build_service(config)
 
     results = svc.run([])
 

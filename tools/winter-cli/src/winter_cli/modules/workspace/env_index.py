@@ -128,7 +128,7 @@ def _resolve_with_params(name: str, env_aliases: list[str], envs_per_workspace: 
 
 def build_env_trio(
     env_name: str,
-    config: "WorkspaceConfig",
+    config: WorkspaceConfig,
     registry: IEnvIndexRegistry | None,
 ) -> dict[str, str]:
     """Return ``WINTER_ENV``/``WINTER_ENV_INDEX``/``WINTER_PORT_BASE`` for *env_name*.

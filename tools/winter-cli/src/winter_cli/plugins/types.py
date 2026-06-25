@@ -13,16 +13,19 @@ import contextlib
 import dataclasses
 import enum
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import click
 
 from winter_cli.modules.workspace.models import (
     FeatureEnvironment,
+    FeatureEnvironmentStatus,
     FeatureEnvironmentWorktrees,
     FeatureWorktree,
     StandaloneRepository,
     Workspace,
+    WorktreeRepoStatus,
 )
 
 
@@ -34,7 +37,7 @@ class IWorktreeRepoDecorator(Protocol):
     to surface a badge in the dashboard's repo row.
     """
 
-    def __call__(self, repo_status: object, repo_path: object) -> None: ...
+    def __call__(self, repo_status: WorktreeRepoStatus, repo_path: Path, /) -> None: ...
 
 
 @runtime_checkable
@@ -48,7 +51,7 @@ class IEnvironmentDecorator(Protocol):
     to the cell verbatim, joined by spaces.
     """
 
-    def __call__(self, env_status: object, env_path: object) -> None: ...
+    def __call__(self, env_status: FeatureEnvironmentStatus, env_path: Path, /) -> None: ...
 
 
 @dataclasses.dataclass

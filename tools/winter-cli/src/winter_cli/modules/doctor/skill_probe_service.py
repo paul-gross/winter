@@ -63,9 +63,7 @@ class SkillProbeService:
 
     # ── Per-vendor probe ──────────────────────────────────────────────────
 
-    def _probe_vendor(
-        self, vendor: CodeAgentVendor, standalone_repos: list[StandaloneRepository]
-    ) -> list[ProbeResult]:
+    def _probe_vendor(self, vendor: CodeAgentVendor, standalone_repos: list[StandaloneRepository]) -> list[ProbeResult]:
         """Check all extensions for one vendor and emit one probe result."""
         skills_dir = self._config.workspace_root / vendor.skills_subpath
 
@@ -164,9 +162,7 @@ class SkillProbeService:
             result[name] = entry
         return result, prefix
 
-    def _expected_skills(
-        self, repo: StandaloneRepository, vendor: CodeAgentVendor
-    ) -> dict[str, Path]:
+    def _expected_skills(self, repo: StandaloneRepository, vendor: CodeAgentVendor) -> dict[str, Path]:
         """Return ``{projected_name: source_dir}`` for one extension + vendor."""
         skills, _ = self._expected_skills_with_prefix(repo, vendor)
         return skills
@@ -207,9 +203,7 @@ class SkillProbeService:
 
     # ── Per-entry health check ────────────────────────────────────────────
 
-    def _check_entry(
-        self, vendor: CodeAgentVendor, name: str, actual_path: Path, source_dir: Path
-    ) -> str | None:
+    def _check_entry(self, vendor: CodeAgentVendor, name: str, actual_path: Path, source_dir: Path) -> str | None:
         """Return an issue description for one projected entry, or None if healthy."""
         if vendor.skill_install is SkillInstall.symlink:
             return self._check_symlink(name, actual_path, source_dir)
@@ -234,9 +228,7 @@ class SkillProbeService:
             return f"broken: {name} (source SKILL.md missing)"
         return None
 
-    def _check_copy(
-        self, vendor: CodeAgentVendor, name: str, dest_dir: Path, source_dir: Path
-    ) -> str | None:
+    def _check_copy(self, vendor: CodeAgentVendor, name: str, dest_dir: Path, source_dir: Path) -> str | None:
         """Detect a missing or content-stale copy using the same hash as CopySkillStrategy."""
         if not self._fs.is_dir(dest_dir):
             return f"missing copy: {name}"
@@ -261,4 +253,4 @@ class SkillProbeService:
         return None
 
 
-__all__ = ["SkillProbeService", "SKILL_SOURCE"]
+__all__ = ["SKILL_SOURCE", "SkillProbeService"]

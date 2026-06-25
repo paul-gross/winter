@@ -2,12 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from tests.conftest import FakeFilesystem, FakeSubprocessRunner
 from winter_cli.config.models import AdoptExtensions, ProjectRepositoryConfig, WorkspaceConfig
 from winter_cli.modules.provision.execution_service import (
-    IProvisionOutputSink,
     ProvisionExecutionService,
 )
 from winter_cli.modules.provision.manifest import ProvisionHandler, ProvisionScope

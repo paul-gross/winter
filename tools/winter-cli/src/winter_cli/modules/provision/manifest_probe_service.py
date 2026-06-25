@@ -5,12 +5,12 @@ from winter_cli.core.config_file import ConfigFileReadError, IConfigFileReader
 from winter_cli.core.filesystem import IFilesystemReader
 from winter_cli.modules.doctor.models import ProbeResult, ProbeStatus
 from winter_cli.modules.provision.manifest import (
-    PROVISION_SUBTARGETS,
-    ProvisionScope,
     _ENTRY_ALLOWED_KEYS,
     _SUBTARGETS_WITH_REQUIRED_SERVICES,
+    PROVISION_SUBTARGETS,
+    ProvisionScope,
 )
-from winter_cli.modules.workspace.extension_manifest import EXT_MANIFEST, ExtensionManifestLoader
+from winter_cli.modules.workspace.extension_manifest import EXT_MANIFEST, IExtensionManifestLoader
 from winter_cli.modules.workspace.models import RepoError, StandaloneRepository
 
 PROVISION_SOURCE = "provision"
@@ -252,7 +252,7 @@ class ProvisionManifestProbeService:
         self,
         config: WorkspaceConfig,
         fs: IFilesystemReader,
-        manifest_loader: ExtensionManifestLoader,
+        manifest_loader: IExtensionManifestLoader,
         config_file_reader: IConfigFileReader,
     ) -> None:
         self._config = config

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -62,7 +62,7 @@ class _FakeManifestLoader:
     def __init__(self, manifests: dict[Path, Any] | None = None) -> None:
         self._manifests = manifests or {}
 
-    def load(self, repo: Any, manifest_path: Path) -> Any:
+    def load(self, repo: Any, manifest_path: Path | None) -> Any:
         if manifest_path in self._manifests:
             return self._manifests[manifest_path]
         raise ValueError(f"no manifest registered for {manifest_path}")
@@ -94,9 +94,9 @@ class _FakeReporter:
         self.plan_handler_calls: list[dict[str, Any]] = []
         self.provision_finished_calls: list[tuple[str, str | None]] = []
         # Execution sink events
-        self.execution_started: list[Any] = []
+        self.execution_started_calls: list[Any] = []
         self.execution_output_lines: list[Any] = []
-        self.execution_completed: list[Any] = []
+        self.execution_completed_calls: list[Any] = []
         self.execution_errors: list[Any] = []
 
     def provision_started(self, env: str, subtargets: list[str]) -> None:
@@ -158,13 +158,13 @@ class _FakeReporter:
         self.provision_finished_calls.append((status, aborted_at))
 
     def execution_started(self, label: str, action: str, cwd: Path) -> None:
-        self.execution_started.append((label, action, cwd))
+        self.execution_started_calls.append((label, action, cwd))
 
     def execution_output_line(self, label: str, line: str) -> None:
         self.execution_output_lines.append((label, line))
 
     def execution_completed(self, label: str, action: str, exit_code: int) -> None:
-        self.execution_completed.append((label, action, exit_code))
+        self.execution_completed_calls.append((label, action, exit_code))
 
     def execution_error(self, label: str, error: str) -> None:
         self.execution_errors.append((label, error))
@@ -237,10 +237,6 @@ def _make_service(
 
 def test_full_chain_runs_subtargets_in_order() -> None:
     """Full chain runs dependency → resource → data in that exact order."""
-    dep_h = _make_handler("dependency", ProvisionScope.workspace, source="project")
-    res_h = _make_handler("resource", ProvisionScope.workspace, source="project")
-    dat_h = _make_handler("data", ProvisionScope.workspace, source="project")
-
     config = _make_config(
         provision_raw={
             "dependency": [{"scope": "workspace", "apply": "scripts/apply.sh"}],
@@ -384,7 +380,7 @@ def test_apply_failure_in_dependency_aborts_resource_and_data() -> None:
             "data": [{"scope": "workspace", "apply": "scripts/apply.sh"}],
         }
     )
-    svc, exec_svc, reporter = _make_service(config=config)
+    _svc, _exec_svc, reporter = _make_service(config=config)
 
     # Mark the dependency handler's apply as failing.
     # We need to identify it after collection.  Inject via a custom exec_svc
@@ -496,7 +492,7 @@ def test_no_handlers_emits_no_handlers_event_and_finishes_ok() -> None:
 def test_single_subtarget_no_handlers_emits_one_no_handlers_event() -> None:
     """Explicit single sub-target with no handlers → one no_handlers event, ok."""
     config = _make_config(provision_raw={})
-    svc, exec_svc, reporter = _make_service(config=config)
+    svc, _exec_svc, reporter = _make_service(config=config)
     summary = svc.run(
         ENV_NAME,
         subtarget="dependency",
@@ -782,12 +778,12 @@ def test_service_check_ensure_called_before_resource_handlers() -> None:
         }
     )
     sc = _RecordingServiceCheck(result="ok")
-    svc, exec_svc, reporter = _make_service_with_check(config, sc)
+    _svc, _exec_svc, reporter = _make_service_with_check(config, sc)
 
     call_order: list[str] = []
 
     class _TrackingExecSvc:
-        calls: list[Any] = []
+        calls: ClassVar[list[Any]] = []
 
         def run_handler(self, handler: Any, action: str, env_name: str, sink: Any) -> Any:
             call_order.append(f"exec:{handler.subtarget}")
@@ -833,7 +829,7 @@ def test_service_check_ensure_not_called_for_dependency_subtarget() -> None:
         }
     )
     sc = _RecordingServiceCheck(result=None)
-    svc, exec_svc, reporter = _make_service_with_check(config, sc)
+    svc, _exec_svc, reporter = _make_service_with_check(config, sc)
     summary = svc.run(
         ENV_NAME,
         subtarget="dependency",
@@ -893,7 +889,7 @@ def test_service_check_result_appears_in_handler_result_event() -> None:
         }
     )
     sc = _RecordingServiceCheck(result="started:workspace")
-    svc, exec_svc, reporter = _make_service_with_check(config, sc)
+    svc, _exec_svc, reporter = _make_service_with_check(config, sc)
     summary = svc.run(
         ENV_NAME,
         subtarget="resource",
@@ -917,7 +913,7 @@ def test_no_service_check_flag_forwarded_to_ensure() -> None:
         }
     )
     sc = _RecordingServiceCheck(result="skipped")
-    svc, exec_svc, reporter = _make_service_with_check(config, sc)
+    svc, _exec_svc, reporter = _make_service_with_check(config, sc)
     svc.run(
         ENV_NAME, subtarget="resource", reset=False, destroy=False, seed=False, no_service_check=True, reporter=reporter
     )  # type: ignore[arg-type]
@@ -939,7 +935,7 @@ def test_failing_destroy_produces_error_summary() -> None:
             "resource": [{"scope": "workspace", "apply": "scripts/apply.sh", "destroy": "scripts/destroy.sh"}],
         }
     )
-    svc, exec_svc, reporter = _make_service(config=config)
+    _svc, _exec_svc, _reporter = _make_service(config=config)
 
     # Make the destroy action fail on the resource handler.
     class _FailDestroyExecSvc:
@@ -1085,7 +1081,7 @@ def test_missing_env_raises_click_exception() -> None:
 def test_valid_env_does_not_raise() -> None:
     """A valid env passes the existence check and runs normally."""
     config = _make_config(provision_raw={})
-    svc, exec_svc, reporter = _make_service(config=config)
+    svc, _exec_svc, reporter = _make_service(config=config)
     # _make_service uses _make_fs_with_env() which includes WORKSPACE_ROOT/alpha
     summary = svc.run(
         ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
@@ -1105,7 +1101,7 @@ def test_malformed_workspace_provision_raises_click_exception() -> None:
 
     # "unknown_subtarget" is not a valid provision sub-target key
     config = _make_config(provision_raw={"unknown_subtarget": [{"scope": "workspace", "apply": "scripts/apply.sh"}]})
-    svc, exec_svc, reporter = _make_service(config=config)
+    svc, _exec_svc, reporter = _make_service(config=config)
 
     with pytest.raises(click.ClickException) as exc_info:
         svc.run(

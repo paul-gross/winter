@@ -17,9 +17,7 @@ def _svc(name: str, health: str) -> ServiceStatus:
 
 
 def _doc(env: str, services: list[ServiceStatus]) -> StatusDocument:
-    return StatusDocument(
-        envs=(EnvStatus(env=env, session=None, port_base=None, services=tuple(services)),)
-    )
+    return StatusDocument(envs=(EnvStatus(env=env, session=None, port_base=None, services=tuple(services)),))
 
 
 class _StubStatusService:

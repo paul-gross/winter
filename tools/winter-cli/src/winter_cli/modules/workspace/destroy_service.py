@@ -119,12 +119,13 @@ class _DestroyProvisionReporter:
         subtarget: str,
         scope: str,
         source: str,
-        script: str,
+        commands: list[str],
         action: str,
         required_services: list[str],
         service_check_preview: str | None,
     ) -> None:
         label = f"{source}/{subtarget}[{scope}]"
+        script = " && ".join(commands) if commands else ""
         self._reporter.repo_action(self._env_name, label, "would_provision_teardown", f"{action}: {script}")
 
 

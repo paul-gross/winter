@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
 from winter_cli.core.config_file import ConfigError, ConfigFileReadError, IConfigFileReader
 from winter_cli.modules.provision.manifest import ProvisionHandler, ProvisionManifestParser
@@ -137,6 +138,12 @@ class ExtensionManifest:
         return self.implements.get(slot)
 
 
+class IExtensionManifestLoader(Protocol):
+    """Protocol seam for loading an extension manifest from a repo path."""
+
+    def load(self, repo: StandaloneRepository, manifest_path: Path | None) -> ExtensionManifest: ...
+
+
 class ExtensionManifestLoader:
     """Reads `winter-ext.toml` and produces a resolved `ExtensionManifest`.
 
@@ -224,3 +231,7 @@ class ExtensionManifestLoader:
             provision=provision,
             service_defs=service_defs,
         )
+
+
+def _conforms_extension_manifest_loader(x: ExtensionManifestLoader) -> IExtensionManifestLoader:
+    return x

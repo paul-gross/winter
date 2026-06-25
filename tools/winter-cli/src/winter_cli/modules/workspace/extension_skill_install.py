@@ -316,7 +316,7 @@ class CopySkillStrategy:
 class CopiedSkillTransformPipeline:
     """Applies vendor-specific transforms to copied skill files."""
 
-    def __init__(self, transforms: tuple[CopiedSkillTransform, ...]) -> None:
+    def __init__(self, transforms: tuple[ICopiedSkillTransform, ...]) -> None:
         self._transforms = transforms
 
     @classmethod
@@ -331,7 +331,7 @@ class CopiedSkillTransformPipeline:
         return text
 
 
-class CopiedSkillTransform(Protocol):
+class ICopiedSkillTransform(Protocol):
     def apply(self, rel_path: Path, text: str, *, skill_name: str) -> str: ...
 
 
