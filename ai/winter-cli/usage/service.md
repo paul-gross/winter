@@ -93,7 +93,7 @@ See [setup.md#capability-registry](../setup.md#capability-registry) for the full
 
 ### Adding a second provider
 
-Shipping `provides.service` in a new extension's `winter-ext.toml` auto-binds it alongside any existing provider with no further config change — the implicit-all rule kicks in. Each participating provider **must implement `describe`** (a provider that does not is rejected at index-build time when a targeted `logs` or `restart` is issued). After adding or updating a provider, verify conformance:
+Shipping `provides.service` in a new extension's `winter-ext.toml` auto-binds it alongside any existing provider with no further config change — the implicit-all rule kicks in. Each participating provider **must implement `describe`** (the behavior when a provider emits no valid describe document differs by action — see `logs` and `restart` routing below). After adding or updating a provider, verify conformance:
 
 ```bash
 winter ext verify <path-to-extension-dir>
@@ -119,6 +119,11 @@ With a single provider, `describe` is never called — the sole provider implici
 ### `logs` and `restart` routing (multi-provider)
 
 `logs` and `restart` are **routed to the owning provider** for each matched service via the ownership index. With a single provider, patterns are forwarded verbatim without building an index.
+
+**Describe resilience differs by action:**
+
+- **`logs`** — a provider that emits no valid describe document is **skipped with a warning** written to stderr (exact text: `warning: provider '<x>' did not emit a valid describe document and will be skipped for service ownership resolution. Ensure the extension implements the describe action. Detail: …`). `logs` fails (non-zero) only when the requested service's owning provider is the one that failed describe — i.e. that service has no other owner.
+- **`restart`** — a provider that emits no valid describe document is **hard-rejected at index-build time**, and the command exits non-zero immediately.
 
 `logs -f` (follow mode) is supported only when the matched services resolve to **a single owning provider**. If the selection would span multiple providers, winter writes an actionable error to stderr and returns 1 without opening any stream. Non-follow `logs` works across all providers (the streams are merged into a single output).
 

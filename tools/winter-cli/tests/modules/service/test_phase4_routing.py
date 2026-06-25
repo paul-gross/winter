@@ -7,6 +7,7 @@ Covers:
 - merged status (AC5): two providers same env → merged; different envs → concatenated;
   non-conformant provider → error names that provider
 - single-provider back-compat (D1): restart/logs/status all behave as before with one provider
+- describe resilience: broken provider describe does not abort logs for a good provider
 """
 
 from __future__ import annotations
@@ -907,3 +908,87 @@ def test_logs_no_match_emits_stderr_diagnostic() -> None:
     assert len(reporter.no_service_matched_calls) >= 1
     combined = " ".join(reporter.no_service_matched_calls)
     assert "alpha/nonexistent" in combined  # token list contains the unmatched pattern
+
+
+# ── describe resilience: broken provider does not abort good provider's logs ──
+
+
+def test_logs_good_provider_streams_when_other_provider_broken_describe() -> None:
+    """Scenario 1: service owned by good provider streams even if another provider's describe is broken."""
+    registry, resolver = _make_two_provider_registry()
+
+    runner = FakeSubprocessRunner(
+        run_responses={
+            # provider-a emits valid describe: owns 'frontend'
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("frontend")),
+            # provider-b emits empty/invalid describe
+            f"{ENTRYPOINT_B} describe": SubprocessResult(returncode=0, stdout="", stderr=""),
+        },
+        popen_responses={
+            f"{ENTRYPOINT_A} logs alpha/frontend --tail 200": (
+                ['{"env":"alpha","svc":"frontend","msg":"resilience-ok"}'],
+                0,
+            ),
+        },
+    )
+    logs, reporter = _make_logs(runner, registry, resolver)
+    code = logs.stream(_log_opts(patterns=("alpha/frontend",)), reporter)
+
+    # Exit 0: the good provider served the request.
+    assert code == 0
+    # The log line from the good provider was rendered.
+    assert any("resilience-ok" in line for line in reporter.log_lines)
+    # One describe_parse_error warning was emitted for the broken provider.
+    assert len(reporter.describe_parse_error_calls) == 1
+    assert reporter.describe_parse_error_calls[0][0] == "provider-b"
+
+
+def test_logs_broken_provider_owns_requested_service_returns_nonzero() -> None:
+    """Scenario 2: broken provider would have owned the requested service → non-zero exit with warning."""
+    registry, resolver = _make_two_provider_registry()
+
+    runner = FakeSubprocessRunner(
+        run_responses={
+            # provider-a emits valid describe: owns 'frontend'
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("frontend")),
+            # provider-b emits invalid describe; would have owned 'backend'
+            f"{ENTRYPOINT_B} describe": SubprocessResult(returncode=0, stdout="not-json", stderr=""),
+        },
+        # No popen_responses: no provider should be invoked.
+    )
+    logs, reporter = _make_logs(runner, registry, resolver)
+    # Request 'backend', which only the broken provider would have owned.
+    code = logs.stream(_log_opts(patterns=("backend",)), reporter)
+
+    # Non-zero: ownership could not be resolved.
+    assert code != 0
+    # The broken provider was named in the warning.
+    assert len(reporter.describe_parse_error_calls) == 1
+    assert reporter.describe_parse_error_calls[0][0] == "provider-b"
+    # No log lines were emitted.
+    assert reporter.log_lines == []
+
+
+def test_logs_both_providers_good_streams_correctly() -> None:
+    """Scenario 3: both providers good → service owned by either provider streams normally."""
+    registry, resolver = _make_two_provider_registry()
+
+    runner = FakeSubprocessRunner(
+        run_responses={
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("backend")),
+        },
+        popen_responses={
+            f"{ENTRYPOINT_B} logs alpha/backend --tail 200": (
+                ['{"env":"alpha","svc":"backend","msg":"both-good"}'],
+                0,
+            ),
+        },
+    )
+    logs, reporter = _make_logs(runner, registry, resolver)
+    code = logs.stream(_log_opts(patterns=("alpha/backend",)), reporter)
+
+    assert code == 0
+    assert any("both-good" in line for line in reporter.log_lines)
+    # No describe errors.
+    assert reporter.describe_parse_error_calls == []

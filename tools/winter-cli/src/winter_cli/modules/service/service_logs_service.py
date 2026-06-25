@@ -67,7 +67,18 @@ class ServiceLogsService:
             return self._stream_single(providers[0], options, options.patterns, reporter)
 
         # Multi-provider: build the ownership index and route patterns to owners.
-        index = self._describe_service.build(providers)
+        # Per-provider describe errors are reported as warnings; the broken provider
+        # is skipped (owns no services) so a conformant provider's logs still stream.
+        describe_errors: list[str] = []
+
+        def _on_describe_error(provider_name: str, detail: str) -> None:
+            describe_errors.append(provider_name)
+            reporter.describe_parse_error(provider_name, detail)
+
+        index = self._describe_service.build(
+            providers,
+            on_describe_error=_on_describe_error,
+        )
 
         # Determine which providers own the requested patterns.
         # For each pattern, find the owning provider for matching service names
@@ -91,11 +102,15 @@ class ServiceLogsService:
                         provider_patterns_map[owner.extension_name].append(pat)
 
         # Emit no-match diagnostic for patterns that resolved to no known service.
+        # When describe errors occurred and no owner was resolved, return non-zero
+        # so the caller can distinguish "service not found" from "provider broken."
         if options.patterns:
             unmatched = [p for p in options.patterns if p not in matched_patterns]
             if unmatched:
                 token_list = ", ".join(repr(p) for p in unmatched)
                 reporter.no_service_matched(token_list)
+                if describe_errors and not owning_providers:
+                    return 1
 
         # If no patterns were requested, route all providers (empty selection = all).
         if not options.patterns:

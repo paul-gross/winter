@@ -322,7 +322,7 @@ def test_duplicate_detected_on_second_provider() -> None:
 
 
 def test_malformed_describe_output_raises_parse_error() -> None:
-    """Malformed JSON from a provider propagates as DescribeParseError."""
+    """Malformed JSON from a provider propagates as DescribeParseError (no handler)."""
     pa = _provider("provider-a", ENTRYPOINT_A, EXT_A)
     pb = _provider("provider-b", ENTRYPOINT_B, EXT_B)
 
@@ -335,3 +335,84 @@ def test_malformed_describe_output_raises_parse_error() -> None:
 
     with pytest.raises(DescribeParseError, match="provider-a"):
         _svc(runner).build([pa, pb])
+
+
+# ── on_describe_error resilience ──────────────────────────────────────────────
+
+
+def test_on_describe_error_called_for_broken_provider() -> None:
+    """on_describe_error is invoked with the broken provider's name instead of raising."""
+    pa = _provider("provider-a", ENTRYPOINT_A, EXT_A)
+    pb = _provider("provider-b", ENTRYPOINT_B, EXT_B)
+
+    runner = FakeSubprocessRunner(
+        run_responses={
+            _describe_key(ENTRYPOINT_A): _describe_result(""),  # empty → parse error
+            _describe_key(ENTRYPOINT_B): _describe_result(_describe_json("worker")),
+        }
+    )
+
+    errors: list[tuple[str, str]] = []
+    idx = _svc(runner).build([pa, pb], on_describe_error=lambda name, detail: errors.append((name, detail)))
+
+    assert len(errors) == 1
+    assert errors[0][0] == "provider-a"
+    assert errors[0][1]  # non-empty detail
+
+
+def test_broken_provider_owns_no_services_in_index() -> None:
+    """A provider that emits invalid describe contributes no services to the index."""
+    pa = _provider("provider-a", ENTRYPOINT_A, EXT_A)
+    pb = _provider("provider-b", ENTRYPOINT_B, EXT_B)
+
+    runner = FakeSubprocessRunner(
+        run_responses={
+            _describe_key(ENTRYPOINT_A): _describe_result("not-json"),
+            _describe_key(ENTRYPOINT_B): _describe_result(_describe_json("worker", "scheduler")),
+        }
+    )
+
+    idx = _svc(runner).build([pa, pb], on_describe_error=lambda *_: None)
+
+    assert idx.owner_for("worker") is pb
+    assert idx.owner_for("scheduler") is pb
+    # provider-a produced no valid services
+    assert idx.owner_for("unknown") is None
+
+
+def test_good_provider_services_indexed_when_other_is_broken() -> None:
+    """Services from the conformant provider are accessible in the index."""
+    pa = _provider("provider-a", ENTRYPOINT_A, EXT_A)
+    pb = _provider("provider-b", ENTRYPOINT_B, EXT_B)
+
+    runner = FakeSubprocessRunner(
+        run_responses={
+            _describe_key(ENTRYPOINT_A): _describe_result(_describe_json("api", "frontend")),
+            _describe_key(ENTRYPOINT_B): _describe_result(""),  # broken
+        }
+    )
+
+    idx = _svc(runner).build([pa, pb], on_describe_error=lambda *_: None)
+
+    assert idx.owner_for("api") is pa
+    assert idx.owner_for("frontend") is pa
+    assert idx.owner_for("worker") is None
+
+
+def test_both_providers_broken_results_in_empty_index() -> None:
+    """When both providers emit invalid describe, the index is empty."""
+    pa = _provider("provider-a", ENTRYPOINT_A, EXT_A)
+    pb = _provider("provider-b", ENTRYPOINT_B, EXT_B)
+
+    runner = FakeSubprocessRunner(
+        run_responses={
+            _describe_key(ENTRYPOINT_A): _describe_result(""),
+            _describe_key(ENTRYPOINT_B): _describe_result("not-json"),
+        }
+    )
+
+    errors: list[str] = []
+    idx = _svc(runner).build([pa, pb], on_describe_error=lambda name, _: errors.append(name))
+
+    assert len(errors) == 2
+    assert idx.owner_for("anything") is None

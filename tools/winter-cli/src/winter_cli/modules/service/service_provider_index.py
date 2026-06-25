@@ -16,11 +16,12 @@ Design notes:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from winter_cli.core.subprocess_runner import ISubprocessRunner
 from winter_cli.modules.capability.models import ResolvedCapability
-from winter_cli.modules.service.describe_parser import DescribeResultParser
+from winter_cli.modules.service.describe_parser import DescribeParseError, DescribeResultParser
 from winter_cli.modules.service.provider_invocation import build_provider_env
 
 
@@ -121,11 +122,22 @@ class ServiceDescribeService:
         self._describe_parser = describe_parser
         self._workspace_root = workspace_root
 
-    def build(self, providers: list[ResolvedCapability]) -> ServiceProviderIndex:
+    def build(
+        self,
+        providers: list[ResolvedCapability],
+        *,
+        on_describe_error: Callable[[str, str], None] | None = None,
+    ) -> ServiceProviderIndex:
         """Build and return the ownership index for ``providers``.
 
+        When ``on_describe_error`` is supplied, a provider that emits empty or
+        non-JSON describe output is skipped with a single call to
+        ``on_describe_error(provider_name, error_detail)`` rather than raising.
+        The broken provider is omitted from the index — it owns no services.
+
         Raises ``DuplicateOwnershipError`` when two providers claim the same service.
-        Raises ``DescribeParseError`` when a provider's stdout cannot be parsed.
+        Raises ``DescribeParseError`` when a provider's stdout cannot be parsed and
+        no ``on_describe_error`` handler is provided.
         """
         providers_tuple = tuple(providers)
 
@@ -143,7 +155,13 @@ class ServiceDescribeService:
             merged = build_provider_env(provider, self._workspace_root)
 
             result = self._subprocess_runner.run(cmd, cwd=self._workspace_root, env=merged)
-            describe_result = self._describe_parser.parse(result.stdout, provider_name=provider.extension_name)
+            try:
+                describe_result = self._describe_parser.parse(result.stdout, provider_name=provider.extension_name)
+            except DescribeParseError as exc:
+                if on_describe_error is not None:
+                    on_describe_error(provider.extension_name, str(exc))
+                    continue
+                raise
 
             for service_name in describe_result.services:
                 if service_name in index:
