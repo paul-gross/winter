@@ -11,6 +11,10 @@ into a single ``StatusDocument`` before filtering and rendering.  A provider tha
 emits a non-conformant document surfaces a clear error naming that provider, and
 the worst exit code across providers is adopted.
 
+For scope-qualified patterns (containing ``/``), the describe ownership index is
+consulted to dispatch only to the provider(s) that own matching services.  Bare
+patterns (no ``/``) retain the existing full fan-out across all providers.
+
 Returns the orchestrator's exit code, or 130 on KeyboardInterrupt.  When the
 orchestrator's stdout cannot be parsed as a conformant status document a clear
 actionable message is written to stderr and the exit code is the orchestrator's
@@ -24,7 +28,8 @@ from pathlib import Path
 from winter_cli.core.subprocess_runner import ISubprocessRunner
 from winter_cli.modules.capability.models import ResolvedCapability
 from winter_cli.modules.service.orchestrator_resolver import ServiceOrchestratorResolver
-from winter_cli.modules.service.provider_invocation import build_provider_env
+from winter_cli.modules.service.provider_invocation import build_provider_env, service_matches_pattern
+from winter_cli.modules.service.service_provider_index import ServiceDescribeService
 from winter_cli.modules.service.service_reporter import IServiceReporter
 from winter_cli.modules.service.status_filter import filter_status
 from winter_cli.modules.service.status_merge import merge_status_documents
@@ -58,11 +63,13 @@ class ServiceStatusService:
         orchestrator_resolver: ServiceOrchestratorResolver,
         status_parser: StatusDocumentParser,
         workspace_root: Path,
+        describe_service: ServiceDescribeService | None = None,
     ) -> None:
         self._subprocess_runner = subprocess_runner
         self._orchestrator_resolver = orchestrator_resolver
         self._status_parser = status_parser
         self._workspace_root = workspace_root
+        self._describe_service = describe_service
 
     def report(self, options: StatusOptions, reporter: IServiceReporter) -> int:
         """Run the orchestrator status entrypoint and render the result."""
@@ -72,11 +79,17 @@ class ServiceStatusService:
         if len(providers) == 1:
             return self._report_single(providers[0], options, reporter)
 
-        # Multi-provider: fan out, parse, merge, filter, render.
+        # Multi-provider: scope-qualified patterns route to owning providers only;
+        # bare patterns fan out to all providers.
+        active_providers = self._route_providers(providers, options.patterns, reporter)
+        if active_providers is None:
+            # All patterns were scope-qualified and none matched any owned service.
+            return 1
+
         docs: list[StatusDocument] = []
         worst_exit = 0
 
-        for provider in providers:
+        for provider in active_providers:
             doc, exit_code = self._fetch_provider_status(provider, options, reporter)
             if exit_code == 130:
                 return 130
@@ -104,11 +117,23 @@ class ServiceStatusService:
         produced a parseable document at all. ``KeyboardInterrupt`` propagates to
         the caller. Patterns scope the result exactly as for ``status`` (a bare
         ``<env>`` expands to ``<env>/*``).
+
+        For scope-qualified patterns (containing ``/``), only the owning provider(s)
+        are queried.  Bare patterns retain full fan-out.  An unowned scope-qualified
+        pattern is treated as not-running (returns ``None`` or excludes it from the
+        merged document), consistent with the required_services gate semantics.
         """
         providers = self._orchestrator_resolver.resolve_all()
 
+        # Scope-qualified routing: when a describe_service is available and all
+        # patterns are scope-qualified, restrict to owning providers only.
+        active_providers = self._route_providers(providers, patterns, reporter=None)
+        if active_providers is None:
+            # All patterns scope-qualified but no provider owns any of them.
+            return None
+
         docs: list[StatusDocument] = []
-        for provider in providers:
+        for provider in active_providers:
             raw, _exit_code = self._capture_status(provider, patterns)
             try:
                 docs.append(self._status_parser.parse(raw))
@@ -120,6 +145,67 @@ class ServiceStatusService:
 
         merged = merge_status_documents(docs)
         return filter_status(merged, patterns)
+
+    def _route_providers(
+        self,
+        providers: list[ResolvedCapability],
+        patterns: tuple[str, ...],
+        reporter: IServiceReporter | None,
+    ) -> list[ResolvedCapability] | None:
+        """Return the subset of providers to invoke for the given patterns.
+
+        When no describe_service is available, or when any pattern is bare (no
+        ``/``), returns the full provider list unchanged (full fan-out).
+
+        When all patterns are scope-qualified (contain ``/``) and a describe_service
+        is available, builds the ownership index and returns only the providers that
+        own at least one matching service.  If no provider owns any pattern, emits a
+        single actionable ``no_service_matched`` diagnostic (when ``reporter`` is not
+        None) and returns ``None``.
+
+        Describe errors from individual providers are surfaced via the reporter's
+        ``describe_parse_error`` (when supplied) and those providers contribute no
+        services to the index — consistent with the resilient path in
+        ``ServiceDescribeService.build``.
+        """
+        # No routing possible without a describe service.
+        if self._describe_service is None:
+            return providers
+
+        # Bare patterns → full fan-out (unchanged behavior).
+        if not patterns or any("/" not in p for p in patterns):
+            return providers
+
+        # All patterns are scope-qualified — route via the ownership index.
+        def _on_error(provider_name: str, detail: str) -> None:
+            if reporter is not None:
+                reporter.describe_parse_error(provider_name, detail)
+
+        index = self._describe_service.build(list(providers), on_describe_error=_on_error)
+
+        # Collect owning providers for each pattern.
+        owning: set[ResolvedCapability] = set()
+        unmatched_patterns: list[str] = []
+        for pat in patterns:
+            matched = False
+            for svc_name in index.known_service_names():
+                if service_matches_pattern(svc_name, pat):
+                    owner = index.owner_for(svc_name)
+                    if owner is not None:
+                        owning.add(owner)
+                        matched = True
+            if not matched:
+                unmatched_patterns.append(pat)
+
+        if not owning:
+            # No provider owns any of the requested services.
+            if reporter is not None:
+                token_list = ", ".join(repr(p) for p in patterns)
+                reporter.no_service_matched(token_list)
+            return None
+
+        # Return providers in the original order (preserves deterministic output).
+        return [p for p in providers if p in owning]
 
     def _capture_status(self, provider: ResolvedCapability, patterns: tuple[str, ...]) -> tuple[str, int]:
         """Run ``<entrypoint> status [pattern...]`` and return ``(raw_stdout, exit_code)``.

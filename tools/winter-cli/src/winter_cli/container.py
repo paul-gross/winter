@@ -633,6 +633,7 @@ class Container(containers.DeclarativeContainer):
         orchestrator_resolver=service_orchestrator_resolver,
         status_parser=status_document_parser,
         workspace_root=workspace_config.provided.workspace_root,
+        describe_service=service_describe_svc,
     )
 
     service_readiness_svc = providers.Factory(

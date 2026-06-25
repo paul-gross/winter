@@ -129,7 +129,12 @@ With a single provider, `describe` is never called — the sole provider implici
 
 ### `status` (multi-provider)
 
-With multiple providers, each provider's `status` output is independently fetched, parsed, and **merged** into a single `StatusDocument` before filtering and rendering. A provider whose output cannot be parsed surfaces an actionable error naming that provider; the worst exit code across all providers is adopted.
+With multiple providers, `status` routing depends on the pattern type:
+
+- **Bare patterns** (no `/` in the pattern, or no patterns at all) — full fan-out across all providers. Each provider's output is independently fetched, parsed, and **merged** into a single `StatusDocument` before filtering and rendering. This is also the behavior when no describe index is available.
+- **Scope-qualified patterns** (all patterns contain `/`, e.g. `alpha/web`) — dispatched only to the provider(s) that own the matching service(s) per the describe ownership index. Providers with a broken or empty describe emit the same stderr warning as `logs` and contribute no services to the index. If no provider owns any of the requested services, winter emits a single `no service matched` diagnostic and returns non-zero; for the `required_services` gate, this unowned pattern is classified as not-running/startable.
+
+A provider whose output cannot be parsed surfaces an actionable error naming that provider; the worst exit code across all providers is adopted.
 
 ## Local-path override
 

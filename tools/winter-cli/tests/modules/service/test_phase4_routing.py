@@ -207,12 +207,21 @@ def _make_status(
     registry: CapabilityRegistryService,
     resolver: ServiceOrchestratorResolver,
     as_json: bool = False,
+    with_describe: bool = False,
 ) -> tuple[ServiceStatusService, FakeServiceReporter]:
+    describe_svc: ServiceDescribeService | None = None
+    if with_describe:
+        describe_svc = ServiceDescribeService(
+            subprocess_runner=runner,
+            describe_parser=DescribeResultParser(),
+            workspace_root=WS,
+        )
     svc = ServiceStatusService(
         subprocess_runner=runner,
         orchestrator_resolver=resolver,
         status_parser=StatusDocumentParser(),
         workspace_root=WS,
+        describe_service=describe_svc,
     )
     reporter = FakeServiceReporter()
     return svc, reporter
@@ -992,3 +1001,163 @@ def test_logs_both_providers_good_streams_correctly() -> None:
     assert any("both-good" in line for line in reporter.log_lines)
     # No describe errors.
     assert reporter.describe_parse_error_calls == []
+
+
+# ── status ownership routing (issue #108) ────────────────────────────────────
+
+
+def test_status_scope_qualified_routes_only_to_owning_provider() -> None:
+    """Scope-qualified status pattern dispatches only to the provider that owns the service.
+
+    workspace/rabbitmq is owned by provider-b.  Provider-a must NOT be invoked,
+    so it never emits the spurious 'matched no services' warning.
+    """
+    registry, resolver = _make_two_provider_registry()
+
+    runner = FakeSubprocessRunner(
+        run_responses={
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("rabbitmq")),
+        },
+        popen_responses={
+            # Only provider-b should be invoked.
+            f"{ENTRYPOINT_B} status workspace/rabbitmq": (
+                [_status_doc("workspace", [_svc_entry("rabbitmq")])],
+                0,
+            ),
+        },
+    )
+    svc, reporter = _make_status(runner, registry, resolver, with_describe=True)
+    code = svc.report(_status_opts(patterns=("workspace/rabbitmq",)), reporter)
+
+    assert code == 0
+    assert len(reporter.status_documents) == 1
+    # Provider-a must NOT have been invoked.
+    popen_cmds = [cmd for cmd, _cwd in runner.popen_calls]
+    assert not any(str(ENTRYPOINT_A) in " ".join(cmd) for cmd in popen_cmds)
+    # Provider-b WAS invoked.
+    assert any(str(ENTRYPOINT_B) in " ".join(cmd) for cmd in popen_cmds)
+
+
+def test_status_scope_qualified_non_owning_provider_not_invoked() -> None:
+    """Explicit assertion: the non-owning provider's popen is never called for a scope-qualified query."""
+    registry, resolver = _make_two_provider_registry()
+
+    runner = FakeSubprocessRunner(
+        run_responses={
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("rabbitmq")),
+        },
+        popen_responses={
+            f"{ENTRYPOINT_B} status workspace/rabbitmq": (
+                [_status_doc("workspace", [_svc_entry("rabbitmq")])],
+                0,
+            ),
+        },
+    )
+    svc, reporter = _make_status(runner, registry, resolver, with_describe=True)
+    svc.report(_status_opts(patterns=("workspace/rabbitmq",)), reporter)
+
+    # No popen call to provider-a at all.
+    assert all(str(ENTRYPOINT_A) not in " ".join(cmd) for cmd, _cwd in runner.popen_calls)
+
+
+def test_status_bare_pattern_retains_full_fan_out() -> None:
+    """Bare patterns (no '/') fan out to all providers unchanged."""
+    registry, resolver = _make_two_provider_registry()
+
+    runner = FakeSubprocessRunner(
+        popen_responses={
+            # Both providers must be invoked for a bare pattern.
+            f"{ENTRYPOINT_A} status": (
+                [_status_doc("alpha", [_svc_entry("frontend")])],
+                0,
+            ),
+            f"{ENTRYPOINT_B} status": (
+                [_status_doc("alpha", [_svc_entry("rabbitmq")])],
+                0,
+            ),
+        },
+    )
+    svc, reporter = _make_status(runner, registry, resolver, with_describe=True)
+    code = svc.report(_status_opts(), reporter)
+
+    assert code == 0
+    # Both providers were invoked.
+    popen_cmds = [cmd for cmd, _cwd in runner.popen_calls]
+    assert any(str(ENTRYPOINT_A) in " ".join(cmd) for cmd in popen_cmds)
+    assert any(str(ENTRYPOINT_B) in " ".join(cmd) for cmd in popen_cmds)
+    # Merged result contains services from both.
+    assert len(reporter.status_documents) == 1
+    doc, _ = reporter.status_documents[0]
+    svc_names = [s.name for e in doc.envs for s in e.services]
+    assert "frontend" in svc_names
+    assert "rabbitmq" in svc_names
+
+
+def test_status_collect_scope_qualified_routes_to_owning_provider_only() -> None:
+    """collect() with a scope-qualified pattern dispatches only to the owning provider."""
+    registry, resolver = _make_two_provider_registry()
+
+    runner = FakeSubprocessRunner(
+        run_responses={
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("rabbitmq")),
+        },
+        popen_responses={
+            f"{ENTRYPOINT_B} status workspace/rabbitmq": (
+                [_status_doc("workspace", [_svc_entry("rabbitmq")])],
+                0,
+            ),
+        },
+    )
+    svc, _reporter = _make_status(runner, registry, resolver, with_describe=True)
+    doc = svc.collect(("workspace/rabbitmq",))
+
+    assert doc is not None
+    svc_names = [s.name for e in doc.envs for s in e.services]
+    assert "rabbitmq" in svc_names
+    # Provider-a was never polled.
+    popen_cmds = [cmd for cmd, _cwd in runner.popen_calls]
+    assert not any(str(ENTRYPOINT_A) in " ".join(cmd) for cmd in popen_cmds)
+
+
+def test_status_unowned_scope_qualified_yields_no_service_matched() -> None:
+    """An unowned scope-qualified pattern emits a single no_service_matched message."""
+    registry, resolver = _make_two_provider_registry()
+
+    runner = FakeSubprocessRunner(
+        run_responses={
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("backend")),
+        },
+        # No popen_responses: no provider should be invoked.
+    )
+    svc, reporter = _make_status(runner, registry, resolver, with_describe=True)
+    code = svc.report(_status_opts(patterns=("workspace/unknown-service",)), reporter)
+
+    # Non-zero exit (service not found).
+    assert code != 0
+    # A single actionable no_service_matched message — not per-provider noise.
+    assert len(reporter.no_service_matched_calls) == 1
+    assert "workspace/unknown-service" in reporter.no_service_matched_calls[0]
+    # No provider was invoked.
+    assert runner.popen_calls == []
+
+
+def test_status_unowned_scope_qualified_collect_returns_none() -> None:
+    """collect() for an unowned scope-qualified pattern returns None (treated as not-running)."""
+    registry, resolver = _make_two_provider_registry()
+
+    runner = FakeSubprocessRunner(
+        run_responses={
+            f"{ENTRYPOINT_A} describe": _describe_result(_describe_json("frontend")),
+            f"{ENTRYPOINT_B} describe": _describe_result(_describe_json("backend")),
+        },
+    )
+    svc, _reporter = _make_status(runner, registry, resolver, with_describe=True)
+    doc = svc.collect(("workspace/unknown-service",))
+
+    assert doc is None
+    # No provider was invoked.
+    assert runner.popen_calls == []
