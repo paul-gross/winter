@@ -56,4 +56,4 @@ git commit -m "chore: bump standalone pins"
 - **`refusing to re-pin '<name>': uncommitted changes`** — dirty working tree; commit or stash manually, or pass `--autostash`.
 - **Unresolvable ref** — the `ref` string in the config didn't match any branch, tag, or commit in the local ref store after the fetch. Run `winter ws fetch <name>` to double-check connectivity, then re-run.
 
-See also: [setup.md — `ref`](../../setup.md#ref--standalone-repo-pins) for the full pin semantics and lock schema; [`winter ws pull`](./pull.md) for automatic branch-pin advances during a pull.
+See also: [configuration/repositories.md — `ref`](../../configuration/repositories.md#ref--standalone-repo-pins) for the full pin semantics and lock schema; [`winter ws pull`](./pull.md) for automatic branch-pin advances during a pull.

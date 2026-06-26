@@ -120,7 +120,7 @@ winter ws destroy <name> --no-provision-teardown # skip provision teardown; stru
 This command runs in the following order:
 
 1. **Provision teardown** — runs `data --destroy` then `resource --destroy` (reverse of apply order) using the same `[[provision.*]]` handlers declared in `.winter/config.toml` and extension manifests. Handlers without a declared `destroy` script warn and no-op without aborting structural teardown. Pass `--no-provision-teardown` to skip this phase entirely. See [winter-cli/usage/provision.md](./winter-cli/usage/provision.md) for the full handler vocabulary and action semantics.
-2. **Extension hooks** — fires every installed extension's `on_env_destroy` hook (mirror of `on_env_init`). Hooks receive the same env-var contract — see [winter-cli/setup.md](./winter-cli/setup.md#extension-hooks).
+2. **Extension hooks** — fires every installed extension's `on_env_destroy` hook (mirror of `on_env_init`). Hooks receive the same env-var contract — see [winter-cli/configuration/extensions.md](./winter-cli/configuration/extensions.md#extension-hooks).
 3. **Worktree removal** — `git worktree remove`s every per-repo worktree under `./<name>/`.
 4. **Env directory removal** — removes the env directory.
 5. **Exclude cleanup** — strips the matching `# >>> winter-dir/<name>` block from the workspace `.git/info/exclude`.

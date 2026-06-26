@@ -72,4 +72,4 @@ Field reference:
 | `candidates[].entrypoint` | string | Raw entrypoint path from the manifest (relative to the extension repo root). |
 | `candidates[].valid` | boolean | True when the entrypoint file exists on disk. |
 
-For the full resolution model (explicit, implicit, invalid), the config and manifest keys, and deprecated alias handling, see [../setup.md#capability-registry](../setup.md#capability-registry). For the service orchestration command that dispatches through the `service` slot, see [service.md](./service.md).
+For the full resolution model (explicit, implicit, invalid), the config and manifest keys, and deprecated alias handling, see [../configuration/capabilities.md#capability-registry](../configuration/capabilities.md#capability-registry). For the service orchestration command that dispatches through the `service` slot, see [service.md](./service.md).

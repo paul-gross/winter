@@ -114,7 +114,7 @@ locates this script relative to the winter-cli source tree (its sibling
 `tools/winter-lint/` directory), runs it over the selected scope with the
 standard lint env (`WINTER_LINT_SCOPE`, `WINTER_LINT_PATHS`, `WINTER_CLI`, …),
 and aggregates its NDJSON findings under the `[core]` source group. See
-`workspace:/ai/winter-cli/setup.md` ("Built-in core checks").
+`workspace:/ai/winter-cli/configuration/lint.md` ("Built-in core checks").
 
 It can also be run directly:
 

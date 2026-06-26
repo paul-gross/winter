@@ -83,13 +83,13 @@ The bundled tmux orchestrator supports an opt-in per-service startup retry polic
 
 A workspace can bind **one or more** service providers through the capability registry. The simplest form binds a single provider — for multi-provider workspaces, use the ordered list.
 
-**Single provider** — `capabilities.service = "<name>"` in the `[capabilities]` table of `.winter/config.toml`. When exactly one installed extension declares `provides.service`, the binding is optional (implicit sole-provider). When two or more extensions declare `provides.service` with no explicit binding, all are bound implicitly (implicit-all) — see [setup.md#capability-registry](../setup.md#capability-registry).
+**Single provider** — `capabilities.service = "<name>"` in the `[capabilities]` table of `.winter/config.toml`. When exactly one installed extension declares `provides.service`, the binding is optional (implicit sole-provider). When two or more extensions declare `provides.service` with no explicit binding, all are bound implicitly (implicit-all) — see [configuration/capabilities.md#capability-registry](../configuration/capabilities.md#capability-registry).
 
 **Multiple providers (ordered list)** — `capabilities.service = ["<name-1>", "<name-2>"]` in the `[capabilities]` table of `.winter/config.toml`. The list order is deterministic for stable output only — no dependency or startup-ordering semantics are implied. A single-entry list is equivalent to a single-provider binding and never triggers a `describe` call.
 
-**Back-compat:** the legacy single-string keys `service_orchestrator` (config) and `orchestrate_services` (manifest) are still accepted — see [setup.md#deprecated-keys](../setup.md#deprecated-keys) for the normalisation semantics. New workspaces should use `[capabilities].service`.
+**Back-compat:** the legacy single-string keys `service_orchestrator` (config) and `orchestrate_services` (manifest) are still accepted — see [configuration/capabilities.md#deprecated-keys](../configuration/capabilities.md#deprecated-keys) for the normalisation semantics. New workspaces should use `[capabilities].service`.
 
-See [setup.md#capability-registry](../setup.md#capability-registry) for the full resolution model and [capabilities.md](./capabilities.md) to introspect the current binding.
+See [configuration/capabilities.md#capability-registry](../configuration/capabilities.md#capability-registry) for the full resolution model and [capabilities.md](./capabilities.md) to introspect the current binding.
 
 ### Adding a second provider
 
@@ -227,7 +227,7 @@ Every dispatch — regardless of action — sets these four variables and runs t
 | `WINTER_EXT_PREFIX` | The resolved symlink prefix for this extension. |
 | `WINTER_EXT_CONFIG_DIR` | Absolute path to this extension's writable config/asset directory (default `.winter/config/<repo-name>/`); the writable counterpart to the read-only `WINTER_EXT_DIR`. Set via `config_dir` in `[[standalone_repository]]`, or defaults to the workspace-relative `.winter/config/<name>/` path. |
 
-These four form the winter base extension contract, set uniformly by `core/extension_invocation.py::build_extension_env`. They are defined for the hook/doctor/lint dispatches in [setup.md](../setup.md#hook-env-var-contract); `winter service` provides them identically. Working directory varies by surface: `winter service`, `doctor`, `lint`, and the `on_workspace_reconcile` hook run at the workspace root, while the `on_env_*` hooks run at the env root.
+These four form the winter base extension contract, set uniformly by `core/extension_invocation.py::build_extension_env`. They are defined for the hook/doctor/lint dispatches in [configuration/extensions.md](../configuration/extensions.md#hook-env-var-contract); `winter service` provides them identically. Working directory varies by surface: `winter service`, `doctor`, `lint`, and the `on_workspace_reconcile` hook run at the workspace root, while the `on_env_*` hooks run at the env root.
 
 ### Per-action env var: `WINTER_SERVICE_MANIFEST`
 

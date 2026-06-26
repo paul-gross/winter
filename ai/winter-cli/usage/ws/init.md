@@ -12,7 +12,7 @@ One idempotent command with three modes. Safe to re-run any time.
 
 Each mode applies the same per-repo reconcile steps (git identity, excludes, `cmd` list, extension processing, pinned-repo tracking on worktrees). For the env-init path, init also infers and wires an upstream for non-pinned newly-added worktrees when their connected siblings agree on one; ambiguous or divergent siblings are left for explicit `winter ws connect`. See [worktree-ops.md](../../../worktree-ops.md) for the full step list, the pinned-repo specifics, and the upstream-inference contract.
 
-**Standalone repo pin behavior.** When a standalone repo has a `ref` configured (see [setup.md — ref](../../setup.md#ref--standalone-repo-pins)), `init` applies the pin during reconcile:
+**Standalone repo pin behavior.** When a standalone repo has a `ref` configured (see [configuration/repositories.md — ref](../../configuration/repositories.md#ref--standalone-repo-pins)), `init` applies the pin during reconcile:
 
 - **Lock present and fresh** (`entry.ref` matches config `ref`): checks out the locked commit without network access or re-resolution. This is the reproducible-install path — the locked commit wins even if the remote branch or tag has since moved.
 - **Lock absent or stale** (`entry.ref` differs, or no entry): resolves `ref` against the on-disk remote refs, checks out the result, and writes/rewrites the lock entry for this repo. If the working tree has uncommitted changes, refuses with a clear error — commit or stash first. On a fresh clone the tree is always clean.

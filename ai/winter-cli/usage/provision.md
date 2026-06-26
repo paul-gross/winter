@@ -129,7 +129,7 @@ All handlers receive `WINTER_WORKSPACE_DIR` plus the three extension-identity va
 | `WINTER_ENV_INDEX` | The persisted port-offset index for this env — feature-environment/feature-worktree only |
 | `WINTER_PORT_BASE` | `base_port + ports_per_env * WINTER_ENV_INDEX` — feature-environment/feature-worktree only |
 
-`workspace`-scope handlers receive the four base vars above but not the trio (same pattern as `on_workspace_reconcile` hooks — see [setup.md](../setup.md#hook-env-var-contract)).
+`workspace`-scope handlers receive the four base vars above but not the trio (same pattern as `on_workspace_reconcile` hooks — see [configuration/extensions.md](../configuration/extensions.md#hook-env-var-contract)).
 
 ### Project field
 
@@ -224,7 +224,7 @@ All handlers receive `WINTER_WORKSPACE_DIR` plus the three extension-identity va
 | `WINTER_ENV_INDEX` | The persisted port-offset index for this env — feature-environment/feature-worktree only |
 | `WINTER_PORT_BASE` | `base_port + ports_per_env * WINTER_ENV_INDEX` — feature-environment/feature-worktree only |
 
-`workspace`-scope handlers receive the four base vars above but not the trio (same pattern as `on_workspace_reconcile` hooks — see [setup.md](../setup.md#hook-env-var-contract)).
+`workspace`-scope handlers receive the four base vars above but not the trio (same pattern as `on_workspace_reconcile` hooks — see [configuration/extensions.md](../configuration/extensions.md#hook-env-var-contract)).
 
 ## Service check (`required_services`)
 
@@ -241,7 +241,7 @@ A `required_services` token must be scoped as `workspace/<service>` or `<current
 
 **Missing orchestrator:** if `required_services` is declared but no service orchestrator is registered in the workspace, `winter provision` exits non-zero with a clean error message. Cross-link: see [service.md](./service.md) for the service contract, including how orchestrators are registered.
 
-**Static lint counterpart:** `winter lint` runs a `required-services` core check that validates `required_services` entries against the merged service catalog from all bound providers — ahead of any provisioning run. The lint check validates catalog membership (does any provider declare this service name?) while `winter provision`'s runtime service check additionally enforces that the service is currently running in the correct env scope. Use both: lint catches typos and missing catalog entries before any env is provisioned; the runtime check ensures services are actually up before scripts execute. See [setup.md#built-in-core-checks](../setup.md#built-in-core-checks) for the `required-services` lint check description.
+**Static lint counterpart:** `winter lint` runs a `required-services` core check that validates `required_services` entries against the merged service catalog from all bound providers — ahead of any provisioning run. The lint check validates catalog membership (does any provider declare this service name?) while `winter provision`'s runtime service check additionally enforces that the service is currently running in the correct env scope. Use both: lint catches typos and missing catalog entries before any env is provisioned; the runtime check ensures services are actually up before scripts execute. See [configuration/lint.md#built-in-core-checks](../configuration/lint.md#built-in-core-checks) for the `required-services` lint check description.
 
 ## `--dry-run`
 

@@ -32,7 +32,7 @@ The feature-worktrees grid can render in four orientations, all projections of t
 | `list` | One row per (env, repo) with columns **env, project, remote, git-status, service-status**. Multi-repo workspaces group rows under each env, eliding env/service on repeat rows (both are env-scoped, so they appear only on the env's first row). The **remote** column is per-repo — each worktree's own upstream tracking branch (e.g. `origin/feature-x`, or `—` when no upstream is set) — so it shows on every row, since worktrees in one env can track different remotes. Best for monorepo or many-env workspaces where the grid orientation would be too wide or too sparse to read. |
 | `auto` (default) | Resolves by shape: exactly 1 repo → `list`; repos > envs → `repos-as-rows`; else → `repos-as-columns`. When `auto` is active the Feature Repositories header shows the resolved choice, e.g. `auto→list`. |
 
-**Configuring the default:** set `layout` in the `[tui.dashboard]` table in `.winter/config.toml` (or the `config.local.toml` overlay for a per-machine default). See [setup.md#dashboard-layout](../setup.md#dashboard-layout) for the schema and a TOML example.
+**Configuring the default:** set `layout` in the `[tui.dashboard]` table in `.winter/config.toml` (or the `config.local.toml` overlay for a per-machine default). See [configuration/tui.md#dashboard-layout](../configuration/tui.md#dashboard-layout) for the schema and a TOML example.
 
 **Inspecting the resolved layout non-interactively:** the grid renders only inside this interactive Textual TUI, so its `auto` resolution can't be observed from a headless session. To confirm which concrete layout `auto` resolves to — or that a `[tui.dashboard]` config change took effect — read the `dashboard` block of `winter ws status --json` instead (`{ "configured_layout": …, "resolved_layout": … }`). It uses the same heuristic this grid does and reflects the whole-workspace shape. See [ws/status.md](./ws/status.md#json-schema-schema_version-1).
 
@@ -40,7 +40,7 @@ The feature-worktrees grid can render in four orientations, all projections of t
 
 ## Keybindings
 
-Every built-in action listed below has a stable **action id**. A `[keybindings]` table in `.winter/config.toml` (with the `.winter/config.local.toml` overlay applying per-machine) maps action ids to key specs; an id with no entry keeps its default. Invalid specs and unknown ids are reported as a dashboard toast and otherwise ignored — the rest of the bindings still load. See [setup.md](../setup.md#keybindings) for the config schema. (The Log tab is a separate screen whose `q`/`r`/`c` keys are fixed and not part of this table.)
+Every built-in action listed below has a stable **action id**. A `[keybindings]` table in `.winter/config.toml` (with the `.winter/config.local.toml` overlay applying per-machine) maps action ids to key specs; an id with no entry keeps its default. Invalid specs and unknown ids are reported as a dashboard toast and otherwise ignored — the rest of the bindings still load. See [configuration/tui.md](../configuration/tui.md#keybindings) for the config schema. (The Log tab is a separate screen whose `q`/`r`/`c` keys are fixed and not part of this table.)
 
 | Action id | Default | Action |
 |-----------|---------|--------|

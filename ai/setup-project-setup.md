@@ -123,7 +123,7 @@ DATABASE_URL  = "postgres://localhost:${DB_PORT}/myapp-${WINTER_ENV}"  # reuses 
 
 This means every new environment gets the right ports automatically on `winter ws init <name>`, without any manual step in `project-setup.md`. Use this for any variable derived from the managed base vars (`WINTER_PORT_BASE`, `WINTER_WORKSPACE_PORT_BASE`, `WINTER_ENV`, `WINTER_ENV_INDEX`) or from an earlier `[env.vars]` entry. Only variables that depend on state winter doesn't know (secrets, externally provisioned values) need to be documented in `project-setup.md` instead.
 
-For the full `[env.vars]` token grammar and supported substitutions, see [winter-cli/setup.md — `[env.vars]`](../ai/winter-cli/setup.md#shared-config-winterconfigtoml).
+For the full `[env.vars]` token grammar and supported substitutions, see [winter-cli/configuration/ports-and-environments.md — `[env.vars]`](./winter-cli/configuration/ports-and-environments.md#per-env-derived-variables).
 
 #### Other env files
 

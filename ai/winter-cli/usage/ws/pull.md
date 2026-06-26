@@ -16,7 +16,7 @@ Fetches, then integrates each matched worktree's tracked upstream (ff-only by de
 
 `--autostash` (orthogonal) passes through to `git merge` / `git rebase`, which stash a dirty working tree before integrating and restore it after. If autostash fails, git aborts and the repo is reported as diverged.
 
-**Standalone repo pin behavior.** When a standalone repo has a `ref` configured (see [setup.md — ref](../../setup.md#ref--standalone-repo-pins)), `pull` applies the pin semantics instead of a plain upstream integrate:
+**Standalone repo pin behavior.** When a standalone repo has a `ref` configured (see [configuration/repositories.md — ref](../../configuration/repositories.md#ref--standalone-repo-pins)), `pull` applies the pin semantics instead of a plain upstream integrate:
 
 - **branch ref** — fetches origin, then fast-forwards the working tree to `origin/<ref>` using `git merge --ff-only` (the same safe machinery as non-pinned pulls, which refuses on divergence rather than force-resetting). Rewrites `.winter/config.lock` with the new HEAD commit when HEAD moved. Outcomes:
   - `re-pinned → <sha>` — HEAD advanced; lock rewritten.
