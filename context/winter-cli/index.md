@@ -15,3 +15,4 @@ The `winter` command is a workspace-level tool for managing worktrees and reposi
 | [Configuration](./configuration/index.md) | …you're editing `.winter/config.toml` — repositories, ports, extensions, capabilities, provision handlers, doctor/lint. The per-concept hub for the whole configuration surface. |
 | [Contracts](./contracts/service-orchestrator.md) | …you're writing or conforming an extension that winter dispatches to — the implementer-facing provider protocols (currently the service orchestrator). |
 | [Root flags](./root-flags.md) | …you need `--verbose`, `--version`, `--service-orchestrator`, or `WINTER_LOG_LEVEL` — the global flags that apply to every command. |
+| [Maintaining these docs](./maintaining.md) | …you're adding, moving, rewriting, or reviewing a file in this tree, and need the placement, routing, and freshness rules that govern it. |

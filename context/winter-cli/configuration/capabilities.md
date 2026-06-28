@@ -34,7 +34,7 @@ The only in-scope slot today is `service`. Future slots are added to `Capability
 
 ## Service orchestration
 
-`winter service` (see [../usage/service.md](../usage/service.md)) owns a stable `up`/`down`/`status`/`restart`/`logs` interface and dispatches each invocation to the extension(s) bound to the `service` capability slot. The interface lives in core winter; the implementation lives in whichever extension(s) the workspace points at (tmux, containers, a daemon), so consumers never depend on the implementation.
+`winter service` is the operator surface for the `service` slot (see [../usage/service.md](../usage/service.md)); this section covers the config and manifest keys that bind a provider to it.
 
 ### Registering orchestrator(s)
 
@@ -44,11 +44,7 @@ Three config paths connect the interface to an implementation:
 - **Multiple providers** — `capabilities.service = ["<name-1>", "<name-2>"]` (a list value in the same `[capabilities]` table). Every named provider is bound; list order carries no execution semantics. Each provider must declare `provides.service` in its `winter-ext.toml`. Repeated names are de-duplicated (preserving order) at config load.
 - **Extension manifest** — `provides.service = "<path>"` in the `[provides]` table in each extension's `winter-ext.toml`, an executable entrypoint relative to the extension's repo root.
 
-With binding and manifest in place, `winter service <action> …` resolves through the capability registry. Self-registration and explicit binding compose: an explicit `capabilities.service` (string or list) selects exactly those providers; with no explicit binding, **all** installed extensions that declare `provides.service` are bound (one → implicit; two or more → all bound, implicitly). For the full resolution model and deprecated key handling, see [Capability registry](#capability-registry) above.
-
-For multi-provider fan-out behavior (`up` aborts on first failure, `down` is best-effort, the ownership index for targeted `logs`/`restart`, the `logs -f` single-owner restriction, and merged `status` — all with no readiness gate or ordering semantics), see [../usage/service.md](../usage/service.md).
-
-The legacy keys `service_orchestrator` (config) and `orchestrate_services` (manifest) are still accepted as deprecated aliases — see [Deprecated keys](#deprecated-keys) above for the fallback semantics.
+How these bindings resolve into a dispatch target, and how the deprecated `service_orchestrator` / `orchestrate_services` aliases are normalised, is owned by [Capability registry](#capability-registry) above. For dispatch-time multi-provider fan-out (`up` aborts on first failure, `down` best-effort, the ownership index for targeted `logs`/`restart`, the `logs -f` single-owner restriction, and merged `status`), see [../usage/service.md](../usage/service.md).
 
 ### Entrypoint contract
 

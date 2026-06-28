@@ -22,6 +22,6 @@ Operations that iterate repos (`ws list`, `ws status`, `ws fetch`, `ws pull`, `w
 
 `winter ws init` treats both cases as actionable rather than a warning: missing repos are cloned; undeclared directories are left alone.
 
-- **Missing non-pinned upstream (env path):** when a non-pinned worktree in a feature environment has no upstream and its connected non-pinned siblings all agree on one, `winter ws init <env>` auto-connects it to that inferred ref. Divergent or no-sibling cases are left for explicit `winter ws connect` — see [worktree-ops.md](../../worktree-ops.md#creating-a-feature-environment) for the full contract.
+- **Missing non-pinned upstream (env path):** when a non-pinned worktree in a feature environment has no upstream and its connected non-pinned siblings all agree on one, `winter ws init <env>` auto-connects it to that inferred ref. Divergent or no-sibling cases are left for explicit `winter ws connect` — see [worktree-ops.md](../worktree-ops.md#creating-a-feature-environment) for the full contract.
 
 Drift detection currently covers project repos only. Missing or undeclared standalone repos are not warned about; if a `[[standalone_repository]]` entry's directory is missing, `winter ws init` clones it on the next run.
