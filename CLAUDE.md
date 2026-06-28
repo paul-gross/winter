@@ -14,14 +14,14 @@ IMPORTANT: This workspace has fundamental pieces declared in @context/winter-cli
 
 ## Key References
 
-| Topic | Location |
-|-------|----------|
-| Directory layout, feature envs, path notation, and rules | [context/workspace-layout.md](./context/workspace-layout.md) |
-| Winter CLI command reference | [context/winter-cli/index.md](./context/winter-cli/index.md) |
-| Worktree git operations (create, pull, destroy) | [context/worktree-ops.md](./context/worktree-ops.md) |
-| Contributing conventions (merge, push, delivery) | [context/project/contributing.md](./context/project/contributing.md) |
-| GitHub forge, issue labels, and `/wg-issue` skill | [context/github.md](./context/github.md) |
-| Installed winter extensions | `CLAUDE.winter.md` |
+| Location | Topic |
+|----------|-------|
+| [context/workspace-layout.md](./context/workspace-layout.md) | Directory layout, feature envs, path notation, and rules |
+| [context/winter-cli/index.md](./context/winter-cli/index.md) | Winter CLI command reference |
+| [context/worktree-ops.md](./context/worktree-ops.md) | Worktree git operations (create, pull, destroy) |
+| [context/project/contributing.md](./context/project/contributing.md) | Contributing conventions (merge, push, delivery) |
+| [context/github.md](./context/github.md) | GitHub forge, issue labels, and `/wg-issue` skill |
+| `CLAUDE.winter.md` | Installed winter extensions |
 
 # Winter Extensions
 
