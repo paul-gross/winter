@@ -1,12 +1,9 @@
 ---
 name: worktree-ops
 description: |
-  Handles routine git worktree operations in the winter workspace. Creates
-  worktrees, connects them to remote feature branches, updates them against
-  main, disconnects, and checks worktree status. Use when: setting up
-  worktrees, pointing a worktree to a feature branch, bringing worktrees up
-  to date with main, disconnecting feature branches, or checking worktree
-  branch/upstream state.
+  Performs routine git worktree operations in the winter workspace — create,
+  connect to a remote feature branch, update against main, disconnect, and report
+  status. Use this agent for worktree setup or branch/upstream changes.
 model: haiku
 tools:
   - Bash
