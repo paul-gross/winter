@@ -17,5 +17,6 @@ Winter loads `.winter/config.toml` (committed) and merges `.winter/config.local.
 | [Provision handlers](./provision.md) | …you're declaring `[[provision.*]]` dependency / resource / data handlers. |
 | [Extensions](./extensions.md) | …you're authoring a `winter-ext.toml` — skills/agents symlinking, lifecycle hooks, and the `adopt_extensions` modes. |
 | [Capabilities & service orchestration](./capabilities.md) | …you're binding the `service` capability slot to one or more provider extensions. |
+| [Artifact space](./space.md) | …you're setting where winter and its extensions write generated artifacts (scores, manifests, workflow docs, logs) — the `[space]` root and per-kind overrides that `winter space <kind>` resolves. |
 | [Doctor probes](./doctor.md) | …you're contributing a `winter doctor` probe from the workspace or an extension. |
 | [Lint checks](./lint.md) | …you're contributing a `winter lint` check, or need the built-in core checks. |

@@ -380,6 +380,47 @@ class EnvVarBands(BaseModel):
     """Vars from ``[env.feature.vars]`` — feature-env scope (overlaid on workspace band)."""
 
 
+class SpaceConfig(BaseModel):
+    """Artifact-space configuration from the ``[space]`` table.
+
+    The **winter space** is where winter and its extensions write *generated
+    artifacts* — harness scores, review manifests, workflow session docs, logs,
+    and whatever else an extension owns — as opposed to repo deliverables. It is
+    resolved by ``winter space <kind>`` and read by the consuming skill, so the
+    location is never hardcoded into any one code harness's home directory.
+
+    ``root`` is the space root. Resolved **relative to the workspace root**,
+    unless it is home-relative (``~/...``) or absolute. Default ``.winter`` — so
+    the unconfigured space lives inside the workspace and travels with the
+    checkout.
+
+    ``kinds`` maps an arbitrary artifact-kind name to a directory override. The
+    keys are **dynamic and untyped** — each extension defines its own kinds
+    (the ``winter-workflow`` extension uses ``scores``, ``manifests``,
+    ``workflows``, ``retrospectives``; another could add ``logs``). A kind with
+    no override resolves to a sub-directory of ``root`` named after the kind. An
+    override value follows the same three-form rule, except a *relative*
+    override is taken **relative to the resolved root** (``~``/absolute escape
+    the root). Configure as::
+
+        [space]
+        root = "~/.winter"          # workspace-relative (default ".winter"), ~, or absolute
+
+        [space.kinds]
+        scores = "audits"           # -> <root>/audits
+        logs = "/var/log/winter"    # -> absolute, outside the space root
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    root: str = ".winter"
+    """Space root. Workspace-relative (default ``.winter``), home-relative (``~``), or absolute."""
+
+    kinds: dict[str, str] = Field(default_factory=dict)
+    """Per-kind directory overrides from ``[space.kinds]``. Dynamic keys; an absent kind
+    defaults to a ``<root>/<kind>`` sub-directory."""
+
+
 class WorkspaceConfig(BaseModel):
     """Immutable configuration snapshot for the current workspace."""
 
@@ -509,9 +550,42 @@ class WorkspaceConfig(BaseModel):
     then ``feature`` on top (feature wins key collisions).
     """
 
+    space: SpaceConfig = Field(default_factory=SpaceConfig)
+    """Generated-artifact space configuration from the ``[space]`` table.
+
+    ``winter space <kind>`` resolves a directory via :meth:`space_dir`; extensions
+    read it instead of hardcoding an artifact path.
+    """
+
     def port_base_for_index(self, index: int) -> int:
         """Return the per-env port base for the given env index.
 
         Derived from config: ``base_port + index * ports_per_env``.
         """
         return self.base_port + index * self.ports_per_env
+
+    def space_dir(self, kind: str) -> Path:
+        """Resolve the absolute directory for an artifact *kind* in the winter space.
+
+        The space root (``space.root``) resolves relative to ``workspace_root``
+        unless it is home-relative (``~``) or absolute. The kind's directory is
+        its ``space.kinds`` override (defaulting to the bare kind name) resolved
+        relative to that root, again with ``~``/absolute as escapes. Pure: this
+        computes a path and creates nothing. The ``winter space`` command prints
+        it; the caller materializes the directory if it writes into it.
+        """
+        root = self._resolve_space_path(self.space.root, base=self.workspace_root)
+        override = self.space.kinds.get(kind, kind)
+        return self._resolve_space_path(override, base=root)
+
+    @staticmethod
+    def _resolve_space_path(value: str, base: Path) -> Path:
+        """Resolve a space path *value* against *base* by the ~/absolute/relative rule.
+
+        Leading ``~`` expands to the home directory (absolute); an absolute path
+        is returned as-is; any other (relative) value joins onto ``base``.
+        """
+        candidate = Path(value).expanduser()
+        if candidate.is_absolute():
+            return candidate
+        return base / candidate

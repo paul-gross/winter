@@ -5,7 +5,15 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import FakeFilesystem
-from winter_cli.config.models import _DEFAULT_ENV_ALIASES, AdoptExtensions, DashboardLayout, EnvVarBands, SingletonType
+from winter_cli.config.models import (
+    _DEFAULT_ENV_ALIASES,
+    AdoptExtensions,
+    DashboardLayout,
+    EnvVarBands,
+    SingletonType,
+    SpaceConfig,
+    WorkspaceConfig,
+)
 from winter_cli.config.workspace import (
     CONFIG_FILE,
     LOCAL_CONFIG_FILE,
@@ -967,3 +975,108 @@ def test_env_bands_local_overlay_deep_merges_sub_tables() -> None:
     # Both bands are present after the overlay merge.
     assert config.env_bands.feature == {"FE_VAR": "fe_value"}
     assert config.env_bands.workspace == {"WS_VAR": "ws_value"}
+
+
+# ── [space] artifact-space config ────────────────────────────────────────────
+
+
+def test_space_defaults_when_absent() -> None:
+    """No `[space]` table → default root `.winter` and no kind overrides."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(fs, {config_path: {}})
+
+    config = svc.load()
+
+    assert config.space == SpaceConfig()
+    assert config.space.root == ".winter"
+    assert config.space.kinds == {}
+
+
+def test_space_parses_root_and_kinds() -> None:
+    """`[space]` root and the dynamic `[space.kinds]` sub-table parse through."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "space": {
+                    "root": "~/.winter",
+                    "kinds": {"scores": "audits", "logs": "/var/log/winter"},
+                },
+            },
+        },
+    )
+
+    config = svc.load()
+
+    assert config.space.root == "~/.winter"
+    assert config.space.kinds == {"scores": "audits", "logs": "/var/log/winter"}
+
+
+def test_space_ignores_non_string_kind_values() -> None:
+    """A non-string kind override is dropped rather than breaking the load."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {config_path: {"space": {"kinds": {"scores": "audits", "bad": 7, "blank": ""}}}},
+    )
+
+    config = svc.load()
+
+    assert config.space.kinds == {"scores": "audits"}
+
+
+# ── WorkspaceConfig.space_dir resolution ─────────────────────────────────────
+
+
+def _config_with_space(space: SpaceConfig) -> WorkspaceConfig:
+    return WorkspaceConfig(
+        workspace_root=WORKSPACE_ROOT,
+        session_prefix="winter",
+        main_branch="master",
+        space=space,
+    )
+
+
+def test_space_dir_default_root_is_workspace_relative() -> None:
+    config = _config_with_space(SpaceConfig())
+    assert config.space_dir("scores") == WORKSPACE_ROOT / ".winter" / "scores"
+
+
+def test_space_dir_custom_workspace_relative_root() -> None:
+    config = _config_with_space(SpaceConfig(root="artifacts/winter"))
+    assert config.space_dir("manifests") == WORKSPACE_ROOT / "artifacts" / "winter" / "manifests"
+
+
+def test_space_dir_home_relative_root() -> None:
+    config = _config_with_space(SpaceConfig(root="~/.winter"))
+    assert config.space_dir("scores") == Path.home() / ".winter" / "scores"
+
+
+def test_space_dir_absolute_root() -> None:
+    config = _config_with_space(SpaceConfig(root="/var/winter/space"))
+    assert config.space_dir("scores") == Path("/var/winter/space/scores")
+
+
+def test_space_dir_relative_kind_override_joins_root() -> None:
+    config = _config_with_space(SpaceConfig(kinds={"scores": "audits"}))
+    assert config.space_dir("scores") == WORKSPACE_ROOT / ".winter" / "audits"
+
+
+def test_space_dir_absolute_kind_override_escapes_root() -> None:
+    config = _config_with_space(SpaceConfig(kinds={"logs": "/var/log/winter"}))
+    assert config.space_dir("logs") == Path("/var/log/winter")
+
+
+def test_space_dir_home_kind_override_escapes_root() -> None:
+    config = _config_with_space(SpaceConfig(kinds={"logs": "~/winter-logs"}))
+    assert config.space_dir("logs") == Path.home() / "winter-logs"
+
+
+def test_space_dir_unknown_kind_defaults_to_named_subdir() -> None:
+    config = _config_with_space(SpaceConfig(kinds={"scores": "audits"}))
+    # A kind with no override falls back to a `<root>/<kind>` directory.
+    assert config.space_dir("workflows") == WORKSPACE_ROOT / ".winter" / "workflows"

@@ -17,5 +17,6 @@ Every `winter` command group and usage topic, one file each. Read this index, th
 | [Extension management](./ext.md) | …you need to verify that an extension conforms to a capability spec, or scaffold a new extension skeleton (`winter ext verify`, `winter ext new`). |
 | [Provision](./provision.md) | …you need to bring a feature environment to a working state after `winter ws init` — install dependencies, create resources, and load seed data. |
 | [Env](./env.md) | …you need to print or source the runtime environment variables for a feature env or the workspace scope — `winter env <scope>`. |
+| [Space](./space.md) | …you need the directory where winter and its extensions write generated artifacts (scores, manifests, workflow docs, logs) — `winter space <kind>`, resolved from the `[space]` config table. |
 
 Each topic lives in its own file here under `usage/`; a command group with many sub-commands gets its own subdirectory with a hub (`ws/` is the worked example). Keep this routing table in sync when adding one.

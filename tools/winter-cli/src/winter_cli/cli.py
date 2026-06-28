@@ -51,6 +51,7 @@ _LAZY_SUBCOMMANDS: dict[str, str] = {
     "lint": "winter_cli.modules.lint.command:lint_command",
     "provision": "winter_cli.modules.provision.command:provision_command",
     "service": "winter_cli.modules.service.command:service_group",
+    "space": "winter_cli.modules.space.command:space_command",
     "ws": "winter_cli.modules.workspace.command:ws_group",
     "repo": "winter_cli.modules.workspace.command:repo_group",
 }

@@ -14,6 +14,7 @@ from winter_cli.config.models import (
     ProjectRepositoryConfig,
     SingletonRepository,
     SingletonType,
+    SpaceConfig,
     StandaloneRepositoryConfig,
     WorkspaceConfig,
 )
@@ -256,6 +257,8 @@ class WorkspaceConfigService:
 
         env_bands = self._parse_env_bands(merged.get("env"))
 
+        space = self._parse_space(merged.get("space"))
+
         return WorkspaceConfig(
             workspace_root=workspace_root,
             session_prefix=merged.get("session_prefix", "winter"),
@@ -283,6 +286,7 @@ class WorkspaceConfigService:
             provision_raw=provision_raw,
             service_defs_raw=service_defs_raw,
             env_bands=env_bands,
+            space=space,
         )
 
     @staticmethod
@@ -401,6 +405,29 @@ class WorkspaceConfigService:
                 )
             result[str(k)] = str(v)
         return result
+
+    @staticmethod
+    def _parse_space(space_raw: object) -> SpaceConfig:
+        """Build a ``SpaceConfig`` from the ``[space]`` table.
+
+        Reads scalar ``root`` and the ``[space.kinds]`` sub-table of dynamic,
+        untyped artifact-kind → directory overrides. Absent table or keys fall
+        back to defaults (``root = ".winter"``, no overrides). Non-string values
+        are ignored rather than raising, so a stray typo in one kind does not
+        break unrelated commands.
+        """
+        if not isinstance(space_raw, dict):
+            return SpaceConfig()
+        kwargs: dict = {}
+        root = space_raw.get("root")
+        if isinstance(root, str) and root:
+            kwargs["root"] = root
+        kinds_raw = space_raw.get("kinds")
+        if isinstance(kinds_raw, dict):
+            kinds = {str(k): v for k, v in kinds_raw.items() if isinstance(v, str) and v}
+            if kinds:
+                kwargs["kinds"] = kinds
+        return SpaceConfig(**kwargs)
 
     def _read_config(self, path: Path) -> dict:
         if not self._fs.is_file(path):

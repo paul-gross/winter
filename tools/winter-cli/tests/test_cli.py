@@ -54,6 +54,7 @@ def test_cli_group_advertises_every_top_level_command() -> None:
         "provision",
         "repo",
         "service",
+        "space",
         "ws",
     ]
 
