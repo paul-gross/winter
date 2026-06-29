@@ -4,6 +4,8 @@
 
 `workspace:/context/project/project-setup.md` is a reproducible recipe for initializing any new feature environment. When an agent creates a new feature environment (e.g., `gamma/`), it follows `workspace:/context/project/project-setup.md` to create environment files, set up databases, seed data, and do whatever else `winter ws init` doesn't already cover.
 
+**Scope: purely setup, and only the setup winter doesn't already do for you.** `project-setup.md` is about one thing — bringing a fresh worktree to a runnable state. Most of that heavy lifting belongs to `winter provision`: its `[[provision.*]]` handlers install dependencies, provision resources, and load data automatically for every environment (see [Division of responsibility](#division-of-responsibility-config-provision-handlers-and-project-setupmd) below). `project-setup.md` captures only the **residual** setup steps provision doesn't execute for you — conditional, multi-step, or environment-specific work, and anything not yet migrated to a handler. It must never duplicate a step a provision handler already performs (defer it to the handler), and it does **not** document how to *run* the project — starting and operating services is owned by `winter service up` and the service extensions. If a step is automated by provision, or is "how to run," it does not belong here.
+
 ## Why it exists
 
 Each feature environment is independent — its own checkout, its own dependencies, its own ports and databases — intended to run in parallel with other feature environments on the same machine. Each environment gets a port window from its index; `winter service` injects `WINTER_PORT_BASE` and related vars into every provider subprocess at runtime (inspectable via `winter env <name>`). This is what allows multiple agents to work on different features simultaneously without interfering with each other. Without setup instructions, agents have to guess how to get things running — or ask the user every time. This file makes environment initialization fast, repeatable, and autonomous.
@@ -49,13 +51,20 @@ Either way, synthesize the answers — some go into `.winter/config.toml`, some 
 
 Ask: *"How are dependencies installed for each repo? (e.g., `npm install`, `pip install -r requirements.txt`, `cargo build`)"*
 
-If the install is a single, unconditional command that can be run idempotently, it belongs in a `[[provision.dependency]]` handler — run by `winter provision <env> dependency` (or the full `winter provision <env>` chain):
+If the install is a single, unconditional command that can be run idempotently, it belongs in a `[[provision.dependency]]` handler — run by `winter provision <env> dependency` (or the full `winter provision <env>` chain).
+
+**Inline the command in `apply` by default.** `apply` takes the command directly — a string, or an array of strings run in order — so a one- or few-line install needs no separate script file:
 
 ```toml
 [[provision.dependency]]
 scope = "feature-worktree"
-apply = "scripts/install-deps.sh"
+apply = "npm ci"                         # string form — a single command
+# apply = ["uv sync", "uv run pre-commit install"]   # array form — runs in order, stops at first failure
 ```
+
+Reach for a standalone `scripts/*.sh` file only when an existing project script already encapsulates the step — point `apply` at it; don't fabricate a wrapper script for a command that fits inline. See [winter-cli/configuration/provision.md](./winter-cli/configuration/provision.md) for the full `apply` grammar.
+
+**If a step doesn't fit reasonably inline — heavy, complex, or multi-step setup with no ready-made script — defer it rather than inventing one.** Leave it out of the generated config and tell the user plainly that they must complete that step themselves to enable winter functionality for it. A fabricated, untested setup script is worse than an honest gap: surface the gap and let the user wire it up.
 
 The repo's `cmd` list in `.winter/config.toml` is reserved for lightweight trust/bootstrap steps that must run before anything else (e.g. `mise trust`, `direnv allow`):
 
@@ -100,6 +109,10 @@ DATABASE_URL  = "postgres://localhost:${DB_PORT}/myapp-${WINTER_ENV}"  # reuses 
 ```
 
 This means every new environment gets the right ports automatically, without any manual step in `project-setup.md`. Use `[env.workspace.vars]` for variables tied to shared workspace services (use `${WINTER_WORKSPACE_PORT_BASE+N}` there, since `WINTER_PORT_BASE` is absent at workspace scope). Use this for any variable derived from the managed base vars or from an earlier band entry. Only variables that depend on state winter doesn't know (secrets, externally provisioned values) need to be documented in `project-setup.md` instead.
+
+**Allocate ports as `${WINTER_PORT_BASE+N}`, never `${WINTER_ENV_INDEX+<literal port>}`.** `WINTER_PORT_BASE` is the start of this env's reserved port window (`base_port + index * ports_per_env`), and `N` is a small per-service offset *within* that window — so `WEB`, `API`, `DB` become `WINTER_PORT_BASE+0`, `+1`, `+2`, landing inside the env's own block and never colliding with another env. `WINTER_ENV_INDEX` is only the env's small ordinal (alpha=1, beta=2, …); adding it to a literal base port (`${WINTER_ENV_INDEX+4200}` → alpha=4201, beta=4202) puts adjacent envs one port apart and overflows each env's window. That older "base + greek-index" scheme is obsolete — do not emit it.
+
+**There is no `.winter.env` file.** Per-env variables live entirely in `[env.feature.vars]` / `[env.workspace.vars]` and are injected at runtime; winter does not read or write any `.winter.env`. Do not generate one, reference one, or add one to `git_excludes`.
 
 To inspect the computed vars for a given env:
 
@@ -165,8 +178,8 @@ For each one, set `pinned = true` on its `[[project_repository]]` entry. `winter
 
 Two or three artifacts:
 
-1. **`.winter/config.toml`** — enriched with trust/bootstrap `cmd` entries, `[[provision.*]]` handlers for dependency/resource/data steps that fit the handler model, plain-pattern `git_excludes`, and `pinned` flags. Keep it boring; if in doubt, leave it out.
-2. **`workspace:/context/project/project-setup.md`** — numbered steps for everything else: conditional installs, env file generation with port offsets, database creation/migration, seed data, post-init build steps, and verification steps not yet migrated to handlers. Use variables like `<letter>` and `<index>` where environment-specific values are needed, and explain how to derive them.
-3. *(optional)* **Handler scripts** under an agreed path (e.g. `scripts/`) — the scripts referenced by `[[provision.*]]` `apply`/`destroy`/`reset` fields.
+1. **`.winter/config.toml`** — enriched with trust/bootstrap `cmd` entries, `[[provision.*]]` handlers (commands inlined in `apply`, per section 1) for dependency/resource/data steps that fit the handler model, plain-pattern `git_excludes`, and `pinned` flags. Keep it boring; if in doubt, leave it out.
+2. **`workspace:/context/project/project-setup.md`** — numbered steps for setup not covered by config or handlers: conditional installs, env file generation with port offsets, database creation/migration, seed data, post-init build steps, and verification steps not yet migrated to handlers. Use variables like `<letter>` and `<index>` where environment-specific values are needed, and explain how to derive them. Stay within the setup-only scope from [What it is](#what-it-is) — no "how to run" content, and defer command-expressible steps to handlers. Author it as prose with **no manual line wrapping** — one sentence or paragraph per physical line, never reflowed to a fixed column — so later one-word edits don't reflow the whole paragraph and bury the real change in churn.
+3. *(rare)* **Handler scripts** under an agreed path (e.g. `scripts/`) — only for `[[provision.*]]` steps too multi-step or conditional to inline in `apply`. Inline simple commands directly (section 1); don't default to a script file.
 
 This guide stops at writing the artifacts. Applying the changes to existing environments and running the setup against an environment is the caller's responsibility (see the ws-setup skill).
