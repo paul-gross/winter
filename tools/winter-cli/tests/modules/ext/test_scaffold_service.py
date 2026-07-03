@@ -193,7 +193,7 @@ def _make_workspace(base: Path) -> Path:
     winter_dir = base / ".winter"
     winter_dir.mkdir()
     (winter_dir / "config.toml").write_text(
-        'main_branch = "main"\nsession_prefix = "test"\n'
+        'main_branch = "main"\nservice_prefix = "test"\n'
         '[[project_repository]]\nname = "demo"\nurl = "git@example.com:x/demo.git"\n'
     )
     return base

@@ -258,7 +258,7 @@ class TestConfigErrorBoundary:
         bad_config = dedent(
             """
             main_branch = "main"
-            session_prefix = "t"
+            service_prefix = "t"
             env_aliases = ["alpha", "beta", "gamma"]
             envs_per_workspace = 4
             """

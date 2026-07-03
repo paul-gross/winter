@@ -67,7 +67,7 @@ def test_load_reads_shared_config() -> None:
         {
             config_path: {
                 "main_branch": "trunk",
-                "session_prefix": "ws",
+                "service_prefix": "ws",
                 "git_excludes": ["/.idea/"],
                 "git": {"user": {"name": "Test User", "email": "test@example.com"}},
                 "project_repository": [
@@ -83,7 +83,7 @@ def test_load_reads_shared_config() -> None:
     config = svc.load()
 
     assert config.workspace_root == WORKSPACE_ROOT
-    assert config.session_prefix == "ws"
+    assert config.service_prefix == "ws"
     assert config.main_branch == "trunk"
     assert config.git_excludes == ["/.idea/"]
     assert config.git_identity is not None
@@ -379,11 +379,11 @@ def test_capabilities_empty_when_neither_key_present() -> None:
     assert svc.load().capabilities == {}
 
 
-# ── service_prefix / session_prefix fold ─────────────────────────────────────
+# ── service_prefix / session_prefix removal ──────────────────────────────────
 
 
 def test_service_prefix_defaults_to_winter_when_no_key_set() -> None:
-    """Neither service_prefix nor legacy session_prefix set → default 'winter'."""
+    """Neither service_prefix nor removed session_prefix set → default 'winter'."""
     config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
     fs = FakeFilesystem(files={config_path: ""})
     svc = _service(fs, {config_path: {}})
@@ -391,17 +391,18 @@ def test_service_prefix_defaults_to_winter_when_no_key_set() -> None:
     assert svc.load().service_prefix == "winter"
 
 
-def test_service_prefix_aliased_from_legacy_session_prefix() -> None:
-    """Legacy session_prefix key folds into service_prefix when service_prefix is unset."""
+def test_session_prefix_key_raises_config_error() -> None:
+    """The removed `session_prefix` top-level key is a hard load-time error."""
     config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
     fs = FakeFilesystem(files={config_path: ""})
     svc = _service(fs, {config_path: {"session_prefix": "mp"}})
 
-    assert svc.load().service_prefix == "mp"
+    with pytest.raises(ConfigError, match="session_prefix"):
+        svc.load()
 
 
-def test_service_prefix_explicit_wins_over_legacy_session_prefix() -> None:
-    """When service_prefix is set, the legacy session_prefix key is ignored."""
+def test_session_prefix_key_raises_even_when_service_prefix_explicit() -> None:
+    """The removed key is a hard error regardless of an explicit service_prefix."""
     config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
     fs = FakeFilesystem(files={config_path: ""})
     svc = _service(
@@ -414,7 +415,8 @@ def test_service_prefix_explicit_wins_over_legacy_session_prefix() -> None:
         },
     )
 
-    assert svc.load().service_prefix == "x"
+    with pytest.raises(ConfigError, match="session_prefix"):
+        svc.load()
 
 
 def test_service_prefix_local_overlay_overrides_base() -> None:
@@ -431,39 +433,6 @@ def test_service_prefix_local_overlay_overrides_base() -> None:
     )
 
     assert svc.load().service_prefix == "b"
-
-
-def test_service_prefix_local_overlay_overrides_legacy_only_base() -> None:
-    """config.local.toml service_prefix overrides a base that only sets legacy session_prefix."""
-    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
-    local_path = WORKSPACE_ROOT / WINTER_DIR / LOCAL_CONFIG_FILE
-    fs = FakeFilesystem(files={config_path: "", local_path: ""})
-    svc = _service(
-        fs,
-        {
-            config_path: {"session_prefix": "a"},
-            local_path: {"service_prefix": "b"},
-        },
-    )
-
-    assert svc.load().service_prefix == "b"
-
-
-def test_workspace_config_model_folds_session_prefix_directly() -> None:
-    """WorkspaceConfig(session_prefix=...) itself resolves service_prefix — not just the loader.
-
-    The fold now lives on the model as a `model_validator`, so constructing the
-    model directly (as tests and scripts do) can no longer produce the
-    inconsistent "unfolded" state where `service_prefix` still reads the class
-    default while `session_prefix` carries the real value.
-    """
-    config = WorkspaceConfig(
-        workspace_root=WORKSPACE_ROOT,
-        main_branch="main",
-        session_prefix="mp",
-    )
-
-    assert config.service_prefix == "mp"
 
 
 # ── port allocation config knobs ─────────────────────────────────────────────

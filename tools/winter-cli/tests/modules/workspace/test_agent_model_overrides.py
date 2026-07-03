@@ -102,7 +102,6 @@ def _config(overrides: dict[str, str | dict[str, str]] | None = None) -> Workspa
     """Build a minimal WorkspaceConfig with an optional override map."""
     cfg = WorkspaceConfig(
         workspace_root=WORKSPACE_ROOT,
-        session_prefix="t",
         main_branch="main",
     )
     if overrides is not None:
@@ -402,7 +401,7 @@ class TestLocalOverSharedPrecedence:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "agent_model_overrides": {"reviewer": "haiku"},
                 },
                 local_path: {
@@ -426,7 +425,7 @@ class TestLocalOverSharedPrecedence:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "agent_model_overrides": {
                         "reviewer": "haiku",
                         "developer": "sonnet",
@@ -454,7 +453,7 @@ class TestLocalOverSharedPrecedence:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "agent_model_overrides": {"reviewer": "haiku"},
                 },
             },
@@ -469,7 +468,7 @@ class TestLocalOverSharedPrecedence:
         fs = FakeFilesystem(files={shared_path: ""})
         svc = self._service(
             fs,
-            {shared_path: {"main_branch": "main", "session_prefix": "ws"}},
+            {shared_path: {"main_branch": "main", "service_prefix": "ws"}},
         )
 
         config = svc.load()
@@ -715,7 +714,7 @@ class TestParseTimeValidation:
     def _shared_config(self, overrides_raw: object) -> dict:
         return {
             "main_branch": "main",
-            "session_prefix": "ws",
+            "service_prefix": "ws",
             "agent_model_overrides": overrides_raw,
         }
 

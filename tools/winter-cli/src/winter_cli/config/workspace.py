@@ -210,16 +210,15 @@ class WorkspaceConfigService:
                 "Unsupported config key `service_orchestrator` detected. Use `[capabilities] service = ...` instead."
             )
 
-        # Legacy back-compat: session_prefix (deprecated) folds into service_prefix
-        # when no explicit service_prefix is set. Only pass each key through when it
-        # is actually present in the merged config, so `WorkspaceConfig.model_fields_set`
-        # reflects whether `service_prefix` was explicitly set — the model's own
-        # `_fold_session_prefix` validator resolves the two into a single value.
+        # `session_prefix` (deprecated) was removed pre-1.0 in favor of
+        # `service_prefix`. A config that still sets it gets a hard, actionable
+        # error rather than a silent fold.
+        if "session_prefix" in merged:
+            raise ConfigError("Unsupported config key `session_prefix` detected. Use `service_prefix` instead.")
+
         service_prefix_kwargs: dict[str, str] = {}
         if isinstance(merged.get("service_prefix"), str) and merged["service_prefix"]:
             service_prefix_kwargs["service_prefix"] = merged["service_prefix"]
-        if isinstance(merged.get("session_prefix"), str) and merged["session_prefix"]:
-            service_prefix_kwargs["session_prefix"] = merged["session_prefix"]
 
         main_branch = merged.get("main_branch") or "main"
 

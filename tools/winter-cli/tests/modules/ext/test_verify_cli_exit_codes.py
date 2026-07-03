@@ -30,7 +30,7 @@ def _make_workspace(base: Path) -> Path:
     base.mkdir(parents=True, exist_ok=True)
     (base / ".winter").mkdir()
     (base / ".winter" / "config.toml").write_text(
-        'main_branch = "main"\nsession_prefix = "test"\n'
+        'main_branch = "main"\nservice_prefix = "test"\n'
         '[[project_repository]]\nname = "demo"\nurl = "git@example.com:x/demo.git"\n'
     )
     return base

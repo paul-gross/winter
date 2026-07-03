@@ -54,7 +54,7 @@ def tmp_workspace_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         dedent(
             """
             main_branch = "main"
-            session_prefix = "test"
+            service_prefix = "test"
 
             [[project_repository]]
             name = "demo-repo"

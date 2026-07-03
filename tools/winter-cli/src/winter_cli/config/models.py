@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from winter_cli.modules.workspace.agent_transform.models import AgentFormat
 
@@ -499,16 +499,7 @@ class WorkspaceConfig(BaseModel):
     service_prefix: str = "winter"
     """The single workspace-level service-orchestration namespace key (e.g. 'myproj'
     produces 'myproj-alpha'). Injected to providers as `WINTER_SERVICE_PREFIX`.
-    Overridable in `config.local.toml`. Supersedes the deprecated `session_prefix`."""
-
-    session_prefix: str | None = None
-    """Deprecated — use `service_prefix` instead (kept for back-compat).
-
-    Previously the direct key for the tmux session namespace. When no explicit
-    `service_prefix` is set, a model validator on this class folds this value into
-    `service_prefix` automatically (see `_fold_session_prefix` below). Still parsed
-    and aliased so existing configs without a `service_prefix` key continue to work
-    unchanged."""
+    Overridable in `config.local.toml`."""
 
     main_branch: str
     """Workspace-default main branch. Each project entry can override via its own `main_branch` field."""
@@ -655,21 +646,6 @@ class WorkspaceConfig(BaseModel):
     agent's own per-harness ``model:`` override block and the tier table.
     See ``AgentModelOverridesConfig`` for the full contract.
     """
-
-    @model_validator(mode="after")
-    def _fold_session_prefix(self) -> WorkspaceConfig:
-        """Fold the deprecated `session_prefix` into `service_prefix` when unset.
-
-        Precedence: an explicit `service_prefix` (from either the base config or a
-        local-overlay merge) always wins over the legacy `session_prefix` key, even
-        if only `session_prefix` was set locally to override a base `service_prefix`
-        — the new key always wins, by design. `model_fields_set` distinguishes an
-        explicitly-passed `service_prefix` from the class default so this validator
-        — not the caller — is the single place the fold is resolved.
-        """
-        if "service_prefix" not in self.model_fields_set and self.session_prefix:
-            self.service_prefix = self.session_prefix
-        return self
 
     def port_base_for_index(self, index: int) -> int:
         """Return the per-env port base for the given env index.

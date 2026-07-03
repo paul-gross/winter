@@ -65,7 +65,6 @@ def _config(
 ) -> WorkspaceConfig:
     kwargs: dict = {
         "workspace_root": WORKSPACE_ROOT,
-        "session_prefix": "t",
         "main_branch": "main",
         "base_port": base_port,
         "ports_per_env": ports_per_env,

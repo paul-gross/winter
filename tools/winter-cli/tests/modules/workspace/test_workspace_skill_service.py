@@ -225,7 +225,6 @@ def test_skill_prefix_defaults_to_ws() -> None:
     """WorkspaceConfig.skill_prefix defaults to 'ws'."""
     cfg = WorkspaceConfig(
         workspace_root=WORKSPACE_ROOT,
-        session_prefix="t",
         main_branch="main",
     )
     assert cfg.skill_prefix == "ws"
@@ -235,7 +234,6 @@ def test_skills_dir_defaults_to_skills() -> None:
     """WorkspaceConfig.skills_dir defaults to 'skills'."""
     cfg = WorkspaceConfig(
         workspace_root=WORKSPACE_ROOT,
-        session_prefix="t",
         main_branch="main",
     )
     assert cfg.skills_dir == "skills"

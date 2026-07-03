@@ -121,7 +121,7 @@ def _install_svc(
 
 
 def _bare_config(model_tiers_cfg: ModelTiersConfig | None = None) -> WorkspaceConfig:
-    cfg = WorkspaceConfig(workspace_root=WORKSPACE_ROOT, session_prefix="t", main_branch="main")
+    cfg = WorkspaceConfig(workspace_root=WORKSPACE_ROOT, main_branch="main")
     if model_tiers_cfg is not None:
         cfg = cfg.model_copy(update={"model_tiers": model_tiers_cfg})
     return cfg
@@ -271,7 +271,7 @@ class TestCustomTierViaOverrideMap:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "model_tiers": {
                         "big-thinker": {
                             "claude": "opus",
@@ -365,7 +365,7 @@ class TestLocalOverSharedPrecedenceForModelTiers:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "model_tiers": {
                         "my-tier": {
                             "claude": "opus",
@@ -399,7 +399,7 @@ class TestLocalOverSharedPrecedenceForModelTiers:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "model_tiers": {
                         "tier-a": {
                             "claude": "opus",
@@ -441,7 +441,7 @@ class TestLocalOverSharedPrecedenceForModelTiers:
         svc = _config_svc(
             fs,
             {
-                shared_path: {"main_branch": "main", "session_prefix": "ws"},
+                shared_path: {"main_branch": "main", "service_prefix": "ws"},
                 local_path: {
                     "model_tiers": {
                         "haiku": {"opencode": "anthropic/claude-haiku-4-20251201"},
@@ -476,7 +476,7 @@ class TestAC4TypoTierError:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "agent_model_overrides": {"reviewer": "snonet"},
                 }
             },
@@ -494,7 +494,7 @@ class TestAC4TypoTierError:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "agent_model_overrides": {
                         "agent-a": "opus",
                         "agent-b": "sonnet",
@@ -515,7 +515,7 @@ class TestAC4TypoTierError:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "model_tiers": {
                         "smol": {
                             "claude": "haiku",
@@ -539,7 +539,7 @@ class TestAC4TypoTierError:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "agent_model_overrides": {"reviewer": "claude-opus-4-20250514"},
                 }
             },
@@ -557,7 +557,7 @@ class TestAC4TypoTierError:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "agent_model_overrides": {
                         "reviewer": {"claude": "claude-opus-4-20250514"},
                     },
@@ -635,7 +635,7 @@ class TestStalenessOnModelTiersChange:
         ext = _seed_extension(fs, config_files, haiku_agent_md)
 
         # Install WITHOUT any model_tiers config.
-        cfg_no_override = WorkspaceConfig(workspace_root=WORKSPACE_ROOT, session_prefix="t", main_branch="main")
+        cfg_no_override = WorkspaceConfig(workspace_root=WORKSPACE_ROOT, main_branch="main")
         reporter = FakeInitReporter()
         _install_svc(cfg_no_override, fs, config_files).process(ext, reporter)
 
@@ -648,7 +648,6 @@ class TestStalenessOnModelTiersChange:
         # Now probe WITH a [model_tiers] change that changes haiku's opencode id.
         cfg_with_tiers = WorkspaceConfig(
             workspace_root=WORKSPACE_ROOT,
-            session_prefix="t",
             main_branch="main",
             model_tiers=ModelTiersConfig(tiers={"haiku": {"opencode": "anthropic/claude-haiku-4-20251201"}}),
         )
@@ -677,7 +676,6 @@ class TestStalenessOnModelTiersChange:
 
         cfg_with_tiers = WorkspaceConfig(
             workspace_root=WORKSPACE_ROOT,
-            session_prefix="t",
             main_branch="main",
             model_tiers=ModelTiersConfig(tiers={"haiku": {"opencode": "anthropic/claude-haiku-4-20251201"}}),
         )
@@ -745,7 +743,7 @@ class TestModelTiersConfigParsing:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "model_tiers": {
                         "smol": {
                             "claude": "haiku",
@@ -768,7 +766,7 @@ class TestModelTiersConfigParsing:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "model_tiers": {
                         "my-tier": {"unknown-vendor": "some-model"},
                     },
@@ -787,7 +785,7 @@ class TestModelTiersConfigParsing:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "model_tiers": {
                         "my-tier": {},
                     },
@@ -806,7 +804,7 @@ class TestModelTiersConfigParsing:
             {
                 shared_path: {
                     "main_branch": "main",
-                    "session_prefix": "ws",
+                    "service_prefix": "ws",
                     "model_tiers": {
                         "my-tier": {"claude": 42},
                     },
@@ -822,7 +820,7 @@ class TestModelTiersConfigParsing:
         fs = FakeFilesystem(files={shared_path: ""})
         svc = _config_svc(
             fs,
-            {shared_path: {"main_branch": "main", "session_prefix": "ws"}},
+            {shared_path: {"main_branch": "main", "service_prefix": "ws"}},
         )
         config = svc.load()
         assert config.model_tiers.tiers == {}
