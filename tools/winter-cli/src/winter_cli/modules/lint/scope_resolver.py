@@ -12,7 +12,7 @@ from winter_cli.modules.lint.models import (
     LintScopeRequest,
 )
 from winter_cli.modules.workspace.models import FeatureEnvironment, RepoError
-from winter_cli.modules.workspace.pattern_match import has_glob, matches_any_pattern
+from winter_cli.modules.workspace.pattern_match import resolve_name_patterns
 from winter_cli.modules.workspace.repo_repository import IWriteRepoRepository
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
 from winter_cli.modules.workspace.workspace_repository import IReadWorkspaceRepository
@@ -145,24 +145,22 @@ class LintScopeResolver:
     def _resolve_names(self, names: list[str]) -> list[LintScope]:
         """Resolve NAMES to one `LintScope` per matched name, in deterministic (sorted) order.
 
-        A literal name (no glob char, per `has_glob`) is always included
-        verbatim — even if it names neither a repo nor an env — so `winter
-        lint <typo>` still surfaces `_resolve_name`'s own "unknown scope"
-        error instead of silently matching nothing. A glob name is expanded
-        against the union of project-repo and env names, deduped against the
-        literal names so a mixed invocation never resolves the same name
-        twice. Each resolved name still goes through `_resolve_name`, so the
-        repo/env ambiguity rejection applies per name exactly as it did
-        before multi-target support.
+        A literal name (no glob char) is always included verbatim — even if
+        it names neither a repo nor an env — so `winter lint <typo>` still
+        surfaces `_resolve_name`'s own "unknown scope" error instead of
+        silently matching nothing. A glob name is expanded against the union
+        of project-repo and env names, deduped against the literal names so a
+        mixed invocation never resolves the same name twice. Each resolved
+        name still goes through `_resolve_name`, so the repo/env ambiguity
+        rejection applies per name exactly as it did before multi-target
+        support.
         """
-        literal = {n for n in names if not has_glob(n)}
-        resolved_names: list[str] = sorted(literal)
-        if any(has_glob(n) for n in names):
+
+        def discover_names() -> set[str]:
             project_repos = self._repo_factory.get_project_repos()
-            candidates = {r.name for r in project_repos} | {e.name for e in self._environments()}
-            resolved_names.extend(
-                sorted(name for name in candidates if name not in literal and matches_any_pattern(name, "", names))
-            )
+            return {r.name for r in project_repos} | {e.name for e in self._environments()}
+
+        resolved_names = resolve_name_patterns(names, discover_names)
         return [self._resolve_name(name) for name in resolved_names]
 
     def _resolve_name(self, name: str) -> LintScope:

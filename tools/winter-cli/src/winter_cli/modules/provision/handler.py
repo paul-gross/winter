@@ -12,7 +12,7 @@ from winter_cli.modules.provision.provision_reporter import (
 )
 from winter_cli.modules.provision.provision_service import ProvisionService
 from winter_cli.modules.workspace.models import Workspace
-from winter_cli.modules.workspace.pattern_match import has_glob, matches_any_pattern
+from winter_cli.modules.workspace.pattern_match import resolve_name_patterns
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
 from winter_cli.modules.workspace.workspace_repository import IReadWorkspaceRepository
 
@@ -95,14 +95,10 @@ class ProvisionCommandHandler:
         against the envs discovered on disk, deduped against the literal
         names so a mixed invocation never provisions the same env twice.
         """
-        literal = {p for p in patterns if not has_glob(p)}
-        names: list[str] = sorted(literal)
-        if any(has_glob(p) for p in patterns):
+
+        def discover_names() -> list[str]:
             project_repos = self._repo_factory.get_project_repos()
             discovered = self._workspace_repo.get_environments(self._workspace, project_repos)
-            names.extend(
-                env.name
-                for env in discovered
-                if env.name not in literal and matches_any_pattern(env.name, "", patterns)
-            )
-        return names
+            return [env.name for env in discovered]
+
+        return resolve_name_patterns(patterns, discover_names)

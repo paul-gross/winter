@@ -7,7 +7,7 @@ import click
 
 from winter_cli.modules.workspace.destroy_service import DestroyService
 from winter_cli.modules.workspace.models import FeatureEnvironment, Workspace
-from winter_cli.modules.workspace.pattern_match import has_glob, matches_any_pattern
+from winter_cli.modules.workspace.pattern_match import has_glob, resolve_name_patterns
 from winter_cli.modules.workspace.reporter_factory import ReporterFactory
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
 from winter_cli.modules.workspace.workspace_repository import IReadWorkspaceRepository
@@ -85,11 +85,16 @@ class DestroyHandler:
         discovered on disk, deduped against the literal names.
         """
         literal = {p for p in patterns if not has_glob(p)}
-        envs = [self._workspace_repo.get_environment(self._workspace, name) for name in sorted(literal)]
-        if any(has_glob(p) for p in patterns):
+        discovered_by_name: dict[str, FeatureEnvironment] = {}
+
+        def discover_names() -> list[str]:
             project_repos = self._repo_factory.get_project_repos()
             discovered = self._workspace_repo.get_environments(self._workspace, project_repos)
-            envs.extend(
-                env for env in discovered if env.name not in literal and matches_any_pattern(env.name, "", patterns)
-            )
-        return envs
+            discovered_by_name.update({env.name: env for env in discovered})
+            return [env.name for env in discovered]
+
+        names = resolve_name_patterns(patterns, discover_names)
+        return [
+            self._workspace_repo.get_environment(self._workspace, name) if name in literal else discovered_by_name[name]
+            for name in names
+        ]

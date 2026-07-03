@@ -6,6 +6,7 @@ import pytest
 from winter_cli.modules.workspace.pattern_match import (
     has_glob,
     is_single_literal_pattern,
+    resolve_name_patterns,
     validate_bare_name_pattern,
     validate_env_pattern,
 )
@@ -119,3 +120,29 @@ def test_validate_bare_name_pattern_message_does_not_say_environments() -> None:
     with pytest.raises(click.ClickException) as excinfo:
         validate_bare_name_pattern("alpha/winter")
     assert "environment" not in str(excinfo.value).lower()
+
+
+# ── resolve_name_patterns ─────────────────────────────────────────────────────
+
+
+def test_resolve_name_patterns_literal_only_skips_discovery() -> None:
+    def discover_names() -> list[str]:
+        raise AssertionError("discovery should not run for a pure-literal pattern list")
+
+    assert resolve_name_patterns(["beta", "alpha"], discover_names) == ["alpha", "beta"]
+
+
+def test_resolve_name_patterns_literal_verbatim_even_if_undiscoverable() -> None:
+    assert resolve_name_patterns(["typo"], lambda: ["alpha", "beta"]) == ["typo"]
+
+
+def test_resolve_name_patterns_glob_expands_against_discovered() -> None:
+    assert resolve_name_patterns(["*"], lambda: ["gamma", "alpha", "beta"]) == ["alpha", "beta", "gamma"]
+
+
+def test_resolve_name_patterns_glob_matching_none_returns_empty() -> None:
+    assert resolve_name_patterns(["zzz-*"], lambda: ["alpha", "beta"]) == []
+
+
+def test_resolve_name_patterns_dedupes_literal_and_glob_overlap() -> None:
+    assert resolve_name_patterns(["alpha", "*"], lambda: ["alpha", "beta"]) == ["alpha", "beta"]

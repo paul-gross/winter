@@ -39,7 +39,7 @@ from winter_cli.modules.workspace.models import (
     WorktreeRepoStatus,
     WorktreeSnapshot,
 )
-from winter_cli.modules.workspace.pattern_match import has_glob, matches_any_pattern
+from winter_cli.modules.workspace.pattern_match import has_glob, matches_any_pattern, resolve_name_patterns
 from winter_cli.modules.workspace.prune_service import PruneOrphan, PruneService
 from winter_cli.modules.workspace.repo_repository import IReadRepoRepository
 from winter_cli.modules.workspace.reporter_factory import ReporterFactory
@@ -326,13 +326,20 @@ class WorkspaceHandler:
         `*/winter`) falls back to discovering existing envs, since there's no
         single name to resolve.
         """
-        env_segments = {p.split("/", 1)[0] for p in patterns}
+        env_segments = list({p.split("/", 1)[0] for p in patterns})
         literal = {s for s in env_segments if not has_glob(s)}
-        envs = [self._workspace_repo.get_environment(self._workspace, name) for name in sorted(literal)]
-        if any(has_glob(s) for s in env_segments):
+        discovered_by_name: dict[str, FeatureEnvironment] = {}
+
+        def discover_names() -> list[str]:
             discovered = self._workspace_repo.get_environments(self._workspace, project_repos)
-            envs.extend(e for e in discovered if e.name not in literal)
-        return envs
+            discovered_by_name.update({env.name: env for env in discovered})
+            return [env.name for env in discovered]
+
+        names = resolve_name_patterns(env_segments, discover_names)
+        return [
+            self._workspace_repo.get_environment(self._workspace, name) if name in literal else discovered_by_name[name]
+            for name in names
+        ]
 
     def disconnect(self, params: EnvDisconnectParams) -> None:
         project_repos = self._repo_factory.get_project_repos()

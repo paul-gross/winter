@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 import click
 
@@ -43,6 +43,29 @@ def validate_bare_name_pattern(pattern: str) -> None:
         raise click.ClickException(
             f"Invalid pattern '{pattern}' — this command takes bare names, not '<segment>/<segment>' (no '/')"
         )
+
+
+def resolve_name_patterns(patterns: Iterable[str], discover_names: Callable[[], Iterable[str]]) -> list[str]:
+    """Resolve bare-name PATTERNS to concrete names, in deterministic order.
+
+    Shared by every command that selects targets via a flat literal-or-glob
+    name list (env names for `provision`/`ws destroy`, repo-or-env names for
+    `lint`). A literal pattern (no glob metacharacter) is always included
+    verbatim, even when it matches nothing discoverable — callers surface
+    their own "not found" error for an unmatched literal rather than
+    silently dropping it. A glob pattern is expanded against
+    `discover_names()` (called at most once, and only when at least one
+    PATTERN is a glob), deduped against the literal set and sorted, so a
+    mixed invocation never resolves the same name twice.
+    """
+    patterns = list(patterns)
+    literal = {p for p in patterns if not has_glob(p)}
+    names: list[str] = sorted(literal)
+    if any(has_glob(p) for p in patterns):
+        names.extend(
+            sorted(name for name in discover_names() if name not in literal and matches_any_pattern(name, "", patterns))
+        )
+    return names
 
 
 def is_single_literal_pattern(patterns: Iterable[str]) -> bool:
