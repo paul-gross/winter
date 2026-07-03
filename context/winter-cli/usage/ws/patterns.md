@@ -29,6 +29,40 @@ Mutex rules: pinned-scope flags are mutually exclusive within a command (`--incl
 
 Pattern syntax: `*` matches any chars within a segment (does not cross `/`); `?` matches one char. Quote patterns in your shell to prevent expansion.
 
+## `winter ws connect` / `winter ws disconnect`
+
+`connect` and `disconnect` use the same segment-aware `<env>/<repo>` glob as
+the four commands above, scoped to non-pinned project worktrees (pinned
+worktrees are always skipped). Both require at least one `PATTERN` — there
+is no implicit "all". `connect` takes a trailing `FEATURE_BRANCH` after its
+patterns; `disconnect` takes patterns only.
+
+```bash
+winter ws connect alpha feature/x            # every non-pinned worktree in alpha
+winter ws disconnect alpha                   # every non-pinned worktree in alpha
+winter ws disconnect alpha/winter beta/api    # two specific worktrees
+winter ws disconnect '*/winter'               # every env's winter worktree
+```
+
+## `winter ws update` — bare repo-name patterns
+
+`update` operates on standalone repos, which aren't scoped to an env, so its
+`REPOS` are **bare glob over repo names only** — same "no `/`" restriction as
+`provision`/`ws destroy` below, but over standalone-repo names instead of env
+names. `REPOS` is optional; an empty invocation re-pins every pinned
+standalone.
+
+| Invocation | Operates on |
+|------------|-------------|
+| `winter ws update` | every pinned standalone repo |
+| `winter ws update my-lib` | just `my-lib` |
+| `winter ws update my-lib other-lib` | `my-lib` + `other-lib` |
+| `winter ws update 'winter-*'` | every pinned standalone repo whose name matches the glob |
+
+A literal name that isn't a pinned standalone raises a clear error (unknown
+name, or a known-but-unpinned name); a glob matching zero pinned standalones
+is a no-op, not an error.
+
 ## `winter ws status` / `winter ws diff`
 
 `status` and `diff` use the same segment-aware `<env>/<repo>` glob as the four

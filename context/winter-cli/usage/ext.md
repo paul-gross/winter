@@ -3,8 +3,9 @@
 For the hub and the rest of the command surface, see [../index.md](../index.md).
 
 ```bash
-winter ext verify <extension>          # verify an extension conforms to the service spec
-winter ext verify <extension> --json   # emit check results as JSON
+winter ext verify <extension>                    # verify an extension conforms to the service spec
+winter ext verify <extension> <other-extension>  # verify several extensions in one run
+winter ext verify <extension> --json             # emit check results as JSON
 winter ext new <name> --capability service               # scaffold a new service extension
 winter ext new <name> --capability service --dir <path>  # scaffold to a specific directory
 winter ext new <name> --capability service --force       # allow writing into a non-empty dir
@@ -16,13 +17,16 @@ The `ext` command group manages the extension contract: it verifies that an inst
 
 ```bash
 winter ext verify <extension>
+winter ext verify <extension> <other-extension>
 winter ext verify <extension> --json
 ```
 
-Runs the conformance checks from the bundled capability spec against the extension's declared service entrypoint. `<extension>` is either:
+Runs the conformance checks from the bundled capability spec against each given EXTENSION's declared service entrypoint. Pass any number of EXTENSIONs to verify them all in one run — there is no glob support here, since a name/path isn't a registry enumeration to expand (unlike `winter lint` or `winter ws update`). Each `<extension>` is either:
 
 - A **local path** — any value containing an OS path separator (`/`) or resolving to an existing directory on disk. `winter-ext.toml` is read directly from that directory.
 - An **installed extension name** — a bare name (e.g. `winter-service-tmux`) looked up among the `[[standalone_repository]]` entries in `.winter/config.toml`.
+
+At least one EXTENSION is required.
 
 ### What conformance verification checks
 
@@ -32,18 +36,20 @@ Three check kinds are run. The machine-readable source of truth for all three is
 - **refuses-unknown** — the entrypoint is invoked with a synthetic unknown action word. It must exit non-zero. Exit 2 or exit 3 are both accepted.
 - **forwards-params** — a sentinel token is passed as an argv argument; the entrypoint must echo it back on stdout or stderr, confirming argv is forwarded. The three `WINTER_*` env vars are set on every dispatch but are not asserted by this check.
 
-A setup failure (directory missing, no `winter-ext.toml`, no service entrypoint declared, entrypoint file missing) is reported on stderr and the command exits non-zero; no checks are run.
+A setup failure (directory missing, no `winter-ext.toml`, no service entrypoint declared, entrypoint file missing) is reported on stderr and the command exits non-zero; no checks are run for that extension (other given EXTENSIONs still run).
+
+Each EXTENSION is verified in turn, in the order given; a multi-target run's human-readable output prints a bold extension-name header before each one's block (a single-target run has no header).
 
 ### Exit codes
 
-- **0** — all conformance checks passed.
-- **1** — one or more checks failed, or a setup failure occurred.
+- **0** — all conformance checks passed, for every given EXTENSION.
+- **1** — one or more checks failed, or a setup failure occurred, for any given EXTENSION.
 
 The exit code is the same regardless of `--json`.
 
 ### `--json` output
 
-`--json` emits a single JSON object on stdout:
+For a single EXTENSION, `--json` emits a single JSON object on stdout:
 
 ```json
 {
@@ -55,8 +61,16 @@ The exit code is the same regardless of `--json`.
 }
 ```
 
+For more than one EXTENSION, `--json` emits one such object **per line** (NDJSON), each with an added `"extension"` key naming the EXTENSION it reports on:
+
+```json
+{"extension": "ext-a", "setup_failure": null, "any_failed": false, "results": [...]}
+{"extension": "ext-b", "setup_failure": "...", "any_failed": true, "results": []}
+```
+
 | Field | Type | Meaning |
 |-------|------|---------|
+| `extension` | string | Present only in a multi-target run — the EXTENSION this line reports on. |
 | `setup_failure` | string \| null | Human-readable error when the extension could not be resolved; `null` otherwise. |
 | `any_failed` | boolean | True when `setup_failure` is set or at least one check failed. |
 | `results` | array | Per-check outcomes, in spec declaration order. Empty when `setup_failure` is set. |

@@ -198,7 +198,7 @@ def test_update_tag_pin_moves_to_new_sha(tmp_path: Path) -> None:
         lock_repo,
     )
     reporter = _RecordingPullReporter()
-    report = svc.update_pins(repo_name=None, autostash=False, reporter=reporter)
+    report = svc.update_pins(repo_patterns=[], autostash=False, reporter=reporter)
 
     # checkout_detached called with the new SHA.
     assert (repo_path, SHA_NEW) in git_repo.detached_checkouts
@@ -235,7 +235,7 @@ def test_update_branch_pin_resets_to_resolved_commit(tmp_path: Path) -> None:
         lock_repo,
     )
     reporter = _RecordingPullReporter()
-    report = svc.update_pins(repo_name=None, autostash=False, reporter=reporter)
+    report = svc.update_pins(repo_patterns=[], autostash=False, reporter=reporter)
 
     assert (repo_path, "main") in git_repo.branch_checkouts
     assert git_repo.detached_checkouts == []
@@ -275,7 +275,7 @@ def test_update_named_repo_only_repins_that_repo(tmp_path: Path) -> None:
         lock_repo,
     )
     reporter = _RecordingPullReporter()
-    report = svc.update_pins(repo_name="repo-a", autostash=False, reporter=reporter)
+    report = svc.update_pins(repo_patterns=["repo-a"], autostash=False, reporter=reporter)
 
     # Only repo-a was re-pinned.
     assert len(report.standalone) == 1
@@ -288,6 +288,104 @@ def test_update_named_repo_only_repins_that_repo(tmp_path: Path) -> None:
     # repo-b NOT re-fetched or checked out.
     assert repo_b_path not in [p for p, _ in git_repo.detached_checkouts]
     assert repo_b_path not in [p for p, _ in git_repo.branch_checkouts]
+
+
+def test_update_multiple_literal_repos_repins_each(tmp_path: Path) -> None:
+    """Multiple literal repo names (`ws update a b`) re-pin exactly those repos."""
+    repo_a_path = tmp_path / "repo-a"
+    repo_b_path = tmp_path / "repo-b"
+    repo_c_path = tmp_path / "repo-c"
+    repo_a_path.mkdir()
+    repo_b_path.mkdir()
+    repo_c_path.mkdir()
+
+    git_repo = FakeGitRepository()
+    for path in (repo_a_path, repo_b_path, repo_c_path):
+        git_repo.clean_worktrees.add(path)
+        git_repo.head_commits[path] = SHA_OLD
+    git_repo.resolved_refs[(repo_a_path, "v1.0")] = (RefKind.tag, SHA_NEW)
+    git_repo.resolved_refs[(repo_b_path, "v2.0")] = (RefKind.tag, SHA_NEW)
+    git_repo.resolved_refs[(repo_c_path, "v3.0")] = (RefKind.tag, SHA_NEW)
+
+    lock_repo = FakeConfigLockRepository()
+    repo_repo = FakeWriteRepoRepository()
+
+    svc = _make_update_service(
+        tmp_path,
+        [
+            StandaloneRepositoryConfig(name="repo-a", ref="v1.0"),
+            StandaloneRepositoryConfig(name="repo-b", ref="v2.0"),
+            StandaloneRepositoryConfig(name="repo-c", ref="v3.0"),
+        ],
+        repo_repo,
+        git_repo,
+        lock_repo,
+    )
+    reporter = _RecordingPullReporter()
+    report = svc.update_pins(repo_patterns=["repo-a", "repo-b"], autostash=False, reporter=reporter)
+
+    updated_names = {o.repo_name for o in report.standalone}
+    assert updated_names == {"repo-a", "repo-b"}
+    assert repo_c_path not in [p for p, _ in git_repo.detached_checkouts]
+
+
+def test_update_glob_pattern_repins_matching_pinned_repos(tmp_path: Path) -> None:
+    """A bare glob (`ws update 'repo-*'`) re-pins every matching pinned standalone."""
+    repo_a_path = tmp_path / "repo-a"
+    repo_b_path = tmp_path / "repo-b"
+    other_path = tmp_path / "other-lib"
+    repo_a_path.mkdir()
+    repo_b_path.mkdir()
+    other_path.mkdir()
+
+    git_repo = FakeGitRepository()
+    for path in (repo_a_path, repo_b_path, other_path):
+        git_repo.clean_worktrees.add(path)
+        git_repo.head_commits[path] = SHA_OLD
+    git_repo.resolved_refs[(repo_a_path, "v1.0")] = (RefKind.tag, SHA_NEW)
+    git_repo.resolved_refs[(repo_b_path, "v2.0")] = (RefKind.tag, SHA_NEW)
+    git_repo.resolved_refs[(other_path, "v3.0")] = (RefKind.tag, SHA_NEW)
+
+    lock_repo = FakeConfigLockRepository()
+    repo_repo = FakeWriteRepoRepository()
+
+    svc = _make_update_service(
+        tmp_path,
+        [
+            StandaloneRepositoryConfig(name="repo-a", ref="v1.0"),
+            StandaloneRepositoryConfig(name="repo-b", ref="v2.0"),
+            StandaloneRepositoryConfig(name="other-lib", ref="v3.0"),
+        ],
+        repo_repo,
+        git_repo,
+        lock_repo,
+    )
+    reporter = _RecordingPullReporter()
+    report = svc.update_pins(repo_patterns=["repo-*"], autostash=False, reporter=reporter)
+
+    updated_names = {o.repo_name for o in report.standalone}
+    assert updated_names == {"repo-a", "repo-b"}
+    assert other_path not in [p for p, _ in git_repo.detached_checkouts]
+
+
+def test_update_glob_matching_no_pinned_repo_is_a_noop(tmp_path: Path) -> None:
+    """A glob matching zero pinned standalones is a no-op — no error, empty report."""
+    lock_repo = FakeConfigLockRepository()
+    repo_repo = FakeWriteRepoRepository()
+    git_repo = FakeGitRepository()
+
+    svc = _make_update_service(
+        tmp_path,
+        [StandaloneRepositoryConfig(name="my-lib", ref="v1.0")],
+        repo_repo,
+        git_repo,
+        lock_repo,
+    )
+    reporter = _RecordingPullReporter()
+    report = svc.update_pins(repo_patterns=["zzz-*"], autostash=False, reporter=reporter)
+
+    assert report.standalone == []
+    assert reporter.completed_success is True
 
 
 def test_update_bare_repins_all_pinned_standalones(tmp_path: Path) -> None:
@@ -322,7 +420,7 @@ def test_update_bare_repins_all_pinned_standalones(tmp_path: Path) -> None:
         lock_repo,
     )
     reporter = _RecordingPullReporter()
-    report = svc.update_pins(repo_name=None, autostash=False, reporter=reporter)
+    report = svc.update_pins(repo_patterns=[], autostash=False, reporter=reporter)
 
     # Only pinned repos in report.
     updated_names = {o.repo_name for o in report.standalone}
@@ -354,7 +452,7 @@ def test_update_dirty_without_autostash_is_refused(tmp_path: Path) -> None:
         lock_repo,
     )
     reporter = _RecordingPullReporter()
-    report = svc.update_pins(repo_name=None, autostash=False, reporter=reporter)
+    report = svc.update_pins(repo_patterns=[], autostash=False, reporter=reporter)
 
     # No checkout was called.
     assert git_repo.detached_checkouts == []
@@ -390,7 +488,7 @@ def test_update_dirty_with_autostash_succeeds(tmp_path: Path) -> None:
         lock_repo,
     )
     reporter = _RecordingPullReporter()
-    report = svc.update_pins(repo_name=None, autostash=True, reporter=reporter)
+    report = svc.update_pins(repo_patterns=[], autostash=True, reporter=reporter)
 
     # stash_push was called before checkout.
     assert repo_path in git_repo.stash_pushes
@@ -433,7 +531,7 @@ def test_update_unresolvable_ref_per_repo_failure_fanout_continues(tmp_path: Pat
         lock_repo,
     )
     reporter = _RecordingPullReporter()
-    report = svc.update_pins(repo_name=None, autostash=False, reporter=reporter)
+    report = svc.update_pins(repo_patterns=[], autostash=False, reporter=reporter)
 
     # Both repos in report.
     outcomes = {o.repo_name: o.sync_result for o in report.standalone}
@@ -466,7 +564,7 @@ def test_update_resolved_equals_current_is_up_to_date(tmp_path: Path) -> None:
         lock_repo,
     )
     reporter = _RecordingPullReporter()
-    report = svc.update_pins(repo_name=None, autostash=False, reporter=reporter)
+    report = svc.update_pins(repo_patterns=[], autostash=False, reporter=reporter)
 
     # No checkout.
     assert git_repo.detached_checkouts == []
@@ -500,7 +598,7 @@ def test_update_other_repos_lock_entries_preserved(tmp_path: Path) -> None:
         lock_repo,
     )
     reporter = _NullPullReporter()  # type: ignore[assignment]
-    svc.update_pins(repo_name=None, autostash=False, reporter=reporter)
+    svc.update_pins(repo_patterns=[], autostash=False, reporter=reporter)
 
     assert len(lock_repo.write_calls) == 1
     written = lock_repo.write_calls[0]
@@ -522,7 +620,7 @@ def test_update_named_repo_not_found_raises(tmp_path: Path) -> None:
         lock_repo,
     )
     with pytest.raises(RepoError, match="no pinned standalone repo named"):
-        svc.update_pins(repo_name="nonexistent", autostash=False, reporter=_NullPullReporter())  # type: ignore[arg-type]
+        svc.update_pins(repo_patterns=["nonexistent"], autostash=False, reporter=_NullPullReporter())  # type: ignore[arg-type]
 
 
 def test_update_named_repo_exists_but_unpinned_raises(tmp_path: Path) -> None:
@@ -539,7 +637,7 @@ def test_update_named_repo_exists_but_unpinned_raises(tmp_path: Path) -> None:
         lock_repo,
     )
     with pytest.raises(RepoError, match="no `ref` configured"):
-        svc.update_pins(repo_name="my-lib", autostash=False, reporter=_NullPullReporter())  # type: ignore[arg-type]
+        svc.update_pins(repo_patterns=["my-lib"], autostash=False, reporter=_NullPullReporter())  # type: ignore[arg-type]
 
 
 # ── CLI layer tests ────────────────────────────────────────────────────────────
@@ -559,7 +657,7 @@ def test_ws_update_help_shows_command_and_autostash() -> None:
 
 
 def test_ws_update_handler_routes_bare_form(tmp_path: Path) -> None:
-    """Handler.update() with repo=None calls update_pins(repo_name=None, ...)."""
+    """Handler.update() with repos=[] calls update_pins(repo_patterns=[], ...)."""
     from unittest.mock import MagicMock
 
     from winter_cli.modules.workspace.models import PullReport
@@ -586,17 +684,17 @@ def test_ws_update_handler_routes_bare_form(tmp_path: Path) -> None:
         workspace=MagicMock(),
     )
 
-    handler.update(EnvUpdateParams(repo=None, autostash=False, output_json=False))
+    handler.update(EnvUpdateParams(repos=[], autostash=False, output_json=False))
 
     mock_sync_svc.update_pins.assert_called_once_with(
-        repo_name=None,
+        repo_patterns=[],
         autostash=False,
         reporter=reporter_factory.get_pull_reporter.return_value,
     )
 
 
 def test_ws_update_handler_routes_named_form(tmp_path: Path) -> None:
-    """Handler.update() with repo='my-lib' passes that name through."""
+    """Handler.update() with repos=['my-lib'] passes that name through."""
     from unittest.mock import MagicMock
 
     from winter_cli.modules.workspace.models import PullReport
@@ -623,10 +721,10 @@ def test_ws_update_handler_routes_named_form(tmp_path: Path) -> None:
         workspace=MagicMock(),
     )
 
-    handler.update(EnvUpdateParams(repo="my-lib", autostash=True, output_json=False))
+    handler.update(EnvUpdateParams(repos=["my-lib"], autostash=True, output_json=False))
 
     mock_sync_svc.update_pins.assert_called_once_with(
-        repo_name="my-lib",
+        repo_patterns=["my-lib"],
         autostash=True,
         reporter=reporter_factory.get_pull_reporter.return_value,
     )
@@ -661,4 +759,4 @@ def test_ws_update_handler_propagates_repo_error_as_click_exception(tmp_path: Pa
     )
 
     with pytest.raises(click.ClickException, match="no pinned standalone repo named"):
-        handler.update(EnvUpdateParams(repo="bogus", autostash=False, output_json=False))
+        handler.update(EnvUpdateParams(repos=["bogus"], autostash=False, output_json=False))

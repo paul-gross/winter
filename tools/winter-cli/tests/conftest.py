@@ -165,6 +165,9 @@ class ClickRecorder:
     def echo(self, message: str, err: bool = False, **_: Any) -> None:
         self.calls.append((message, err))
 
+    def style(self, text: str, **_: Any) -> str:
+        return text
+
 
 class FakeServiceReporter:
     """In-memory reporter that records every IServiceReporter event for assertion."""

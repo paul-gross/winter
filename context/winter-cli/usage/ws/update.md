@@ -7,16 +7,18 @@ This is the **only path** that moves a tag/commit pin or snaps a branch pin to t
 ## Usage
 
 ```
-winter ws update [REPO] [--autostash] [--json]
+winter ws update [REPOS]... [--autostash] [--json]
 ```
 
 | Form | What it does |
 |------|--------------|
 | `winter ws update` | Re-pins **all** pinned standalone repos (those with a `ref` in the config) |
 | `winter ws update <name>` | Re-pins only the named standalone repo |
+| `winter ws update <name> <other-name>` | Re-pins exactly those two standalone repos |
+| `winter ws update '<glob>'` | Re-pins every pinned standalone repo whose name matches the glob (e.g. `'winter-*'`) |
 | `winter ws update --autostash` | Allows re-pin when the working tree is dirty: stash → checkout → pop |
 
-Repos without a `ref` are ignored regardless of scope.
+Each `REPO` is a bare glob over standalone-repo names — there is no `<env>/<repo>` segment (standalone repos aren't scoped to an env), so a name containing `/` is rejected. A literal name that doesn't match a pinned standalone raises a clear error (see [Errors](#errors)); a glob matching zero pinned standalones is a no-op. Repos without a `ref` are ignored regardless of scope.
 
 ## What each step does
 

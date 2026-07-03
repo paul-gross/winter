@@ -25,7 +25,7 @@ from winter_cli.modules.workspace.handlers import (
     WorkspacePruneParams,
 )
 from winter_cli.modules.workspace.models import DiffMode, MergeMode, PinnedScope, PullMode, RepoScope
-from winter_cli.modules.workspace.pattern_match import validate_env_pattern
+from winter_cli.modules.workspace.pattern_match import validate_bare_name_pattern, validate_env_pattern
 
 
 def _resolve_scope(standalone: bool, all_flag: bool) -> RepoScope:
@@ -305,14 +305,30 @@ def ws_connect(ctx: click.Context, args: tuple[str, ...], output_json: bool):
 
 
 @ws_group.command("disconnect")
-@click.argument("env")
+@click.argument("patterns", nargs=-1, required=True)
 @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON.")
 @click.pass_context
-def ws_disconnect(ctx: click.Context, env: str, output_json: bool):
-    """Disconnect a feature environment from its feature branch."""
+def ws_disconnect(ctx: click.Context, patterns: tuple[str, ...], output_json: bool):
+    """Disconnect matched worktrees from their feature branch.
+
+    Each PATTERN is a segment-aware glob over <env>/<repo> (like `connect` /
+    `pull` / `push` / `fetch`). Bare env names (no '/') are treated as
+    <env>/*. Pinned worktrees are always skipped. At least one PATTERN is
+    required — there is no implicit "all".
+
+    \b
+      winter ws disconnect alpha            # every non-pinned worktree in alpha
+      winter ws disconnect alpha/winter     # just alpha's winter worktree
+      winter ws disconnect alpha beta       # every non-pinned worktree in alpha and beta
+
+    --json emits {"patterns", "disconnected": [{"env", "repo"}], "count"} —
+    `disconnected` lists exactly the worktrees whose upstream was unset.
+    """
+    for pattern in patterns:
+        _validate_pattern(pattern)
     container = cli_ctx(ctx).container
     handler = container.workspace_handler()
-    handler.disconnect(EnvDisconnectParams(env=env, output_json=output_json))
+    handler.disconnect(EnvDisconnectParams(patterns=list(patterns), output_json=output_json))
 
 
 @ws_group.command("checkout")
@@ -510,7 +526,7 @@ def ws_pull(
 
 
 @ws_group.command("update")
-@click.argument("repo", required=False)
+@click.argument("repos", nargs=-1)
 @click.option(
     "--autostash",
     is_flag=True,
@@ -519,7 +535,7 @@ def ws_pull(
 )
 @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON.")
 @click.pass_context
-def ws_update(ctx: click.Context, repo: str | None, autostash: bool, output_json: bool):
+def ws_update(ctx: click.Context, repos: tuple[str, ...], autostash: bool, output_json: bool):
     """Re-resolve `ref` pins for standalone repos and rewrite the lock.
 
     Fetches the latest origin refs, re-resolves each pinned standalone's `ref`,
@@ -527,14 +543,24 @@ def ws_update(ctx: click.Context, repo: str | None, autostash: bool, output_json
     the only path that moves a tag/commit pin or snaps a branch pin to the
     latest origin tip on demand, surfacing the change as a reviewable lock diff.
 
+    Each REPO is a bare glob over standalone-repo names (no `<env>/<repo>`
+    segment — standalone repos aren't scoped to an env). Pass any number of
+    literal names or a glob to re-pin exactly the set you want; a literal name
+    that doesn't match a pinned standalone raises a clear error, while a glob
+    matching zero repos is a no-op.
+
     \b
       winter ws update              # re-pin all pinned standalones
       winter ws update my-lib       # re-pin only my-lib
+      winter ws update my-lib other-lib   # re-pin exactly those two
+      winter ws update 'winter-*'   # re-pin every pinned standalone matching the glob
       winter ws update --autostash  # allow re-pin of a dirty working tree
     """
+    for repo in repos:
+        validate_bare_name_pattern(repo)
     container = cli_ctx(ctx).container
     handler = container.workspace_handler()
-    handler.update(EnvUpdateParams(repo=repo, autostash=autostash, output_json=output_json))
+    handler.update(EnvUpdateParams(repos=list(repos), autostash=autostash, output_json=output_json))
 
 
 @ws_group.command("merge")

@@ -59,15 +59,25 @@ class EnvCheckoutService:
             connected.append(wt.repository.name)
         return connected
 
-    def disconnect_env(self, env_worktrees: FeatureEnvironmentWorktrees) -> int:
-        logger.info("disconnect_env: env=%s", env_worktrees.environment.name)
-        count = 0
+    def disconnect_env(self, env_worktrees: FeatureEnvironmentWorktrees, patterns: list[str]) -> list[str]:
+        """Disconnect every non-pinned worktree matching `patterns` from its feature branch.
+
+        `patterns` are segment-aware `<env>/<repo>` globs (a bare `<env>`
+        matches `<env>/*`), the same grammar as `connect_env`. Pinned
+        worktrees are always skipped. Returns the names of the worktrees
+        that were disconnected, in env order.
+        """
+        env_name = env_worktrees.environment.name
+        logger.info("disconnect_env: env=%s patterns=%s", env_name, patterns)
+        disconnected: list[str] = []
         for wt in env_worktrees.worktrees:
             if wt.repository.pinned:
                 continue
+            if not matches_any_pattern(env_name, wt.repository.name, patterns):
+                continue
             self._repo_repo.unset_upstream(wt)
-            count += 1
-        return count
+            disconnected.append(wt.repository.name)
+        return disconnected
 
     def checkout_env(
         self,

@@ -28,6 +28,23 @@ def validate_env_pattern(pattern: str) -> None:
         )
 
 
+def validate_bare_name_pattern(pattern: str) -> None:
+    """Validate a bare name-level pattern (`ws update`, `lint`): non-empty, no `/`.
+
+    These commands select flat names — standalone-repo names for `ws update`,
+    project-repo-or-env names for `lint` — not `<env>/<repo>` worktrees, so a
+    pattern here is a bare glob over a single name segment. Reject a
+    `/`-qualified pattern up front with a clear error rather than silently
+    matching nothing.
+    """
+    if not pattern:
+        raise click.ClickException("Empty pattern is not allowed")
+    if "/" in pattern:
+        raise click.ClickException(
+            f"Invalid pattern '{pattern}' — this command takes bare names, not '<segment>/<segment>' (no '/')"
+        )
+
+
 def is_single_literal_pattern(patterns: Iterable[str]) -> bool:
     """Return True only when there is exactly one pattern and it is a literal <env>/<svc>.
 

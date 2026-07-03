@@ -1,5 +1,5 @@
 """CLI argument-parsing tests for the glob/multi-target surface added to
-`provision`, `ws destroy`, and `ws diff`.
+`provision`, `ws destroy`, `ws diff`, `ws disconnect`, `ws update`, and `lint`.
 
 Covers argument shape only (nargs, required-ness, removed/renamed flags) via
 `click.testing.CliRunner` with no container wiring — these assertions run
@@ -11,8 +11,9 @@ from __future__ import annotations
 
 from click.testing import CliRunner
 
+from winter_cli.modules.lint.command import lint_command
 from winter_cli.modules.provision.command import provision_command
-from winter_cli.modules.workspace.command import ws_destroy, ws_diff
+from winter_cli.modules.workspace.command import ws_destroy, ws_diff, ws_disconnect, ws_update
 
 
 class TestProvisionCli:
@@ -86,3 +87,66 @@ class TestWsDiffCli:
         result = CliRunner().invoke(ws_diff, ["alpha/winter/extra"])
         assert result.exit_code != 0
         assert "one '/' max" in result.output
+
+
+class TestWsDisconnectCli:
+    def test_no_patterns_is_a_usage_error(self) -> None:
+        result = CliRunner().invoke(ws_disconnect, [])
+        assert result.exit_code != 0
+        assert "Missing argument" in result.output or "PATTERNS" in result.output
+
+    def test_invalid_pattern_two_slashes_rejected(self) -> None:
+        result = CliRunner().invoke(ws_disconnect, ["alpha/winter/extra"])
+        assert result.exit_code != 0
+        assert "one '/' max" in result.output
+
+    def test_help_documents_pattern_grammar(self) -> None:
+        result = CliRunner().invoke(ws_disconnect, ["--help"])
+        assert result.exit_code == 0
+        assert "PATTERNS" in result.output
+
+
+class TestWsUpdateCli:
+    def test_no_repos_is_accepted_by_argument_parser(self) -> None:
+        """REPOS is optional for update — no click usage error for zero args."""
+        result = CliRunner().invoke(ws_update, [])
+        assert "Missing argument" not in result.output
+
+    def test_empty_pattern_rejected(self) -> None:
+        result = CliRunner().invoke(ws_update, [""])
+        assert result.exit_code != 0
+        assert "Empty pattern" in result.output
+
+    def test_slash_qualified_pattern_rejected(self) -> None:
+        result = CliRunner().invoke(ws_update, ["alpha/winter"])
+        assert result.exit_code != 0
+        assert "no '/'" in result.output
+        assert "environment" not in result.output.lower()
+
+    def test_help_documents_repos_grammar(self) -> None:
+        result = CliRunner().invoke(ws_update, ["--help"])
+        assert result.exit_code == 0
+        assert "REPOS" in result.output
+
+
+class TestLintCli:
+    def test_no_scopes_is_accepted_by_argument_parser(self) -> None:
+        """SCOPES is optional for lint — no click usage error for zero args."""
+        result = CliRunner().invoke(lint_command, [])
+        assert "Missing argument" not in result.output
+
+    def test_empty_pattern_rejected(self) -> None:
+        result = CliRunner().invoke(lint_command, [""])
+        assert result.exit_code != 0
+        assert "Empty pattern" in result.output
+
+    def test_slash_qualified_pattern_rejected(self) -> None:
+        result = CliRunner().invoke(lint_command, ["alpha/winter"])
+        assert result.exit_code != 0
+        assert "no '/'" in result.output
+        assert "environment" not in result.output.lower()
+
+    def test_help_documents_scopes_grammar(self) -> None:
+        result = CliRunner().invoke(lint_command, ["--help"])
+        assert result.exit_code == 0
+        assert "SCOPES" in result.output

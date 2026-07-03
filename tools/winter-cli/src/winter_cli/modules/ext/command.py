@@ -30,23 +30,31 @@ def ext_group() -> None:
 
 
 @ext_group.command("verify")
-@click.argument("extension")
+@click.argument("extensions", nargs=-1, required=True)
 @click.option("--json", "output_json", is_flag=True, default=False, help="Emit results as JSON.")
 @click.pass_context
-def verify_cmd(ctx: click.Context, extension: str, output_json: bool) -> None:
-    """Verify that EXTENSION conforms to the service capability spec.
+def verify_cmd(ctx: click.Context, extensions: tuple[str, ...], output_json: bool) -> None:
+    """Verify that each EXTENSION conforms to the service capability spec.
 
-    EXTENSION is either the name of an installed standalone extension (as declared
-    in .winter/config.toml) or a local path to an extension directory.  The
-    extension's winter-ext.toml must declare a service entrypoint via
-    `orchestrate_services` or `[provides] service`.
+    Each EXTENSION is either the name of an installed standalone extension (as
+    declared in .winter/config.toml) or a local path to an extension
+    directory. The extension's winter-ext.toml must declare a service
+    entrypoint via `orchestrate_services` or `[provides] service`. Pass any
+    number of EXTENSIONs to verify them all in one run — there is no glob
+    support here (a name/path isn't a registry enumeration to expand).
 
-    Runs golden invocations from the bundled service spec and reports each check
-    as a pass or fail.  Exits non-zero if any check fails or setup fails.
+    Runs golden invocations from the bundled service spec and reports each
+    check as a pass or fail. Exits non-zero if any check fails or setup fails
+    for any of the given EXTENSIONs.
+
+    \b
+      winter ext verify my-ext                  # verify one extension
+      winter ext verify my-ext other-ext         # verify two, in one run
+      winter ext verify my-ext --json            # results as JSON
     """
     container = cli_ctx(ctx).container
     handler = container.ext_verify_handler()
-    handler.run(VerifyParams(extension=extension, output_json=output_json))
+    handler.run(VerifyParams(extensions=list(extensions), output_json=output_json))
 
 
 @ext_group.command("new")

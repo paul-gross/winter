@@ -73,7 +73,7 @@ class EnvConnectParams:
 
 @dataclasses.dataclass
 class EnvDisconnectParams:
-    env: str
+    patterns: list[str]
     output_json: bool
 
 
@@ -123,7 +123,7 @@ class EnvMergeParams:
 
 @dataclasses.dataclass
 class EnvUpdateParams:
-    repo: str | None
+    repos: list[str]
     autostash: bool
     output_json: bool
 
@@ -317,13 +317,14 @@ class WorkspaceHandler:
     def _envs_for_patterns(
         self, patterns: list[str], project_repos: list[ProjectRepository]
     ) -> list[FeatureEnvironment]:
-        """Resolve the environments a set of connect patterns references.
+        """Resolve the environments a set of connect/disconnect patterns references.
 
         A literal env segment (no glob char) is resolved by name via
-        `get_environment`, so arbitrary / non-Greek env names still connect — the
-        worktree filtering in `connect_env` then narrows to the matched repos. A
-        glob env segment (e.g. `*/winter`) falls back to discovering existing
-        envs, since there's no single name to resolve.
+        `get_environment`, so arbitrary / non-Greek env names still connect or
+        disconnect — the worktree filtering in `connect_env`/`disconnect_env`
+        then narrows to the matched repos. A glob env segment (e.g.
+        `*/winter`) falls back to discovering existing envs, since there's no
+        single name to resolve.
         """
         env_segments = {p.split("/", 1)[0] for p in patterns}
         literal = {s for s in env_segments if not has_glob(s)}
@@ -334,18 +335,38 @@ class WorkspaceHandler:
         return envs
 
     def disconnect(self, params: EnvDisconnectParams) -> None:
-        env = self._workspace_repo.get_environment(self._workspace, params.env)
         project_repos = self._repo_factory.get_project_repos()
         self._drift_warning_svc.raise_warning()
-        env_worktrees = self._env_status_svc.get_feature_environment_worktrees(env, project_repos)
-        count = self._env_checkout_svc.disconnect_env(env_worktrees)
+        environments = self._envs_for_patterns(params.patterns, project_repos)
+
+        disconnected: list[tuple[str, str]] = []
+        for env in environments:
+            env_worktrees = self._env_status_svc.get_feature_environment_worktrees(env, project_repos)
+            for repo_name in self._env_checkout_svc.disconnect_env(env_worktrees, params.patterns):
+                disconnected.append((env.name, repo_name))
 
         if params.output_json:
-            _echo_json({"env": params.env, "repos_configured": count})
+            _echo_json(
+                {
+                    "patterns": params.patterns,
+                    "disconnected": [{"env": e, "repo": r} for e, r in disconnected],
+                    "count": len(disconnected),
+                }
+            )
             return
 
         out = self._cli_output_svc
-        click.echo(f"{out.style('✓', 'green')} Disconnected {out.style(params.env, 'bold')} ({count} repos)")
+        if not disconnected:
+            click.echo(out.style(f"No worktrees matched: {' '.join(params.patterns)}", "dim"))
+            return
+
+        click.echo(
+            f"{out.style('✓', 'green')} Disconnected "
+            f"{out.style(str(len(disconnected)), 'bold')} "
+            f"worktree{'s' if len(disconnected) != 1 else ''}"
+        )
+        for env_name, repo_name in disconnected:
+            click.echo(f"  {env_name}/{repo_name}")
 
     def checkout(self, params: EnvCheckoutParams) -> None:
         env = self._workspace_repo.get_environment(self._workspace, params.env)
@@ -461,7 +482,7 @@ class WorkspaceHandler:
         reporter = self._reporter_factory.get_pull_reporter(params.output_json)
         try:
             report = self._workspace_sync_svc.update_pins(
-                repo_name=params.repo,
+                repo_patterns=params.repos,
                 autostash=params.autostash,
                 reporter=reporter,
             )

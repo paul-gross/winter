@@ -184,10 +184,43 @@ def test_disconnect_env_skips_pinned_and_unsets_others(
     ]
     env_wts = _env_worktrees(workspace, repos)
 
-    count = service.disconnect_env(env_wts)
+    disconnected = service.disconnect_env(env_wts, patterns=["alpha"])
 
-    assert count == 1
+    assert disconnected == ["feature-repo"]
     assert fake_repo_repo.unset_upstream_calls == ["feature-repo"]
+
+
+def test_disconnect_env_scoped_pattern_disconnects_only_matched_worktree(
+    workspace: Workspace, service: EnvCheckoutService, fake_repo_repo: FakeWriteRepoRepository
+) -> None:
+    """A `<env>/<repo>` pattern disconnects only the matched worktree, leaving siblings untouched."""
+    repos = [
+        ProjectRepository(name="feature-repo", main_path=workspace.root_path / "feature-repo", main_branch="main"),
+        ProjectRepository(name="other-repo", main_path=workspace.root_path / "other-repo", main_branch="main"),
+    ]
+    env_wts = _env_worktrees(workspace, repos)
+
+    disconnected = service.disconnect_env(env_wts, patterns=["alpha/feature-repo"])
+
+    assert disconnected == ["feature-repo"]
+    assert fake_repo_repo.unset_upstream_calls == ["feature-repo"]
+
+
+def test_disconnect_env_pinned_worktree_skipped_even_if_pattern_names_it(
+    workspace: Workspace, service: EnvCheckoutService, fake_repo_repo: FakeWriteRepoRepository
+) -> None:
+    """A pinned worktree is skipped even if a pattern names it directly."""
+    repos = [
+        ProjectRepository(
+            name="pinned-repo", main_path=workspace.root_path / "pinned-repo", main_branch="main", pinned=True
+        ),
+    ]
+    env_wts = _env_worktrees(workspace, repos)
+
+    disconnected = service.disconnect_env(env_wts, patterns=["alpha/pinned-repo"])
+
+    assert disconnected == []
+    assert fake_repo_repo.unset_upstream_calls == []
 
 
 def test_checkout_env_resets_clean_repos_with_present_ref(

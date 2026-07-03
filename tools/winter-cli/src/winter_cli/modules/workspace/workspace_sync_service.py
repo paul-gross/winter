@@ -30,7 +30,7 @@ from winter_cli.modules.workspace.models import (
     Workspace,
 )
 from winter_cli.modules.workspace.models.domain_model import LockEntry, RefKind
-from winter_cli.modules.workspace.pattern_match import matches_any_pattern
+from winter_cli.modules.workspace.pattern_match import has_glob, matches_any_pattern
 from winter_cli.modules.workspace.pull_reporter import IPullReporter
 from winter_cli.modules.workspace.repo_repository import IWriteRepoRepository
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
@@ -502,16 +502,21 @@ class WorkspaceSyncService:
 
     def update_pins(
         self,
-        repo_name: str | None,
+        repo_patterns: list[str],
         autostash: bool,
         reporter: IPullReporter,
     ) -> PullReport:
         """Re-resolve `ref` pins for standalone repos and rewrite the lock.
 
-        Bare call (``repo_name=None``) → re-pins ALL pinned standalones.
-        Named call (``repo_name=<name>``) → re-pins only that standalone; raises
-        ``RepoError`` (surfaces via reporter) if the name doesn't match a pinned
-        standalone.
+        Bare call (``repo_patterns=[]``) → re-pins ALL pinned standalones.
+        Targeted call (``repo_patterns=["my-lib"]`` or several names / a bare
+        glob like ``"winter-*"``) → re-pins only the matching standalone(s).
+        Each *literal* pattern (no glob char, per `has_glob`) is validated up
+        front exactly as the old single-name call was: it raises
+        ``RepoError`` (surfaces via reporter) if it doesn't name a pinned
+        standalone. A glob pattern is expanded against the pinned set via
+        `matches_any_pattern` and may resolve to zero repos with no error —
+        same "nothing to update" result as an empty scope.
 
         For each in-scope repo:
           1. FETCH (refresh origin refs).
@@ -537,21 +542,23 @@ class WorkspaceSyncService:
         all_standalones = self._repo_factory.get_standalone_repos()
         pinned = [r for r in all_standalones if r.ref is not None]
 
-        if repo_name is not None:
-            targeted = [r for r in pinned if r.name == repo_name]
-            if not targeted:
-                # Also check if the name exists at all (unpinned or unknown).
-                all_names = [r.name for r in all_standalones]
-                if repo_name in all_names:
+        if repo_patterns:
+            literal_names = [p for p in repo_patterns if not has_glob(p)]
+            pinned_names = {r.name for r in pinned}
+            all_names = {r.name for r in all_standalones}
+            for name in literal_names:
+                if name in pinned_names:
+                    continue
+                if name in all_names:
                     raise RepoError(
-                        f"standalone repo {repo_name!r} has no `ref` configured — nothing to update",
+                        f"standalone repo {name!r} has no `ref` configured — nothing to update",
                         cwd="",
                     )
                 raise RepoError(
-                    f"no pinned standalone repo named {repo_name!r}",
+                    f"no pinned standalone repo named {name!r}",
                     cwd="",
                 )
-            in_scope = targeted
+            in_scope = [r for r in pinned if matches_any_pattern(r.name, "", repo_patterns)]
         else:
             in_scope = pinned
 

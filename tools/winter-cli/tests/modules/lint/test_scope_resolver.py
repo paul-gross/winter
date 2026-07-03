@@ -64,14 +64,14 @@ def _resolver(
 
 def test_all_resolves_to_every_env_project_worktree() -> None:
     resolver = _resolver(env_names=["alpha", "beta"])
-    scope = resolver.resolve(LintScopeRequest(all=True))
+    (scope,) = resolver.resolve(LintScopeRequest(all=True))
     assert scope.kind == LintScopeKind.all
     assert scope.paths == [WS / "alpha" / "app", WS / "beta" / "app"]
 
 
 def test_default_inside_an_env_resolves_to_that_env() -> None:
     resolver = _resolver(env_names=["alpha", "beta"])
-    scope = resolver.resolve(LintScopeRequest(cwd=WS / "beta" / "app" / "src"))
+    (scope,) = resolver.resolve(LintScopeRequest(cwd=WS / "beta" / "app" / "src"))
     assert scope.kind == LintScopeKind.env
     assert scope.paths == [WS / "beta" / "app"]
 
@@ -79,7 +79,7 @@ def test_default_inside_an_env_resolves_to_that_env() -> None:
 def test_default_outside_any_env_resolves_to_all_envs() -> None:
     resolver = _resolver(env_names=["alpha", "beta"])
     # Run from the workspace root / a source checkout — not inside an env dir.
-    scope = resolver.resolve(LintScopeRequest(cwd=WS / "projects" / "app"))
+    (scope,) = resolver.resolve(LintScopeRequest(cwd=WS / "projects" / "app"))
     assert scope.kind == LintScopeKind.all
     assert scope.paths == [WS / "alpha" / "app", WS / "beta" / "app"]
 
@@ -87,11 +87,11 @@ def test_default_outside_any_env_resolves_to_all_envs() -> None:
 def test_mutually_exclusive_sources_raise() -> None:
     resolver = _resolver()
     with pytest.raises(LintScopeError, match="mutually exclusive"):
-        resolver.resolve(LintScopeRequest(name="app", all=True))
+        resolver.resolve(LintScopeRequest(names=["app"], all=True))
 
 
 def test_project_repo_name_resolves_to_main_path() -> None:
-    scope = _resolver().resolve(LintScopeRequest(name="app"))
+    (scope,) = _resolver().resolve(LintScopeRequest(names=["app"]))
     assert scope.kind == LintScopeKind.repo
     assert scope.paths == [WS / "projects" / "app"]
 
@@ -100,25 +100,64 @@ def test_standalone_only_repo_name_is_rejected() -> None:
     # Standalone clones are released products — out of lint scope, so a
     # standalone-only name no longer resolves.
     with pytest.raises(LintScopeError, match="unknown scope"):
-        _resolver().resolve(LintScopeRequest(name="ext"))
+        _resolver().resolve(LintScopeRequest(names=["ext"]))
 
 
 def test_env_name_resolves_to_each_worktree_path() -> None:
-    scope = _resolver(env_names=["alpha"]).resolve(LintScopeRequest(name="alpha"))
+    (scope,) = _resolver(env_names=["alpha"]).resolve(LintScopeRequest(names=["alpha"]))
     assert scope.kind == LintScopeKind.env
     assert scope.paths == [WS / "alpha" / "app"]
 
 
 def test_unknown_name_raises() -> None:
     with pytest.raises(LintScopeError, match="unknown scope"):
-        _resolver().resolve(LintScopeRequest(name="nope"))
+        _resolver().resolve(LintScopeRequest(names=["nope"]))
 
 
 def test_name_matching_both_repo_and_env_is_ambiguous() -> None:
     config = _config(project=("alpha",), standalone=())
     resolver = _resolver(config, env_names=["alpha"])
     with pytest.raises(LintScopeError, match="matches both"):
-        resolver.resolve(LintScopeRequest(name="alpha"))
+        resolver.resolve(LintScopeRequest(names=["alpha"]))
+
+
+# ── multiple names / glob fan-out ─────────────────────────────────────────
+
+
+def test_multiple_literal_names_resolve_to_one_scope_each() -> None:
+    config = _config(project=("app", "other"), standalone=())
+    resolver = _resolver(config, env_names=["alpha"])
+    scopes = resolver.resolve(LintScopeRequest(names=["app", "other"]))
+    assert [s.kind for s in scopes] == [LintScopeKind.repo, LintScopeKind.repo]
+    assert [s.label for s in scopes] == ["repo: app", "repo: other"]
+
+
+def test_glob_matching_several_repos_resolves_each() -> None:
+    config = _config(project=("app-a", "app-b", "other"), standalone=())
+    resolver = _resolver(config, env_names=["alpha"])
+    scopes = resolver.resolve(LintScopeRequest(names=["app-*"]))
+    assert [s.label for s in scopes] == ["repo: app-a", "repo: app-b"]
+
+
+def test_glob_matching_no_name_returns_empty_list() -> None:
+    resolver = _resolver(env_names=["alpha"])
+    scopes = resolver.resolve(LintScopeRequest(names=["zzz-*"]))
+    assert scopes == []
+
+
+def test_literal_and_glob_combo_dedupes_overlap() -> None:
+    config = _config(project=("app-a", "app-b"), standalone=())
+    resolver = _resolver(config, env_names=["alpha"])
+    scopes = resolver.resolve(LintScopeRequest(names=["app-a", "app-*"]))
+    assert [s.label for s in scopes] == ["repo: app-a", "repo: app-b"]
+
+
+def test_multiple_names_ambiguity_rejected_per_name() -> None:
+    """Each resolved name is still checked for repo/env ambiguity independently."""
+    config = _config(project=("alpha", "clean-repo"), standalone=())
+    resolver = _resolver(config, env_names=["alpha"])
+    with pytest.raises(LintScopeError, match="matches both"):
+        resolver.resolve(LintScopeRequest(names=["clean-repo", "alpha"]))
 
 
 # ── --changed ────────────────────────────────────────────────────────────
@@ -147,7 +186,7 @@ def test_changed_unions_dirty_and_unpushed_paths_and_dedupes() -> None:
             ),
         }
     )
-    scope = _resolver(runner=runner).resolve(LintScopeRequest(changed=True, cwd=REPO))
+    (scope,) = _resolver(runner=runner).resolve(LintScopeRequest(changed=True, cwd=REPO))
 
     assert scope.kind == LintScopeKind.changed
     assert scope.label == "changed (repo)"
@@ -171,7 +210,7 @@ def test_changed_falls_back_to_origin_main_without_upstream() -> None:
             f"git -C {REPO} diff --name-only -z origin/main..HEAD": SubprocessResult(0, "only.py\x00", ""),
         }
     )
-    scope = _resolver(runner=runner).resolve(LintScopeRequest(changed=True, cwd=REPO))
+    (scope,) = _resolver(runner=runner).resolve(LintScopeRequest(changed=True, cwd=REPO))
     assert scope.paths == [REPO / "only.py"]
 
 

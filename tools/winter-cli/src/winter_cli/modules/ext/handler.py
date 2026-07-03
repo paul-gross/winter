@@ -10,7 +10,16 @@ from winter_cli.modules.ext.verify_service import ConformanceVerifyService
 
 
 class ExtVerifyHandler:
-    """Dispatches `winter ext verify` runs: resolve, run checks, render, exit non-zero on failure."""
+    """Dispatches `winter ext verify` runs: resolve, run checks, render, exit non-zero on failure.
+
+    `params.extensions` is one or more names/paths — no glob support (a
+    name/path isn't a registry enumeration to expand). Each is verified in
+    turn against the same `ConformanceVerifyService`, which still only knows
+    how to verify one extension per call; the fan-out lives here. A
+    single-target run's output is unchanged from before multi-target support
+    (the reporter is called with `extension=None`); a multi-target run labels
+    each render with its extension name.
+    """
 
     def __init__(
         self,
@@ -23,10 +32,16 @@ class ExtVerifyHandler:
         self._json_reporter = json_reporter
 
     def run(self, params: VerifyParams) -> None:
-        report = self._verify_service.verify(params.extension)
         reporter: IVerifyReporter = self._json_reporter if params.output_json else self._stream_reporter
-        reporter.render(report)
-        if report.any_failed:
+        sectioned = len(params.extensions) > 1
+
+        any_failed = False
+        for extension in params.extensions:
+            report = self._verify_service.verify(extension)
+            reporter.render(report, extension=extension if sectioned else None)
+            any_failed = any_failed or report.any_failed
+
+        if any_failed:
             sys.exit(1)
 
 

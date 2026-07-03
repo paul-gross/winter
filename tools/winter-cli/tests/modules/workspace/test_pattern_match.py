@@ -3,7 +3,12 @@ from __future__ import annotations
 import click
 import pytest
 
-from winter_cli.modules.workspace.pattern_match import has_glob, is_single_literal_pattern, validate_env_pattern
+from winter_cli.modules.workspace.pattern_match import (
+    has_glob,
+    is_single_literal_pattern,
+    validate_bare_name_pattern,
+    validate_env_pattern,
+)
 
 # ── is_single_literal_pattern ─────────────────────────────────────────────────
 
@@ -86,3 +91,31 @@ def test_validate_env_pattern_rejects_empty() -> None:
 def test_validate_env_pattern_rejects_slash() -> None:
     with pytest.raises(click.ClickException, match="no '/'"):
         validate_env_pattern("alpha/winter")
+
+
+# ── validate_bare_name_pattern ────────────────────────────────────────────────
+
+
+def test_validate_bare_name_pattern_accepts_literal() -> None:
+    validate_bare_name_pattern("winter")  # no raise
+
+
+def test_validate_bare_name_pattern_accepts_glob() -> None:
+    validate_bare_name_pattern("winter-*")  # no raise
+
+
+def test_validate_bare_name_pattern_rejects_empty() -> None:
+    with pytest.raises(click.ClickException, match="Empty pattern"):
+        validate_bare_name_pattern("")
+
+
+def test_validate_bare_name_pattern_rejects_slash() -> None:
+    with pytest.raises(click.ClickException, match="no '/'"):
+        validate_bare_name_pattern("alpha/winter")
+
+
+def test_validate_bare_name_pattern_message_does_not_say_environments() -> None:
+    """Unlike `validate_env_pattern`, the message must not claim the target is an environment."""
+    with pytest.raises(click.ClickException) as excinfo:
+        validate_bare_name_pattern("alpha/winter")
+    assert "environment" not in str(excinfo.value).lower()

@@ -190,3 +190,76 @@ def test_verify_json_flag_also_exits_nonzero_on_failure(tmp_path: Path) -> None:
         f"expected non-zero exit for --json + setup failure; got {result.returncode}\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
+
+
+# ── multi-target: verify several EXTENSIONs in one run ────────────────────────
+
+
+def _scaffold_ext(workspace: Path, name: str, out_dir: Path) -> Path:
+    """Scaffold a conforming extension via the real `ext new` (passes verify out of the box)."""
+    result = subprocess.run(
+        [sys.executable, "-m", "winter_cli.cli", "ext", "new", name, "--capability", "service", "--dir", str(out_dir)],
+        capture_output=True,
+        text=True,
+        cwd=str(workspace),
+    )
+    assert result.returncode == 0, f"ext new failed (exit {result.returncode}):\n{result.stdout}\n{result.stderr}"
+    return out_dir
+
+
+def test_verify_multiple_extensions_all_passing_exits_zero(tmp_path: Path) -> None:
+    """Multiple EXTENSIONs, all conforming, verify in one run and exit 0."""
+    workspace = _make_workspace(tmp_path / "ws")
+    ext_a = _scaffold_ext(workspace, "ext-a", tmp_path / "ext-a")
+    ext_b = _scaffold_ext(workspace, "ext-b", tmp_path / "ext-b")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "winter_cli.cli", "ext", "verify", str(ext_a), str(ext_b)],
+        capture_output=True,
+        text=True,
+        cwd=str(workspace),
+    )
+
+    assert result.returncode == 0, f"expected exit 0; got {result.returncode}\nstdout: {result.stdout}"
+
+
+def test_verify_multiple_extensions_one_failing_exits_nonzero(tmp_path: Path) -> None:
+    """One failing EXTENSION among several is enough to make the whole run exit non-zero."""
+    workspace = _make_workspace(tmp_path / "ws")
+    ext_a = _scaffold_ext(workspace, "ext-a", tmp_path / "ext-a")
+    rejects_all = "#!/usr/bin/env python3\nimport sys\nsys.exit(2)\n"
+    ext_b = _make_ext(tmp_path / "ext-b", rejects_all)
+
+    result = subprocess.run(
+        [sys.executable, "-m", "winter_cli.cli", "ext", "verify", str(ext_a), str(ext_b)],
+        capture_output=True,
+        text=True,
+        cwd=str(workspace),
+    )
+
+    assert result.returncode != 0, f"expected non-zero exit; got {result.returncode}\nstdout: {result.stdout}"
+    # Both extensions still ran — the failing one didn't short-circuit the other.
+    assert str(ext_a) in result.stdout
+    assert str(ext_b) in result.stdout
+
+
+def test_verify_multiple_extensions_json_emits_one_line_per_extension(tmp_path: Path) -> None:
+    """--json with multiple EXTENSIONs emits one NDJSON line per extension, each labelled."""
+    import json
+
+    workspace = _make_workspace(tmp_path / "ws")
+    ext_a = _scaffold_ext(workspace, "ext-a", tmp_path / "ext-a")
+    ext_b = _scaffold_ext(workspace, "ext-b", tmp_path / "ext-b")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "winter_cli.cli", "ext", "verify", "--json", str(ext_a), str(ext_b)],
+        capture_output=True,
+        text=True,
+        cwd=str(workspace),
+    )
+
+    assert result.returncode == 0, f"expected exit 0; got {result.returncode}\nstdout: {result.stdout}"
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    assert len(lines) == 2
+    payloads = [json.loads(ln) for ln in lines]
+    assert {p["extension"] for p in payloads} == {str(ext_a), str(ext_b)}

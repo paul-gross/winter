@@ -73,14 +73,18 @@ class LintScopeKind(enum.Enum):
 class LintScopeRequest:
     """The raw scope selection parsed from the CLI, before resolution.
 
-    At most one of `name` / `all` / `changed` is honored; the resolver rejects
-    combinations and, when none is set, resolves the default scope (the env
-    containing `cwd`, or every env). `cwd` is the caller's real invocation
+    At most one of `names` (non-empty) / `all` / `changed` is honored; the
+    resolver rejects combinations and, when none is set, resolves the default
+    scope (the env containing `cwd`, or every env). Each entry in `names` may
+    be a literal project-repo/env name or a bare glob (no `<env>/<repo>`
+    segment) — a glob is expanded against both repo and env names, and every
+    resolved name (literal or matched) becomes its own `LintScope` in
+    `resolve()`'s returned list. `cwd` is the caller's real invocation
     directory (from `WINTER_INVOCATION_CWD`) — used to detect the current env
     for the default scope and to locate the git repo for the `--changed` set.
     """
 
-    name: str | None = None
+    names: list[str] = field(default_factory=list)
     all: bool = False
     changed: bool = False
     cwd: Path | None = None

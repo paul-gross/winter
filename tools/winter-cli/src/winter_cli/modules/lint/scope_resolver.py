@@ -12,6 +12,7 @@ from winter_cli.modules.lint.models import (
     LintScopeRequest,
 )
 from winter_cli.modules.workspace.models import FeatureEnvironment, RepoError
+from winter_cli.modules.workspace.pattern_match import has_glob, matches_any_pattern
 from winter_cli.modules.workspace.repo_repository import IWriteRepoRepository
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
 from winter_cli.modules.workspace.workspace_repository import IReadWorkspaceRepository
@@ -63,6 +64,9 @@ class LintScopeResolver:
       - an env name: every project worktree directory inside that env.
       - a project-repo name: that repo's source checkout. (Standalone-only
         names are rejected — standalone clones are out of scope.)
+      - multiple names and/or a bare glob (no `<env>/<repo>` segment): each
+        resolved name fans out to its own scope — `resolve()` returns a list,
+        one `LintScope` per matched repo/env name.
       - `--changed`: files that are dirty or in un-pushed commits in the git
         repository containing the invocation directory.
     """
@@ -81,9 +85,19 @@ class LintScopeResolver:
         self._repo_repo = repo_repo
         self._subprocess = subprocess_runner
 
-    def resolve(self, request: LintScopeRequest) -> LintScope:
+    def resolve(self, request: LintScopeRequest) -> list[LintScope]:
+        """Resolve a scope request to the ordered list of `LintScope`s a run should cover.
+
+        Every branch but `names` always yields exactly one scope. `names`
+        (one or more literal repo/env names, and/or bare globs) fans out to
+        one `LintScope` per resolved name via `_resolve_names` — a glob
+        matching nothing yields an empty list (no error; the caller reports
+        "nothing matched" and no-ops), while a literal name that resolves to
+        neither a repo nor an env still raises immediately, exactly as a
+        single-name call did before glob/multi-target support.
+        """
         sources = (
-            ("a scope name", request.name is not None),
+            ("a scope name", bool(request.names)),
             ("--all", request.all),
             ("--changed", request.changed),
         )
@@ -92,12 +106,12 @@ class LintScopeResolver:
             raise LintScopeError(f"{', '.join(chosen)} are mutually exclusive")
 
         if request.changed:
-            return self._resolve_changed(request.cwd or self._config.workspace_root)
-        if request.name is not None:
-            return self._resolve_name(request.name)
+            return [self._resolve_changed(request.cwd or self._config.workspace_root)]
+        if request.names:
+            return self._resolve_names(request.names)
         if request.all:
-            return self._resolve_all()
-        return self._resolve_default(request.cwd or self._config.workspace_root)
+            return [self._resolve_all()]
+        return [self._resolve_default(request.cwd or self._config.workspace_root)]
 
     # ── default (current env) and --all (every env) ──────────────────────────
 
@@ -126,7 +140,30 @@ class LintScopeResolver:
         candidate = rel.parts[0]
         return candidate if any(env.name == candidate for env in self._environments()) else None
 
-    # ── named repo or env ────────────────────────────────────────────────────
+    # ── named repo(s)/env(s), literal and/or bare glob ───────────────────────
+
+    def _resolve_names(self, names: list[str]) -> list[LintScope]:
+        """Resolve NAMES to one `LintScope` per matched name, in deterministic (sorted) order.
+
+        A literal name (no glob char, per `has_glob`) is always included
+        verbatim — even if it names neither a repo nor an env — so `winter
+        lint <typo>` still surfaces `_resolve_name`'s own "unknown scope"
+        error instead of silently matching nothing. A glob name is expanded
+        against the union of project-repo and env names, deduped against the
+        literal names so a mixed invocation never resolves the same name
+        twice. Each resolved name still goes through `_resolve_name`, so the
+        repo/env ambiguity rejection applies per name exactly as it did
+        before multi-target support.
+        """
+        literal = {n for n in names if not has_glob(n)}
+        resolved_names: list[str] = sorted(literal)
+        if any(has_glob(n) for n in names):
+            project_repos = self._repo_factory.get_project_repos()
+            candidates = {r.name for r in project_repos} | {e.name for e in self._environments()}
+            resolved_names.extend(
+                sorted(name for name in candidates if name not in literal and matches_any_pattern(name, "", names))
+            )
+        return [self._resolve_name(name) for name in resolved_names]
 
     def _resolve_name(self, name: str) -> LintScope:
         repo_path = self._repo_path(name)

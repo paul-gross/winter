@@ -6,9 +6,14 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class VerifyParams:
-    """Parameters for `winter ext verify`."""
+    """Parameters for `winter ext verify`.
 
-    extension: str
+    `extensions` is one or more names/paths (no glob support — a name/path is
+    not a registry enumeration, so each entry is verified literally). At
+    least one is required.
+    """
+
+    extensions: list[str]
     output_json: bool
 
 
