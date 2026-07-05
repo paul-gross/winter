@@ -20,8 +20,9 @@ from winter_cli.modules.workspace.workspace_repository import IReadWorkspaceRepo
 class ReadWorkspaceRepository:
     """Read-only filesystem implementation of the workspace repository.
 
-    Internal infrastructure — discovers feature environments by scanning the workspace root
-    for Greek-letter directories and derives the connected feature branch from git's upstream
+    Internal infrastructure — discovers feature environments from the env-index registry's
+    recorded names unioned with the built-in Greek aliases, each confirmed on disk, and derives
+    the connected feature branch from git's upstream
     tracking on the first connected non-pinned repo (plus a count of how many distinct remote
     branches the env's worktrees span, for the dashboard's multi-remote badge). Per-environment
     status badges are populated later by visual plugins (see `IEnvironmentDecorator`); this class
@@ -71,14 +72,40 @@ class ReadWorkspaceRepository:
     def _discover_env_names(self, workspace: Workspace, project_repos: list[ProjectRepository]) -> list[str]:
         known_repos = {r.name for r in project_repos}
         found = []
-        for name in GREEK_LETTERS:
+        for name in self._candidate_env_names():
             candidate = workspace.root_path / name
             if not candidate.is_dir():
                 continue
             subdirs = {d.name for d in candidate.iterdir() if d.is_dir()}
             if subdirs & known_repos:
                 found.append(name)
-        return found
+        # Order the dashboard by env index so aliases (1..N) lead and non-alias
+        # envs follow in their allocated-slot order, regardless of the arbitrary
+        # order candidates were gathered in.
+        return sorted(found, key=self._resolve_index)
+
+    def _candidate_env_names(self) -> list[str]:
+        """Env names to probe on disk, unioned from two sources.
+
+        * The index registry — the authoritative list of every env
+          ``reconcile_env`` has allocated, and the *only* place a non-alias name
+          like ``feature-xyz`` is recorded. Discovery must consult it, or
+          arbitrarily-named envs never appear on the dashboard.
+        * The configured env aliases (``self._env_aliases``, defaulting to the
+          built-in ``GREEK_LETTERS`` when unset) — kept so a pre-registry env on
+          disk that predates ``state.toml`` is still discovered. This is the same
+          alias source ``_resolve_index`` falls back to, so discovery and
+          index-resolution agree even in a workspace with non-Greek aliases.
+
+        Each candidate is still confirmed against the filesystem by the caller
+        (directory exists and holds a known project-repo worktree). That guard is
+        why we can't just scan the workspace root: ``projects/`` holds the source
+        checkouts, named identically to the repos, and would false-positive as an
+        env.
+        """
+        aliases = self._env_aliases if self._env_aliases is not None else GREEK_LETTERS
+        registered = list(self._registry.all_assignments()) if self._registry is not None else []
+        return list(dict.fromkeys([*aliases, *registered]))
 
     def _build_environment(self, workspace: Workspace, name: str) -> FeatureEnvironment:
         path = workspace.root_path / name

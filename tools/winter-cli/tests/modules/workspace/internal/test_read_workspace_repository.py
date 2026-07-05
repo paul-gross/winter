@@ -95,6 +95,42 @@ def test_get_environments_discovers_greek_dirs_with_known_repos(
     assert envs[1].index == 3
 
 
+def test_get_environments_discovers_non_greek_env_from_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hyphenated env (e.g. `feature-xyz`) recorded in the registry is discovered."""
+    registry = MagicMock()
+    registry.all_assignments.return_value = {"alpha": 1, "feature-xyz": 30}
+    registry.get_index.side_effect = lambda name: {"alpha": 1, "feature-xyz": 30}.get(name)
+    repo = ReadWorkspaceRepository(RepoErrorFactory(), registry=registry)
+    workspace = Workspace(root_path=_ROOT, service_prefix="t", main_branch="main")
+
+    def _is_dir(self: Path) -> bool:
+        existing = {
+            _ROOT / "alpha",
+            _ROOT / "alpha" / "demo",
+            _ROOT / "feature-xyz",
+            _ROOT / "feature-xyz" / "demo",
+        }
+        return self in existing
+
+    def _iterdir(self: Path) -> list[Path]:
+        contents: dict[Path, list[Path]] = {
+            _ROOT / "alpha": [_ROOT / "alpha" / "demo"],
+            _ROOT / "feature-xyz": [_ROOT / "feature-xyz" / "demo"],
+        }
+        return contents.get(self, [])
+
+    monkeypatch.setattr(Path, "is_dir", _is_dir)
+    monkeypatch.setattr(Path, "iterdir", _iterdir)
+
+    envs = repo.get_environments(workspace, [_project("demo")])
+
+    # Ordered by index: alpha (1) then feature-xyz (30).
+    assert [e.name for e in envs] == ["alpha", "feature-xyz"]
+    assert [e.index for e in envs] == [1, 30]
+
+
 def test_get_environment_status_reads_feature_branch_from_tracking(
     monkeypatch: pytest.MonkeyPatch, repo: ReadWorkspaceRepository
 ) -> None:
