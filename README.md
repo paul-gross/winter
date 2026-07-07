@@ -4,6 +4,8 @@ Winter is a reusable workspace framework for AI-assisted development on both loc
 
 📚 **Documentation:** <https://paul-gross.github.io/winter-docs/>
 
+https://github.com/user-attachments/assets/79c3b9a7-c220-4e03-89a0-20539789d2b6
+
 ## ✨ Features
 
 - **Polyrepo multi-worktree management** — Multiple project repos managed as one workspace. Each feature environment contains a coordinated set of git worktrees across every repo, all on the same branch.
