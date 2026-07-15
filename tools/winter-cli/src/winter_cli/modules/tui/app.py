@@ -36,3 +36,17 @@ class WinterDashboardApp(App):
 
     def on_mount(self) -> None:
         self.push_screen(self.screen_factory.workspace_screen())
+
+    async def action_quit(self) -> None:
+        """Cancel in-flight refresh workers, then exit immediately.
+
+        The dashboard's refresh/detail workers are `@work(thread=True)` git
+        probes. Textual's default quit tears down the UI but leaves those
+        threads marshaling `call_from_thread` callbacks against the dying app —
+        a slow, error-spewing exit. Cancelling every worker first flips each
+        one's `is_cancelled`, which the screens' guarded `_call_from_thread_safe`
+        checks to stop marshaling at once; the threads can't be force-killed,
+        but they no longer block quit or emit errors as they unwind.
+        """
+        self.workers.cancel_all()
+        self.exit()

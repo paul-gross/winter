@@ -95,19 +95,21 @@ class StandaloneDetailScreen(KeybindingMixin, PluginActionMixin, Screen):
 
     @work(thread=True)
     def _refresh_data(self) -> None:
-        self.app.call_from_thread(self._on_refresh_start)
+        self._call_from_thread_safe(self._on_refresh_start)
+        if self._worker_cancelled():
+            return
         repo = self._resolve_repo()
         if repo is None:
-            self.app.call_from_thread(self._on_refresh_finished)
+            self._call_from_thread_safe(self._on_refresh_finished)
             return
         try:
             detail = self._repo_repo.get_standalone_detail(repo)
         except RepoError as exc:
             self._capture_error(f"StandaloneDetailScreen({self.repo_name}).refresh", exc)
-            self.app.call_from_thread(self._on_refresh_finished)
+            self._call_from_thread_safe(self._on_refresh_finished)
             return
         outcomes = render_detail_panels(self._detail_panels, DetailPanelContext(repo=repo))
-        self.app.call_from_thread(self._update_widgets, detail, outcomes)
+        self._call_from_thread_safe(self._update_widgets, detail, outcomes)
 
     def _update_widgets(self, detail: RepoStatusAndHistory, outcomes: list[PanelOutcome]) -> None:
         self._repo_detail = detail

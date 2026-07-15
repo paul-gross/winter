@@ -143,7 +143,9 @@ class WorkspaceScreen(KeybindingMixin, PluginActionMixin, Screen):
         All git-probing is delegated to `WorkspaceSnapshotService.collect_for_dashboard()`
         so the dashboard and `ws status` cannot diverge on what they read.
         """
-        self.app.call_from_thread(self._on_refresh_start)
+        self._call_from_thread_safe(self._on_refresh_start)
+        if self._worker_cancelled():
+            return
         worktree_repo_decorators = list(self._plugin_registry.worktree_repo_decorators)
         environment_decorators = list(self._plugin_registry.environment_decorators)
 
@@ -165,13 +167,13 @@ class WorkspaceScreen(KeybindingMixin, PluginActionMixin, Screen):
             )
         except RepoError as exc:
             self._capture_error("WorkspaceScreen.refresh", exc)
-            self.app.call_from_thread(self._update_widgets, {}, [], [])
+            self._call_from_thread_safe(self._update_widgets, {}, [], [])
             return
         except ConfigError as exc:
             # No last-good config was ever loaded (first-ever refresh hit a
             # malformed config.toml) — nothing valid to fall back to yet.
             self._capture_error("WorkspaceScreen.refresh", RepoError(str(exc)), title="config error")
-            self.app.call_from_thread(self._update_widgets, {}, [], [])
+            self._call_from_thread_safe(self._update_widgets, {}, [], [])
             return
 
         # Reconstruct FeatureEnvironmentWorktrees from the overviews for the
@@ -184,7 +186,7 @@ class WorkspaceScreen(KeybindingMixin, PluginActionMixin, Screen):
             for overview in data.overviews
         }
 
-        self.app.call_from_thread(
+        self._call_from_thread_safe(
             self._update_widgets,
             env_worktrees_map,
             data.overviews,

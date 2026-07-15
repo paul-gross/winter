@@ -20,6 +20,13 @@ Host requirements (a Textual `Screen` subclass provides all of these):
 
 from __future__ import annotations
 
+import concurrent.futures
+from collections.abc import Callable
+from typing import Any
+
+from textual.app import App
+from textual.worker import NoActiveWorker, get_current_worker
+
 from winter_cli.modules.tui.error_log import ErrorLogService
 from winter_cli.modules.workspace.models import RepoError
 from winter_cli.plugins.loader import PluginRegistry
@@ -30,20 +37,64 @@ class PluginActionMixin:
 
     _plugin_registry: PluginRegistry
     _error_log: ErrorLogService
+    app: App  # provided by the Textual `Screen` host (see module docstring)
+
+    def _worker_cancelled(self) -> bool:
+        """True if the calling refresh worker has been cancelled (e.g. by quit).
+
+        Lets a `@work(thread=True)` worker bail before starting — or between —
+        git operations so a quit that cancels workers is not held up by work
+        the user no longer wants. Outside a worker there is nothing to cancel.
+        """
+        try:
+            return get_current_worker().is_cancelled
+        except NoActiveWorker:
+            return False
+
+    def _call_from_thread_safe(self, callback: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Marshal a worker callback onto the UI thread; a no-op once tearing down.
+
+        Refresh runs in `@work(thread=True)` workers whose git probes can still be
+        mid-flight when the user quits. On quit the app cancels its workers and
+        tears down its event loop; a `call_from_thread` that lands after that
+        raises (the loop is gone) and — worse — blocks the worker on a UI
+        round-trip that never completes, which is what makes quit slow and
+        spews the trailing error burst. Skip the call when this worker has been
+        cancelled or the app has stopped running, and swallow the teardown-race
+        error if the app stops between the check and the call. A late callback
+        thus becomes a silent no-op instead of an error.
+        """
+        try:
+            if get_current_worker().is_cancelled:
+                return None
+        except NoActiveWorker:
+            # Called outside a worker (e.g. direct UI-thread path) — no
+            # cancellation to honor; fall through to the running-state guard.
+            pass
+        app = self.app
+        if not app.is_running:
+            return None
+        try:
+            return app.call_from_thread(callback, *args, **kwargs)
+        except (RuntimeError, concurrent.futures.CancelledError):
+            # App began tearing down between the is_running check and the call.
+            return None
 
     def _capture_error(self, location: str, exc: RepoError, *, title: str = "git error") -> None:
         """Log a RepoError to the session log and toast (deduped) without crashing.
 
         Called from refresh/detail worker threads, so the toast is marshaled onto
-        the UI thread via `call_from_thread`. `title` defaults to "git error" since
-        most captured RepoErrors originate from a git subcommand failure; callers
-        wrapping a non-git failure (e.g. a config-parse error reused via RepoError
-        to share this capture path) should pass a more accurate category.
+        the UI thread via `_call_from_thread_safe` (a no-op once the app is tearing
+        down, so a failure captured during quit never sprays an error). `title`
+        defaults to "git error" since most captured RepoErrors originate from a git
+        subcommand failure; callers wrapping a non-git failure (e.g. a config-parse
+        error reused via RepoError to share this capture path) should pass a more
+        accurate category.
         """
         entry, should_notify = self._error_log.record(location=location, exc=exc)
         if should_notify:
-            self.app.call_from_thread(  # type: ignore[attr-defined]
-                self.app.notify,  # type: ignore[attr-defined]
+            self._call_from_thread_safe(
+                self.app.notify,
                 f"{entry.message}\nPress L for log",
                 title=title,
                 severity="error",

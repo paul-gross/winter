@@ -96,7 +96,9 @@ class WorktreeDetailScreen(KeybindingMixin, PluginActionMixin, Screen):
 
     @work(thread=True)
     def _refresh_data(self) -> None:
-        self.app.call_from_thread(self._on_refresh_start)
+        self._call_from_thread_safe(self._on_refresh_start)
+        if self._worker_cancelled():
+            return
         worktree_repo_decorators = list(self._plugin_registry.worktree_repo_decorators)
         environment_decorators = list(self._plugin_registry.environment_decorators)
         try:
@@ -105,7 +107,7 @@ class WorktreeDetailScreen(KeybindingMixin, PluginActionMixin, Screen):
             env_worktrees = self._env_status_svc.get_feature_environment_worktrees(env, project_repos)
         except RepoError as exc:
             self._capture_error(f"WorktreeDetailScreen({self.worktree_name}).refresh", exc)
-            self.app.call_from_thread(self._on_refresh_finished)
+            self._call_from_thread_safe(self._on_refresh_finished)
             return
 
         def _on_repo_error(wt, exc):
@@ -132,9 +134,9 @@ class WorktreeDetailScreen(KeybindingMixin, PluginActionMixin, Screen):
             )
         except RepoError as exc:
             self._capture_error(f"WorktreeDetailScreen({self.worktree_name}).refresh", exc)
-            self.app.call_from_thread(self._on_refresh_finished)
+            self._call_from_thread_safe(self._on_refresh_finished)
             return
-        self.app.call_from_thread(self._update_widgets, env_status, repo_statuses)
+        self._call_from_thread_safe(self._update_widgets, env_status, repo_statuses)
 
     def _on_refresh_finished(self) -> None:
         with contextlib.suppress(Exception):
@@ -251,7 +253,7 @@ class WorktreeDetailScreen(KeybindingMixin, PluginActionMixin, Screen):
         # Panel rendering is pure and isolated, so it runs here in the worker
         # thread alongside the git read; the UI thread only applies the results.
         outcomes = render_detail_panels(self._detail_panels, DetailPanelContext(worktree=wt))
-        self.app.call_from_thread(self._update_repo_info, detail, outcomes)
+        self._call_from_thread_safe(self._update_repo_info, detail, outcomes)
 
     def _update_repo_info(self, detail: RepoStatusAndHistory, outcomes: list[PanelOutcome]) -> None:
         self._repo_detail = detail
