@@ -10,37 +10,167 @@ collisions.
 
 ## ✨ Features
 
-- **Polyrepo multi-worktree management** — Multiple project repos managed as one workspace. Each feature environment
-  contains a coordinated set of git worktrees across every repo, all on the same branch.
-- **Local ephemeral environments** — Each feature environment gets an isolated runtime: its own services, ports,
-  databases, and dependencies. Spin one up, hand it off between humans and agents, tear it down when you're done.
-- **Cross-repository agentic development** — Make sweeping changes across many repositories with
-  feature-environment-level git operations. Treat the worktree as the unit of work — branches, commits, and service
-  state stay aligned across every repo.
-- **Service orchestration built for agents** — One simple, uniform interface to manage services at either scope:
-  workspace-level shared singletons or per-feature-environment services within those local ephemeral environments — via
-  docker, tmux sessions, or BYO orchestration.
-- **Unified multi-repo CLI** — One `winter` command drives init, fetch, pull, push, status, and diff across every repo
-  in the workspace at once — no more looping the same git operation through N checkouts by hand.
-- **Resource provisioning** — Provisioning hooks set up and tear down resources across three layers — dependencies,
-  workspace-scoped resources, and feature-environment-scoped resources — as environments come and go.
-- **Separation of App, Harness, Workspace, and Workflow** — Four strictly separated components: your application code,
+The things a multi-repo workspace usually makes you do by hand — run the same git command in ten checkouts, wire up a
+new environment's ports and databases, start its services — are one winter command each. They're safe to re-run, and
+they print JSON. An agent does far better with one command that either works or says why it didn't than with twenty that
+can each go wrong.
+
+- **[Polyrepo git & worktrees](#-polyrepo-git--worktrees)** — many repos driven as one workspace, with git operations
+  that act on a whole feature environment at once.
+- **[Feature environments](#-feature-environments)** — isolated, disposable local runtimes so many agents work in
+  parallel with zero collisions.
+- **[Service orchestration](#-service-orchestration)** — one uniform interface to run each environment's services, via
+  docker, tmux, or your own provider.
+- **[Resource provisioning](#-resource-provisioning)** — a re-runnable dependency → resource → data lifecycle that
+  brings an environment to a working state.
+- **[Agent harness](#-agent-harness)** — bring your own harness. The same skills, agents, and context project into
+  Claude Code, Codex, and OpenCode, and none of them live in your application repos.
+- **[Extensibility](#-extensibility)** — extensions, pluggable capability slots, lifecycle hooks, and TUI plugins.
+- **[Diagnostics & conventions](#-diagnostics--conventions)** — a workspace that checks itself, so drift and broken
+  conventions surface as a failed probe rather than as a confusing agent failure an hour later.
+- **[Interfaces](#-interfaces)** — a CLI for agents, a TUI for humans, JSON everywhere, and editor integration.
+- **[Guided setup & updates](#-guided-setup--updates)** — agentic onboarding that configures the workspace, discovers
+  your services, and teaches you winter.
+
+### 🌲 Polyrepo git & worktrees
+
+- **One command across every repo** — `fetch`, `pull`, `push`, `merge`, `status`, `diff`, `reset`, and `clean` run over
+  every repo in a feature environment at once, no more looping the same git operation through N checkouts by hand
+  ([polyrepo git operations](https://paul-gross.github.io/winter-docs/operations/polyrepo-git/)).
+- **Coordinated worktrees** — each feature environment holds one git worktree per project repo, all on the branch named
+  after the environment; `connect`, `disconnect`, and `checkout` move the whole set together, all-or-nothing.
+- **Segment-aware targeting** — every multi-repo command takes `<env>/<repo>` glob patterns, so one invocation can hit
+  one repo, one environment, or every environment at once ([patterns](context/winter-cli/usage/ws/patterns.md)).
+- **Repository registry** — declare which repos the workspace tracks, and pin the ones that shouldn't follow your
+  feature branches to a fixed branch, tag, or commit ([repositories](context/winter-cli/configuration/repositories.md)).
+- **Safe cleanup** — `winter ws prune` removes disk state for repos no longer in config, refusing anything with
+  uncommitted changes or attached worktrees ([prune](context/winter-cli/usage/ws/prune.md)).
+
+### 🧊 Feature environments
+
+- **Local ephemeral environments** — each one gets an isolated runtime: its own services, ports, databases, and
+  dependencies. Spin one up, hand it off between humans and agents, tear it down when you're done
+  ([feature environments](https://paul-gross.github.io/winter-docs/operations/feature-environments/)).
+- **A defined lifecycle, one command per phase** — `winter ws init` (structural) → `winter provision` (readiness) →
+  `winter service up` (run) → `winter ws destroy` (teardown)
+  ([environment lifecycle](context/environment-lifecycle.md)).
+- **Configurable port allocation** — each environment gets a private port window keyed off its index
+  (`base_port + index * ports_per_env`). Shorthand names hold fixed indices; arbitrary names hash into the remaining
+  band, so nothing collides ([ports & environments](context/winter-cli/configuration/ports-and-environments.md)).
+- **Runtime environment variables** — services come up already knowing which environment they're in and which ports and
+  hosts they own, and one `source` line gets your own shell the same values ([env](context/winter-cli/usage/env.md)).
+- **Any name you like** — configurable shorthands (`alpha`, `beta`, …) or arbitrary names like `jira-123-feature`.
+
+### 🔧 Service orchestration
+
+- **One uniform interface** — `winter service up` / `down` / `status` / `restart` / `logs`, addressed with the same
+  `<env>/<service>` glob grammar as everything else
+  ([running services](https://paul-gross.github.io/winter-docs/operations/services/)).
+- **Two scopes** — workspace-level shared singletons and per-feature-environment services, in one command surface.
+- **Bring your own orchestrator** — tmux sessions, docker compose, or your own provider behind the same interface;
+  consumers depend on `winter service …` and never on the implementation
+  ([service orchestrator contract](context/winter-cli/contracts/service-orchestrator.md)).
+- **Multiple providers at once** — bind more than one provider (e.g. tmux *and* docker) and winter dispatches to each.
+- **Aggregated service manifest** — the workspace config and every installed extension contribute `[[service]]` entries,
+  merged into a single manifest handed to the provider.
+- **Health waits and log streaming** — `up --wait`/`--timeout` blocks until nothing reports unhealthy; `logs` supports
+  `-f`, `--since`, `-n`, and cross-environment aggregation.
+
+### 📦 Resource provisioning
+
+- **Three ordered stages** — `dependency` → `resource` → `data`: install dependencies, create databases and queues and
+  buckets, then load seed data ([provisioning](https://paul-gross.github.io/winter-docs/operations/provisioning/)).
+- **Three scopes** — handlers run at workspace, feature-environment, or feature-worktree scope, so shared resources and
+  per-environment resources are provisioned by the same mechanism.
+- **Re-runnable and reversible** — `--reset`, `--destroy`, and `--seed` per stage, `--name` to target a single declared
+  entry, and automatic teardown when an environment is destroyed.
+- **Contributed by extensions too** — an extension declares `[[provision.*]]` handlers in its manifest alongside the
+  workspace's own ([provision handlers](context/winter-cli/configuration/provision.md)).
+- **Gated and previewable** — `required_services` holds a handler until its service is up; `--dry-run` prints the plan
+  without running anything, and `--json` emits it as a stream.
+
+### 🤖 Agent harness
+
+- **Separation of app, harness, workspace, and workflow** — four strictly separated components: your application code,
   the harness (agent context), the workspace, and the agentic workflow that orchestrates the work. Each evolves
   independently. Let each developer bring their own workflow, or use specific workflows for cloud agent work.
-- **Cloud agent ready** — Supports cloud-based agent workflows through deterministic git operations, dependency
-  installation, service orchestration, and resource provisioning. Have your cloud agents run a full local ephemeral
-  environment for E2E testing.
-- **Pluggable capability interfaces** — Core winter capabilities are swappable slots, not hardwired. Pick the service
-  orchestrator, forge, and other providers that fit your stack, or implement your own against the interface.
-- **Winter extensions** — Drop an extension into the workspace to surface its `index.md` context into the workspace's
-  `AGENTS.md`/`CLAUDE.md`, contribute additional services and provisioned resources, and implement core winter
-  capability interfaces.
-- **Shared, versioned workspace** — The workspace is itself a git repo. Share it across the team. Clone it and the
+- **Cross-harness skills and agents** — the same skills and agents are projected into Claude Code, Codex, and OpenCode
+  on every `winter ws init`, reducing the vendor lock-in of per-tool skill marketplaces
+  ([extensions](context/winter-cli/configuration/extensions.md#what-gets-symlinked)).
+- **Model and effort retargeting** — `[agent_model_overrides]` and `[model_tiers]` point an installed agent at a
+  different model or reasoning effort workspace-wide, without editing its committed source
+  ([agent configuration](context/winter-cli/configuration/agents.md)).
+- **Budgeted context delivery** — each extension's context is surfaced into `AGENTS.md`/`CLAUDE.md` either *eagerly* (an
+  `@`-import every session pays for) or *lazily* (one routing line the agent follows only when relevant)
+  ([context delivery](context/winter-cli/configuration/extensions.md#context-delivery)).
+- **A place for generated artifacts** — `winter space <kind>` resolves where winter and its extensions write scores,
+  manifests, workflow documents, and logs, so a skill never hardcodes one harness's home directory
+  ([space](context/winter-cli/usage/space.md)).
+- **Cloud agent ready** — deterministic git operations, dependency installation, service orchestration, and resource
+  provisioning let your cloud agents run a full local ephemeral environment for E2E testing.
+
+### 🔌 Extensibility
+
+- **Winter extensions** — drop a repo carrying a `winter-ext.toml` into the workspace and it contributes skills, agents,
+  context, services, provision handlers, doctor probes, and lint checks — discovered and installed automatically
+  ([extensions](https://paul-gross.github.io/winter-docs/extensions/)).
+- **Pluggable capability interfaces** — core capabilities are swappable slots, not hardwired. Bind a provider
+  explicitly, or let a sole provider bind implicitly ([capabilities](context/winter-cli/configuration/capabilities.md)).
+- **Lifecycle hooks** — `on_env_init`, `on_env_destroy`, and `on_workspace_reconcile` fire at defined points with a
+  documented environment-variable contract ([hooks](context/winter-cli/configuration/extensions.md#extension-hooks)).
+- **Scaffold and verify** — `winter ext new` scaffolds an extension that conforms out of the box; `winter ext verify`
+  checks an existing one against the bundled capability spec ([ext](context/winter-cli/usage/ext.md)).
+- **TUI plugins** — a second, distinct extension point that decorates the *running tool*: status badges, full TUI
+  screens, keybound actions, and new `winter` subcommands
+  ([TUI plugins](https://paul-gross.github.io/winter-docs/tui-plugins/)).
+
+### 🩺 Diagnostics & conventions
+
+- **`winter doctor`** — preflight probes over workspace *materialization*: config parses, every declared repo and
+  worktree exists on the right branch, port invariants hold, the registry hasn't drifted, and skills and agents are
+  projected into every harness. Extensions contribute their own probes ([doctor](context/winter-cli/usage/doctor.md)).
+- **`winter lint`** — convention checks over workspace *content*: path notation, agent frontmatter, module boundaries. A
+  dispatcher, not a checker — core checks plus whatever each extension contributes, scoped to a repo, an environment, or
+  just your `--changed` files, exiting non-zero for CI and pre-push ([lint](context/winter-cli/usage/lint.md)).
+- **Targeted suppression** — `[lint.ignore]` silences a check on paths a given workspace or extension cannot fix,
+  without going quiet everywhere else.
+- **`winter graph`** — the module dependency graph as a human listing or a JSON adjacency map, consumable by lint checks
+  and tooling ([graph](context/winter-cli/usage/graph.md)).
+- **`winter capabilities`** — which extension fills each capability slot and how it got bound
+  ([capabilities](context/winter-cli/usage/capabilities.md)).
+
+### 💻 Interfaces
+
+- **Unified multi-repo CLI** — one `winter` command drives the entire surface. A thin installed wrapper auto-discovers
+  the workspace root and runs the CLI from within it, so your fork's customizations are picked up automatically
+  ([CLI reference](https://paul-gross.github.io/winter-docs/cli-reference/)).
+- **Workspace visualization** — a TUI dashboard shows a matrix of statuses across dozens of repositories at a glance, in
+  four layouts that auto-resolve to the workspace's shape, with live config reload, drill-down detail screens, and a log
+  tab that captures failures so you can inspect one without re-running the command
+  ([dashboard](context/winter-cli/usage/dashboard.md)).
+- **Remappable keybindings** — every dashboard action has a stable id you can rebind, including Neovim-style leader and
+  chord sequences ([keybindings](context/winter-cli/usage/dashboard.md#keybindings)).
+- **Machine-readable everywhere** — `--json` / NDJSON output on `status`, `doctor`, `lint`, `provision`, `service`,
+  `graph`, `capabilities`, and more: the stable contract agents and scripts consume instead of parsing tables.
+- **Editor integration** — `winter ws worktrees` feeds editor pickers, and
+  [winter-nvim](https://github.com/paul-gross/winter-nvim) drives the whole workspace from inside Neovim.
+
+### 🎓 Guided setup & updates
+
+- **`/ws-setup` — agentic onboarding** — an interactive walkthrough that stands the workspace up *and* teaches you
+  winter as it goes: declaring and cloning your project repos, setting git identity, **researching your applications to
+  discover their services, dependencies, ports, databases, and seed data**, authoring the service manifest for your
+  chosen orchestrator, creating your first feature environment, and recording your delivery conventions. Idempotent —
+  re-run it any time to reconfigure.
+- **`/ws-init` — the non-interactive counterpart** — applies declared config to the workspace, an environment, or a
+  single repo. It never *changes* config, so it is the safe "I just cloned this, make it work" path.
+- **`/ws-update` — framework updates** — fetches the `winter` remote and integrates upstream framework changes into your
+  workspace branch by rebase or merge, detecting which your workspace uses (see [Forking](#-forking)).
+- **Workspace skills** — `/ws`, `/ws-fetch`, `/ws-pull`, and `/ws-push` ship with the workspace and are projected into
+  every supported code harness, alongside skills you author yourself.
+- **Shared, versioned workspace** — the workspace is itself a git repo. Share it across the team. Clone it and the
   entire setup — agents, skills, services, planning conventions — comes with it. Use multiple varied workspaces for
   different perspectives of the same set of applications.
-- **Workspace visualization** — A TUI dashboard shows a matrix of statuses across dozens of repositories at a glance.
-  Decorator plugins let you surface your own data and add custom actions alongside it. Bring your own one-click diff
-  viewer to optimize your review flow.
 
 ## 🚀 Quick Start
 
@@ -61,11 +191,9 @@ winter init
 /ws-setup
 ```
 
-`/ws-setup` is an interactive walkthrough that connects your project repositories to the workspace: declaring and
-cloning them into `.winter/config.toml`, setting git identity, capturing per-repo setup commands and provisioning
-requirements (`project-setup.md`), authoring any installed extension's setup (e.g. service manifests for
-`winter-service-tmux`), creating your first feature environment, and recording delivery conventions (`contributing.md`).
-Idempotent — re-run it any time to reconfigure.
+`/ws-setup` is the interactive onboarding walkthrough described in [Guided setup & updates](#-guided-setup--updates)
+above — it connects your project repositories to the workspace and leaves you with a running feature environment.
+Idempotent: re-run it any time to reconfigure.
 
 As part of setup, `/ws-setup` re-points the remotes for you: the original origin becomes `winter` (your upstream for
 framework updates) and `origin` connects to your own repository. Later, `/ws-update` brings subsequent framework updates
@@ -159,20 +287,8 @@ upstream branch into your workspace branch by rebase or merge — detecting whic
 ## ⌨️ Winter CLI
 
 The workspace includes a CLI (for agent use) and a TUI dashboard (for human use) that together expose the full
-feature-environment surface across all project repos at once:
-
-- **Feature environments & worktrees** — create, inspect, sync (`fetch`/`pull`/`push`/`merge`), connect, check out, and
-  tear down feature environments and their per-repo worktrees
-- **Runtime environment** — print a scope's `WINTER_*` and env-band variables as shell-sourceable `export` lines
-  (`winter env <scope>`)
-- **Repositories** — add, remove, and list the repos the workspace tracks
-- **Service orchestration** — start, stop, restart, inspect, and tail the logs of a feature env's services
-- **Resource provisioning** — bring a fresh environment to a working state: install dependencies, create resources, load
-  seed data
-- **Status & health** — feature-environment status, `doctor` config-health probes, and `lint` checks against documented
-  conventions
-- **Introspection** — the module dependency `graph` and the `capabilities` map of which extension fills each slot
-- **Extensions** — verify an extension against a capability spec, or scaffold a new one
+feature-environment surface across all project repos at once — every capability in [Features](#-features) above is
+reachable from one `winter` command.
 
 ```bash
 # Install (one-time) — copies a thin wrapper to ~/.local/bin that
