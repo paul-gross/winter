@@ -34,6 +34,13 @@ The three built-in core checks are:
   are held to the tighter `injected_bytes` threshold; all other `.md` files in scope are checked against the looser
   `reference_bytes` threshold. Override thresholds in `.winter/config.toml` under `[core_checks.file_size]`.
 
+  Discovery consults the owning repo's git for every scope path that's a directory walk — a file the repo's `.gitignore`
+  already excludes (a vendored tree such as `.terraform/` after `terraform init`, say) never becomes a candidate, with
+  no `[lint.ignore]` rule required. A scope path that's already a single file, such as the `--changed` scope's, is taken
+  as given and never filtered this way. An untracked file that isn't ignored is unaffected and stays in scope. A scope
+  path outside any git repository — or one owned by an enclosing repo rather than itself — walks unfiltered beyond the
+  fixed prune list.
+
   Both thresholds are measured in **effective bytes**, not raw ones. The check is standing in for token cost, so the two
   kinds of formatting that inflate a markdown file without adding tokens are normalized away before measuring: every run
   of whitespace collapses to a single byte (349 spaces of table padding cost one), and every run of four or more of the
@@ -55,6 +62,11 @@ A repo installable in any winter workspace must lint clean in any winter workspa
 unresolvable content — a template tree, a fixture, recorded results — **declares that itself, in its own
 `winter-ext.toml`**, and ships clean everywhere it is installed. A workspace never declares exemptions on behalf of a
 repo it owns; that would leave the repo dirty in every other workspace.
+
+Only the **file-size** check (see [Built-in core checks](#built-in-core-checks)) consults git during discovery, so only
+a file it would otherwise flag can skip this declaration by being gitignored. Extractability, required-services, and
+every contributed script discover their own paths independently and never consult git — a gitignored tree that trips one
+of those still needs an explicit `[lint.ignore]` rule, the same as any other exempted content.
 
 ```toml
 name = "winter-benchmark"
@@ -129,6 +141,10 @@ An ignore that nobody can see is a way to hide rot, so:
   `winter-ext.toml` that will not parse. A typo that never becomes a rule is worse than a stale one — nothing about it
   is visible otherwise — so none of it is dropped silently. Every one of these failure modes suppresses **nothing**, so
   a broken ignore reveals findings rather than hiding them, and none of them fails the run or aborts it.
+
+**One case sits outside all of this:** the file-size check's gitignore-aware discovery (above) drops a candidate before
+any finding exists — there is nothing to count, re-print, or warn about. To see what a given path was dropped for, run
+`git check-ignore <path>` from within the owning repo.
 
 ### Where the filter lives
 

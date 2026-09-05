@@ -9,6 +9,8 @@ from winter_cli.config.models import FileSizeLintConfig
 from winter_cli.core.filesystem import IFilesystemReader
 from winter_cli.core.subprocess_runner import ISubprocessRunner
 from winter_cli.modules.lint.finding_parser import parse_lint_output
+from winter_cli.modules.lint.gitignore_repository import IGitIgnoreRepository
+from winter_cli.modules.lint.internal.gitignore_repository import GitIgnoreRepository
 from winter_cli.modules.lint.markdown_size import effective_bytes
 from winter_cli.modules.lint.models import LintCheckOutcome, LintFinding, LintScope, LintStatus
 from winter_cli.modules.lint.scope_env import WINTER_CLI_VAR, lint_scope_env
@@ -74,11 +76,21 @@ class FileSizeLintCheck:
     :mod:`winter_cli.modules.lint.markdown_size`).  Thresholds are therefore
     read as effective bytes, and a table-heavy doc is judged on its content
     rather than on the formatter's padding.
+
+    Directory-walk discovery consults the injected `IGitIgnoreRepository` to
+    drop candidates the owning repo already gitignores — this class owns no
+    git I/O itself; see `gitignore_repository.py` for that seam.
     """
 
-    def __init__(self, workspace_root: Path, config: FileSizeLintConfig) -> None:
+    def __init__(
+        self,
+        workspace_root: Path,
+        config: FileSizeLintConfig,
+        gitignore_repo: IGitIgnoreRepository,
+    ) -> None:
         self._workspace_root = workspace_root
         self._config = config
+        self._gitignore_repo = gitignore_repo
 
     # ── public API ───────────────────────────────────────────────────────────
 
@@ -169,6 +181,14 @@ class FileSizeLintCheck:
         return out
 
     def _collect_md_files(self, paths: list[Path]) -> list[Path]:
+        """Discover `.md` candidates under each scope path.
+
+        A path that's already a single file (the `--changed` scope's shape)
+        is taken as-is and never passed through gitignore filtering — there's
+        no directory walk to prune, and a scope built from individually-named
+        files is asking about those files specifically.  Only the directory-walk
+        branch below consults `IGitIgnoreRepository`.
+        """
         out: list[Path] = []
         seen: set[Path] = set()
         for p in paths:
@@ -179,15 +199,17 @@ class FileSizeLintCheck:
                         seen.add(r)
                         out.append(p)
                 continue
+            candidates: list[Path] = []
             for dirpath, dirnames, filenames in os.walk(p):
                 dirnames[:] = [d for d in dirnames if d not in _PRUNE_DIRS]
                 for name in filenames:
                     if name.endswith(".md"):
-                        f = Path(dirpath) / name
-                        r = f.resolve()
-                        if r not in seen:
-                            seen.add(r)
-                            out.append(f)
+                        candidates.append(Path(dirpath) / name)
+            for f in self._gitignore_repo.filter_ignored(p, candidates):
+                r = f.resolve()
+                if r not in seen:
+                    seen.add(r)
+                    out.append(f)
         return out
 
     def _relpath(self, file: Path) -> str:
@@ -243,6 +265,7 @@ class CoreLintService:
         self._file_size_check = FileSizeLintCheck(
             workspace_root,
             file_size_config if file_size_config is not None else FileSizeLintConfig(),
+            GitIgnoreRepository(subprocess_runner),
         )
 
     def run(self, scope: LintScope) -> list[LintCheckOutcome]:
