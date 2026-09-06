@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+import os
 import sys
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
@@ -18,7 +20,7 @@ from winter_cli.modules.lint.core_lint_service import (
     FileSizeLintCheck,
     default_extractability_script_path,
 )
-from winter_cli.modules.lint.internal.gitignore_repository import GitIgnoreRepository
+from winter_cli.modules.lint.internal.gitignore_repository import _BATCH_SIZE, GitIgnoreRepository
 from winter_cli.modules.lint.models import LintScope, LintScopeKind, LintStatus
 
 WORKSPACE_ROOT = Path("/ws")
@@ -49,6 +51,7 @@ def _build_service(
         subprocess_runner=runner,
         winter_cli_path="/usr/bin/winter",
         script_path=SCRIPT_PATH,
+        gitignore_repo=FakeGitIgnoreRepository(),
         file_size_config=file_size_config,
     )
     return svc, runner
@@ -164,9 +167,7 @@ def test_file_under_threshold_passes(tmp_ws: Path, fake_gitignore_repo: FakeGitI
     assert findings == []
 
 
-def test_injected_file_over_tighter_threshold_fails(
-    tmp_ws: Path, fake_gitignore_repo: FakeGitIgnoreRepository
-) -> None:
+def test_injected_file_over_tighter_threshold_fails(tmp_ws: Path, fake_gitignore_repo: FakeGitIgnoreRepository) -> None:
     """A file in the @import graph that exceeds the injected threshold is flagged."""
     # Create CLAUDE.md that @imports context/index.md
     claude_md = tmp_ws / "CLAUDE.md"
@@ -286,9 +287,7 @@ def test_agents_md_root_imports_are_injected(tmp_ws: Path, fake_gitignore_repo: 
     assert "injected" in injected_findings[0].message
 
 
-def test_agents_winter_md_root_imports_are_injected(
-    tmp_ws: Path, fake_gitignore_repo: FakeGitIgnoreRepository
-) -> None:
+def test_agents_winter_md_root_imports_are_injected(tmp_ws: Path, fake_gitignore_repo: FakeGitIgnoreRepository) -> None:
     """Files @imported from AGENTS.winter.md are included in the injected set."""
     agents_winter_md = tmp_ws / "AGENTS.winter.md"
     ext_index = tmp_ws / "ext" / "info.md"
@@ -344,10 +343,10 @@ def test_dedup_when_claude_md_shims_to_agents_md(tmp_ws: Path, fake_gitignore_re
 
 # ── gitignore-aware discovery ────────────────────────────────────────────────
 #
-# These tests back the import-site parsing of real `git check-ignore` output
-# with real I/O — the property `standards/testing.md` reserves real-I/O tests
-# for (an adapter whose correctness lives in parsing an external tool's
-# output), unlike the size-threshold tests above.
+# These tests exercise real `git check-ignore` output with real I/O, the case
+# `winter-context:/standards/testing.md` reserves real-I/O tests for: an
+# adapter whose correctness lives in parsing an external tool's output. The
+# size-threshold tests above are byte-counting, so they use a fake instead.
 
 
 def _init_git_repo(root: Path, runner: LocalSubprocessRunner) -> None:
@@ -424,6 +423,33 @@ def test_tracked_file_matching_ignore_pattern_still_checked(tmp_ws: Path, real_r
     assert "docs/tracked.md" in (findings[0].file or "")
 
 
+def test_undecodable_filename_fails_open_instead_of_aborting(tmp_ws: Path, real_runner: LocalSubprocessRunner) -> None:
+    """A gitignored file whose name isn't valid UTF-8 leaves the run intact.
+
+    Vendored third-party trees — the motivating case for ignoring at all —
+    are exactly where non-UTF-8 filenames turn up. `check-ignore` emits such
+    a name as raw bytes, so the whole run used to die on the decode. The
+    guarantee is fail-open, not match: the file keeps its finding rather than
+    taking every other check down with it.
+    """
+    _init_git_repo(tmp_ws, real_runner)
+    (tmp_ws / ".gitignore").write_text("vendor/**\n")
+
+    vendor = tmp_ws / "vendor"
+    vendor.mkdir()
+    undecodable = os.path.join(os.fsencode(str(vendor)), b"bad\xff.md")
+    with open(undecodable, "wb") as fh:
+        fh.write(b"x" * 7000)
+
+    check = FileSizeLintCheck(
+        tmp_ws, FileSizeLintConfig(injected_bytes=6000, reference_bytes=6000), GitIgnoreRepository(real_runner)
+    )
+    scope = LintScope(kind=LintScopeKind.all, label="all", paths=[tmp_ws])
+    findings = check.check(scope)
+
+    assert len(findings) == 1, f"Expected the undecodable path to stay in scope, not abort the check; got {findings}"
+
+
 def test_non_git_scope_path_falls_back_to_prune_dirs(tmp_ws: Path, real_runner: LocalSubprocessRunner) -> None:
     """A scope path outside any git repository still walks — falling back to
     `_PRUNE_DIRS`-only filtering rather than erroring."""
@@ -482,9 +508,9 @@ def test_ignore_rules_resolved_per_repo_not_per_workspace(tmp_ws: Path, real_run
 class _CountingSubprocessRunner:
     """Wraps a real `ISubprocessRunner`, counting `run` invocations.
 
-    Lets a test assert ignore resolution is batched — one `git check-ignore`
-    call per repo, not one per candidate file — without depending on the
-    exact argv order `os.walk` happens to produce.
+    Lets a test assert ignore resolution is batched — `check-ignore` calls
+    scale with `ceil(candidates / _BATCH_SIZE)`, not with the candidate count
+    — without depending on the exact argv order `os.walk` happens to produce.
     """
 
     def __init__(self, inner: ISubprocessRunner) -> None:
@@ -522,15 +548,24 @@ class _CountingSubprocessRunner:
         return self._inner.popen(cmd, cwd=cwd, env=env, shell=shell, merge_stderr=merge_stderr)
 
 
-def test_ignore_resolution_batched_per_repo_not_per_file(tmp_ws: Path, real_runner: LocalSubprocessRunner) -> None:
-    """Many candidate files under one repo still cost a single `check-ignore` call."""
+def test_ignore_resolution_cost_scales_with_batches_not_candidates(
+    tmp_ws: Path, real_runner: LocalSubprocessRunner
+) -> None:
+    """Candidate count drives batches, not calls.
+
+    Deliberately crosses `_BATCH_SIZE` so the assertion can tell chunked
+    resolution from one-call-per-repo *and* from one-call-per-file: a test
+    staying under a single batch passes either way, and would break the
+    moment `_BATCH_SIZE` was lowered.
+    """
     _init_git_repo(tmp_ws, real_runner)
     (tmp_ws / ".gitignore").write_text("ignored/**\n")
 
-    for i in range(5):
-        f = tmp_ws / "docs" / f"doc{i}.md"
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(f"# doc {i}\n")
+    candidate_count = _BATCH_SIZE + 5
+    docs = tmp_ws / "docs"
+    docs.mkdir()
+    for i in range(candidate_count - 1):
+        (docs / f"doc{i}.md").write_text(f"# doc {i}\n")
     ignored_dir = tmp_ws / "ignored"
     ignored_dir.mkdir()
     (ignored_dir / "vendor.md").write_text("# vendored\n")
@@ -545,4 +580,8 @@ def test_ignore_resolution_batched_per_repo_not_per_file(tmp_ws: Path, real_runn
     check.check(scope)
 
     check_ignore_calls = [c for c in counting.run_calls if "check-ignore" in c]
-    assert len(check_ignore_calls) == 1, f"Expected exactly one check-ignore call; got {check_ignore_calls}"
+    expected = math.ceil(candidate_count / _BATCH_SIZE)
+    assert len(check_ignore_calls) == expected, (
+        f"Expected {expected} check-ignore call(s) for {candidate_count} candidates "
+        f"at a batch size of {_BATCH_SIZE}; got {len(check_ignore_calls)}"
+    )

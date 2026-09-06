@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from winter_cli.core.subprocess_runner import ISubprocessRunner
 from winter_cli.modules.lint.gitignore_repository import IGitIgnoreRepository
+
+logger = logging.getLogger(__name__)
 
 # Batched per scope root rather than one `check-ignore` call per candidate, but
 # still chunked: a single call whose argv holds every candidate risks the OS
@@ -96,6 +99,10 @@ class GitIgnoreRepository:
         still quotes (a literal `"`, backslash, or control byte) is decoded
         via `_unquote_c_style`; a line that can't be decoded is dropped from
         consideration rather than guessed at, leaving its candidate in scope.
+        A filename that isn't valid UTF-8 at all reaches us with U+FFFD in
+        place of the offending bytes (`ISubprocessRunner` decodes leniently
+        so a vendored tree's odd filename can't abort the run), which matches
+        no candidate — so it too stays in scope.
         A batch whose `check-ignore` call itself fails (non-`0`/`1` exit)
         fails open for that batch only — its candidates stay unfiltered.
 
@@ -108,9 +115,16 @@ class GitIgnoreRepository:
         if not candidates:
             return candidates
         if not self._owns_root(scope_root):
+            logger.debug(
+                "%s is not its own git toplevel; leaving %d candidate(s) unfiltered", scope_root, len(candidates)
+            )
             return candidates
         ignored = self._resolve_ignored(scope_root, candidates)
-        return [c for c in candidates if str(c) not in ignored]
+        kept = [c for c in candidates if str(c) not in ignored]
+        logger.debug(
+            "%s: dropped %d of %d candidate(s) as gitignored", scope_root, len(candidates) - len(kept), len(candidates)
+        )
+        return kept
 
     def _owns_root(self, scope_root: Path) -> bool:
         result = self._subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=scope_root)
@@ -133,14 +147,26 @@ class GitIgnoreRepository:
                 cwd=scope_root,
             )
             if result.returncode not in (0, 1):
-                continue  # this batch's candidates stay unfiltered
+                # This batch's candidates stay unfiltered. WARNING, not DEBUG:
+                # the consequence is findings against files the repo told git
+                # to disregard, and this is the only place that names why.
+                logger.warning(
+                    "git check-ignore failed in %s (exit %d): %d candidate(s) left unfiltered: %s",
+                    scope_root,
+                    result.returncode,
+                    len(batch),
+                    result.stderr.strip(),
+                )
+                continue
             for line in result.stdout.splitlines():
                 if not line:
                     continue
                 if line.startswith('"'):
                     decoded = _unquote_c_style(line)
                     if decoded is None:
-                        continue  # unmappable — leave the corresponding candidate in scope
+                        # Unmappable — leave the corresponding candidate in scope.
+                        logger.debug("could not decode check-ignore output line %r in %s", line, scope_root)
+                        continue
                     ignored.add(decoded)
                 else:
                     ignored.add(line)

@@ -13,7 +13,9 @@ SCOPE_ROOT = Path("/ws/repo")
 _TOPLEVEL_CMD = "git rev-parse --show-toplevel"
 
 
-def _runner(*, toplevel: SubprocessResult, check_ignore: dict[str, SubprocessResult] | None = None) -> FakeSubprocessRunner:
+def _runner(
+    *, toplevel: SubprocessResult, check_ignore: dict[str, SubprocessResult] | None = None
+) -> FakeSubprocessRunner:
     responses = {_TOPLEVEL_CMD: toplevel}
     responses.update(check_ignore or {})
     return FakeSubprocessRunner(run_responses=responses)
@@ -103,7 +105,9 @@ def test_candidates_are_chunked_into_batches() -> None:
 
     assert result == candidates
     check_ignore_calls = [c for c in runner.run_calls if "check-ignore" in c[0]]
-    assert len(check_ignore_calls) == 3, f"Expected 1200 candidates to batch into 3 calls; got {len(check_ignore_calls)}"
+    assert len(check_ignore_calls) == 3, (
+        f"Expected 1200 candidates to batch into 3 calls; got {len(check_ignore_calls)}"
+    )
 
 
 def test_quoted_line_with_non_ascii_path_is_unquoted_and_matched() -> None:

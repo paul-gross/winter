@@ -10,7 +10,6 @@ from winter_cli.core.filesystem import IFilesystemReader
 from winter_cli.core.subprocess_runner import ISubprocessRunner
 from winter_cli.modules.lint.finding_parser import parse_lint_output
 from winter_cli.modules.lint.gitignore_repository import IGitIgnoreRepository
-from winter_cli.modules.lint.internal.gitignore_repository import GitIgnoreRepository
 from winter_cli.modules.lint.markdown_size import effective_bytes
 from winter_cli.modules.lint.models import LintCheckOutcome, LintFinding, LintScope, LintStatus
 from winter_cli.modules.lint.scope_env import WINTER_CLI_VAR, lint_scope_env
@@ -249,6 +248,7 @@ class CoreLintService:
         subprocess_runner: ISubprocessRunner,
         winter_cli_path: str,
         script_path: Path,
+        gitignore_repo: IGitIgnoreRepository,
         file_size_config: FileSizeLintConfig | None = None,
         orchestrator_resolver: object | None = None,
         catalog_service: ServiceCatalogService | None = None,
@@ -265,7 +265,7 @@ class CoreLintService:
         self._file_size_check = FileSizeLintCheck(
             workspace_root,
             file_size_config if file_size_config is not None else FileSizeLintConfig(),
-            GitIgnoreRepository(subprocess_runner),
+            gitignore_repo,
         )
 
     def run(self, scope: LintScope) -> list[LintCheckOutcome]:

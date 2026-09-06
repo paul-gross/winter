@@ -37,9 +37,14 @@ The three built-in core checks are:
   Discovery consults the owning repo's git for every scope path that's a directory walk — a file the repo's `.gitignore`
   already excludes (a vendored tree such as `.terraform/` after `terraform init`, say) never becomes a candidate, with
   no `[lint.ignore]` rule required. A scope path that's already a single file, such as the `--changed` scope's, is taken
-  as given and never filtered this way. An untracked file that isn't ignored is unaffected and stays in scope. A scope
-  path outside any git repository — or one owned by an enclosing repo rather than itself — walks unfiltered beyond the
-  fixed prune list.
+  as given and never filtered this way.
+
+  Only *untracked* ignored files are dropped. An untracked file that isn't ignored stays in scope, and so does a
+  **tracked** file that matches an ignore pattern — git applies ignore rules only to untracked paths, so committing a
+  file puts it back in scope whatever `.gitignore` says about it. The rule when anything is uncertain is that a
+  candidate stays in scope: a scope path outside any git repository, one owned by an enclosing repo rather than itself,
+  a git that can't be invoked or refuses the directory, and a failed ignore lookup all walk unfiltered beyond the fixed
+  prune list rather than dropping anything. Run `winter --verbose lint` to see which of these a run took.
 
   Both thresholds are measured in **effective bytes**, not raw ones. The check is standing in for token cost, so the two
   kinds of formatting that inflate a markdown file without adding tokens are normalized away before measuring: every run
@@ -63,10 +68,10 @@ unresolvable content — a template tree, a fixture, recorded results — **decl
 `winter-ext.toml`**, and ships clean everywhere it is installed. A workspace never declares exemptions on behalf of a
 repo it owns; that would leave the repo dirty in every other workspace.
 
-Only the **file-size** check (see [Built-in core checks](#built-in-core-checks)) consults git during discovery, so only
-a file it would otherwise flag can skip this declaration by being gitignored. Extractability, required-services, and
-every contributed script discover their own paths independently and never consult git — a gitignored tree that trips one
-of those still needs an explicit `[lint.ignore]` rule, the same as any other exempted content.
+Gitignored content skips this declaration for the **file-size** check alone (see
+[Built-in core checks](#built-in-core-checks)). Extractability, required-services, and every contributed script discover
+their own paths independently and never consult git — a gitignored tree that trips one of those still needs an explicit
+`[lint.ignore]` rule, the same as any other exempted content.
 
 ```toml
 name = "winter-benchmark"
@@ -143,8 +148,9 @@ An ignore that nobody can see is a way to hide rot, so:
   a broken ignore reveals findings rather than hiding them, and none of them fails the run or aborts it.
 
 **One case sits outside all of this:** the file-size check's gitignore-aware discovery (above) drops a candidate before
-any finding exists — there is nothing to count, re-print, or warn about. To see what a given path was dropped for, run
-`git check-ignore <path>` from within the owning repo.
+any finding exists — there is nothing to count, re-print, or warn about. To see which rule dropped a given path, run
+`git check-ignore -v <path>` from within the owning repo; `-v` names the pattern and the file it came from, where a bare
+`git check-ignore` only echoes back paths that are ignored.
 
 ### Where the filter lives
 

@@ -51,6 +51,15 @@ class LocalSubprocessRunner:
                 env=dict(env) if env is not None else None,
                 capture_output=True,
                 text=True,
+                # Decode leniently: a subprocess may emit bytes that aren't
+                # valid UTF-8 (git printing a filename from a vendored tree,
+                # say). Strict decoding would raise `UnicodeDecodeError` out
+                # of `run`, which `SubprocessResult` promises never happens —
+                # every caller inspects `returncode` and none is prepared for
+                # an exception from a successful command. An undecodable byte
+                # becomes U+FFFD, so a caller matching output against a path
+                # it holds simply fails to match rather than crashing.
+                errors="replace",
                 check=False,
             )
         except OSError as exc:

@@ -864,6 +864,14 @@ class Container(containers.DeclarativeContainer):
         _lazy("winter_cli.modules.lint.core_lint_service:default_extractability_script_path")
     )
 
+    # Gitignore-resolution seam for the file-size check's markdown discovery:
+    # confines `git check-ignore` so a repo's own ignored trees never become
+    # lint candidates.
+    lint_gitignore_repo = providers.Singleton(
+        _lazy("winter_cli.modules.lint.internal.gitignore_repository:GitIgnoreRepository"),
+        subprocess_runner=subprocess_runner,
+    )
+
     core_lint_svc = providers.Factory(
         _lazy("winter_cli.modules.lint.core_lint_service:CoreLintService"),
         workspace_root=workspace_config.provided.workspace_root,
@@ -871,6 +879,7 @@ class Container(containers.DeclarativeContainer):
         subprocess_runner=subprocess_runner,
         winter_cli_path=winter_cli_path,
         script_path=extractability_script_path,
+        gitignore_repo=lint_gitignore_repo,
         file_size_config=workspace_config.provided.file_size_lint,
         orchestrator_resolver=service_orchestrator_resolver,
         catalog_service=service_catalog_svc,

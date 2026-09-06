@@ -12,8 +12,10 @@ class SubprocessResult:
     """Outcome of a one-shot subprocess call.
 
     `stdout` and `stderr` are captured as strings; the runner is responsible
-    for decoding. `returncode` is the OS exit code (0 = success). The runner
-    never raises on non-zero exit — callers inspect `returncode`.
+    for decoding, and decodes leniently — an undecodable byte becomes U+FFFD
+    rather than raising, so a command that emits non-UTF-8 output yields a
+    result like any other. `returncode` is the OS exit code (0 = success). The
+    runner never raises on non-zero exit — callers inspect `returncode`.
     """
 
     returncode: int

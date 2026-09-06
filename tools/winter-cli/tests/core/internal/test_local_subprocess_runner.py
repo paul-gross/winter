@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -22,6 +23,7 @@ def test_run_passes_cmd_cwd_env_to_subprocess(monkeypatch: pytest.MonkeyPatch, t
         env={"K": "V"},
         capture_output=True,
         text=True,
+        errors="replace",
         check=False,
     )
     assert result.returncode == 0
@@ -41,6 +43,7 @@ def test_run_without_cwd_or_env_passes_none(monkeypatch: pytest.MonkeyPatch) -> 
         env=None,
         capture_output=True,
         text=True,
+        errors="replace",
         check=False,
     )
     assert result.returncode == 0
@@ -56,6 +59,21 @@ def test_run_returns_failure_result_when_oserror(monkeypatch: pytest.MonkeyPatch
     assert result.returncode == -1
     assert result.stdout == ""
     assert "no such file" in result.stderr
+
+
+def test_run_decodes_non_utf8_output_instead_of_raising() -> None:
+    """Output that isn't valid UTF-8 comes back as a result, not an exception.
+
+    Real subprocess, no mock: the decode happens inside `subprocess.run`, so
+    a fake `subprocess` module would assert nothing. Callers inspect
+    `returncode` and are not prepared for `UnicodeDecodeError` from a command
+    that succeeded — `git check-ignore` printing a filename from a vendored
+    tree is the case that surfaced it.
+    """
+    result = LocalSubprocessRunner.run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'a\\xffb')"])
+
+    assert result.returncode == 0
+    assert "\ufffd" in result.stdout
 
 
 def test_call_inherits_stdio_and_returns_exit_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
