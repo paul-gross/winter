@@ -74,6 +74,16 @@ winter ws push --include-pinned            # all envs, pinned and non-pinned
 winter ws push --all                       # all envs' non-pinned worktrees + standalone
 ```
 
+### Restack a chain, then publish
+
+```bash
+winter ws restack env2 master --dry-run --json     # preview the plan first
+winter ws restack env2 master                      # rebase env2 onto the rewritten master
+```
+
+See [restack.md § Publishing a restacked env](./usage/ws/restack.md#publishing-a-restacked-env) for why `ws push` won't
+publish this and what to run instead.
+
 ### Update everything from remotes (refs + source-checkout mains)
 
 ```bash

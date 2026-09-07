@@ -113,6 +113,14 @@ winter ws diff alpha/winter        # in place of: winter ws diff alpha --repo wi
 A glob or multiple `PATTERNS` that resolve to more than one env produce concatenated per-repo diff sections, one bold
 env header per env; a single matched env renders with no env header.
 
+## `winter ws restack` — ordered literal chain, not `PATTERNS`
+
+`restack` is the declared exception to every grammar above: its positionals are an **ordered chain** — top of stack
+first, descending, base last — not a target set, so each is a **literal env name**, never a glob. Pattern expansion has
+no defined internal order, and restack's order is semantic (which env rebases onto which); a glob here would silently
+decide that order rather than let the operator state it. See [`restack`](./restack.md) for the full argument, boundary,
+and refusal contract.
+
 ## `winter provision` / `winter clean` / `winter ws destroy` — env-level patterns
 
 `provision`, `clean`, and `destroy` operate on whole feature environments, not `<env>/<repo>` worktrees, so their

@@ -610,6 +610,107 @@ class ReadRepoRepository:
         except git.GitCommandError:
             return False
 
+    def get_ref_tip(self, worktree: FeatureWorktree, ref: str) -> str | None:
+        """Full sha `ref` resolves to in the worktree's local object store, or
+        None when it doesn't resolve there. No network, never raises — a
+        missing worktree (unprovisioned, or removed on disk) reads the same
+        as a ref absent from a present one, since both mean "nothing to
+        report" for a caller deciding whether `ref` participates.
+        """
+        if not worktree.path.exists():
+            return None
+        try:
+            with git.Repo(str(worktree.path)) as r:
+                try:
+                    return r.git.rev_parse("--verify", "--quiet", ref)
+                except git.GitCommandError:
+                    return None
+        except (git.InvalidGitRepositoryError, git.NoSuchPathError):
+            return None
+
+    def is_ancestor(self, worktree: FeatureWorktree, ancestor_ref: str, ref: str) -> bool:
+        """Whether `ancestor_ref` is reachable from `ref` — true also when the
+        two resolve to the same commit, false for a sibling tip. `git
+        merge-base --is-ancestor`, no network, never raises: an
+        unresolvable ref reads as "not an ancestor" rather than an error,
+        matching every other yes/no git probe in this class.
+        """
+        if not worktree.path.exists():
+            return False
+        try:
+            with git.Repo(str(worktree.path)) as r:
+                try:
+                    r.git.merge_base("--is-ancestor", ancestor_ref, ref)
+                    return True
+                except git.GitCommandError:
+                    return False
+        except (git.InvalidGitRepositoryError, git.NoSuchPathError):
+            return False
+
+    def fork_point(self, worktree: FeatureWorktree, lower_ref: str, upper_ref: str) -> str | None:
+        """Where `upper_ref` forked from `lower_ref`, read from `lower_ref`'s
+        reflog — `git merge-base --fork-point <lower_ref> <upper_ref>`.
+
+        The reflog remembers where `lower_ref` used to point even after a
+        local rewrite (amend, squash, force-move) erases that commit from
+        the graph, which is what makes this survive the rewrites this probe
+        exists for. Returns None when no reflog entry qualifies — git exits
+        non-zero with empty output in that case — never a wrong-but-plausible
+        sha, and never raises.
+        """
+        if not worktree.path.exists():
+            return None
+        try:
+            with git.Repo(str(worktree.path)) as r:
+                try:
+                    out = r.git.merge_base("--fork-point", lower_ref, upper_ref)
+                except git.GitCommandError:
+                    return None
+                return out.strip() or None
+        except (git.InvalidGitRepositoryError, git.NoSuchPathError):
+            return None
+
+    def is_rebase_in_progress(self, worktree: FeatureWorktree) -> bool:
+        """Whether the worktree is currently stopped mid-rebase.
+
+        Checked via the on-disk state directories git itself keeps for a
+        rebase in progress — `rebase-merge` (the default backend since git
+        2.26) and `rebase-apply` (the older one) — not `git status`, which
+        carries no reliable porcelain field for this. No network; a missing
+        worktree reads False.
+        """
+        if not worktree.path.exists():
+            return False
+        try:
+            with git.Repo(str(worktree.path)) as r:
+                for marker in ("rebase-merge", "rebase-apply"):
+                    path = self._git_path(r, marker)
+                    if path is not None and path.exists():
+                        return True
+                return False
+        except (git.InvalidGitRepositoryError, git.NoSuchPathError):
+            return False
+
+    @staticmethod
+    def _git_path(r: git.Repo, relative: str) -> Path | None:
+        """Resolve `relative` under the worktree's *own* git-dir.
+
+        `git rev-parse --git-path <relative>` resolves correctly for a
+        linked worktree (`.git/worktrees/<name>/<relative>`), unlike
+        constructing the path from `r.git_dir` by hand. Used both for the
+        rebase-in-progress probe above and for reading a stopped rebase's
+        conflict detail (`WriteRepoRepository._read_rebase_conflict`).
+        """
+        try:
+            raw = r.git.rev_parse("--git-path", relative)
+        except git.GitCommandError:
+            return None
+        path = Path(raw)
+        if path.is_absolute():
+            return path
+        working_dir = r.working_dir
+        return (Path(working_dir) if working_dir else Path.cwd()) / path
+
     def _read_tip_subject(self, r: git.Repo, ahead: int) -> str | None:
         # The minimal probe for `ws status`'s `last_commit_subject`. Preserves
         # the pre-refactor semantics — `recent_commits[0].message` from the

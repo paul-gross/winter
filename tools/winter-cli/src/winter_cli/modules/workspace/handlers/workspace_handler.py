@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import dataclasses
-import enum
 import json
 import sys
 from typing import Any
@@ -17,6 +16,8 @@ from winter_cli.modules.workspace.env_index import resolve_env_index
 from winter_cli.modules.workspace.env_index_registry import IEnvIndexRegistry
 from winter_cli.modules.workspace.env_reset_service import EnvResetService
 from winter_cli.modules.workspace.env_status_service import EnvStatusService
+from winter_cli.modules.workspace.handlers.json_render import echo_json as _echo_json
+from winter_cli.modules.workspace.handlers.json_render import to_dict as _to_dict
 from winter_cli.modules.workspace.models import (
     CheckoutResult,
     CleanReport,
@@ -1502,22 +1503,6 @@ def _format_worktree_status(loc: WorktreeLocation) -> str:
     if dirty:
         parts.append(f"[+{dirty}]")
     return " ".join(parts) if parts else "="
-
-
-def _to_dict(obj: Any) -> Any:
-    if isinstance(obj, enum.Enum):
-        return obj.value
-    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        return {k: _to_dict(v) for k, v in dataclasses.asdict(obj).items()}
-    if isinstance(obj, list):
-        return [_to_dict(i) for i in obj]
-    if isinstance(obj, dict):
-        return {k: _to_dict(v) for k, v in obj.items()}
-    return obj
-
-
-def _echo_json(data: Any) -> None:
-    click.echo(json.dumps(data, default=str, indent=2))
 
 
 def _reset_ndjson_lines(report: ResetReport) -> list[str]:

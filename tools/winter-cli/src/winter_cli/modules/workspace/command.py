@@ -24,10 +24,11 @@ from winter_cli.modules.workspace.handlers import (
     RepoAddParams,
     RepoListParams,
     RepoRemoveParams,
+    RestackParams,
     WorkspacePruneParams,
 )
 from winter_cli.modules.workspace.models import DiffMode, MergeMode, PinnedScope, PullMode, RepoScope, ResetMode
-from winter_cli.modules.workspace.pattern_match import validate_bare_name_pattern, validate_env_pattern
+from winter_cli.modules.workspace.pattern_match import has_glob, validate_bare_name_pattern, validate_env_pattern
 
 
 def _resolve_scope(standalone: bool, all_flag: bool) -> RepoScope:
@@ -98,6 +99,23 @@ def _validate_pattern(pattern: str) -> None:
         raise click.ClickException("Empty pattern is not allowed")
     if pattern.count("/") > 1:
         raise click.ClickException(f"Invalid pattern '{pattern}' — expected <env>/<repo> (one '/' max)")
+
+
+def _validate_restack_element(element: str) -> None:
+    """Reject a restack chain element that isn't a literal env name.
+
+    Unlike every other `ws` command's PATTERNS, a restack chain is an
+    ordered sequence — left onto right — not a target set, so glob
+    expansion (whose result order is undefined) would silently decide which
+    env is rebased onto which. `/`-qualified is equally meaningless here:
+    restack has no `<env>/<repo>` scoping.
+    """
+    if not element:
+        raise click.ClickException("Empty chain element is not allowed")
+    if has_glob(element):
+        raise click.ClickException(f"Invalid chain element '{element}' — restack takes literal env names, not globs")
+    if "/" in element:
+        raise click.ClickException(f"Invalid chain element '{element}' — restack has no '<env>/<repo>' scoping")
 
 
 @click.group("ws")
@@ -581,6 +599,85 @@ def ws_clean(
         EnvCleanParams(
             patterns=list(patterns),
             force=force,
+            dry_run=dry_run,
+            output_json=output_json,
+        )
+    )
+
+
+@ws_group.command("restack")
+@click.argument("args", nargs=-1, required=True, metavar="ENV... BASE")
+@click.option(
+    "--cut",
+    "cut",
+    default=None,
+    help="Boundary for the bottom-most link when ancestry to BASE was severed (e.g. a squash-landed predecessor).",
+)
+@click.option(
+    "--dry-run",
+    "dry_run",
+    is_flag=True,
+    default=False,
+    help="Print the plan — links, boundaries, and participating repos — and rebase nothing.",
+)
+@click.option("--json", "output_json", is_flag=True, default=False, help="Output as a single JSON document.")
+@click.pass_context
+def ws_restack(
+    ctx: click.Context,
+    args: tuple[str, ...],
+    cut: str | None,
+    dry_run: bool,
+    output_json: bool,
+):
+    """Restack a chain of feature environments onto BASE after a low rewrite.
+
+    ENV... names a live stack, top of stack first, descending; BASE is the
+    trailing positional every link ultimately rebases onto. Every adjacent
+    pair is one link — the left env rebased onto the right, its predecessor
+    — so `winter ws restack env3 env2 master` declares two links: env3 onto
+    env2, and env2 onto master. Links execute base-ward first (the bottom
+    link before the one above it) so each env replays onto its
+    predecessor's already-restacked tip.
+
+    \b
+      winter ws restack env2 master                    # one link
+      winter ws restack env3 env2 master                # two links, base-ward
+      winter ws restack env2 master --cut old-env       # bottom link's boundary is old-env's tip
+      winter ws restack env3 env2 master --dry-run      # preview only, no changes made
+      winter ws restack env3 env2 master --json
+
+    Every ENV is a literal env name — never a glob, and never `<env>/<repo>`
+    scoped: order is semantic, and pattern expansion has no defined order to
+    preserve it. Only BASE and `--cut` may be arbitrary refs, resolved per
+    repo, including `{main}`-style tokens.
+
+    Each link's boundary is derived from git before anything moves (`git
+    merge-base --fork-point`) and reported with its provenance. A link with
+    no fork point refuses the whole run; recourse is `--cut` for the
+    bottom-most link, otherwise raw git. Every other refusal — a dirty
+    worktree, one already mid-rebase, a detached or parked HEAD, a repeated
+    or inverted chain element — is pre-flight and all-or-nothing: no link
+    executes anywhere until every one clears.
+
+    A conflict stops the run and leaves that repo mid-rebase; resolve it and
+    run `git rebase --continue` there, then re-run this same command with
+    the same `--cut` to continue — a completed link reports `up-to-date` and
+    the run picks back up from where it stopped.
+    """
+    if len(args) < 2:
+        raise click.ClickException("restack requires at least one ENV and a trailing BASE")
+    *chain, base = args
+    for element in chain:
+        _validate_restack_element(element)
+    if not base:
+        raise click.ClickException("Empty BASE is not allowed")
+    container = cli_ctx(ctx).container
+    handler = container.restack_handler()
+    handler.run(
+        RestackParams(
+            chain=list(chain),
+            base=base,
+            cut=cut,
             dry_run=dry_run,
             output_json=output_json,
         )

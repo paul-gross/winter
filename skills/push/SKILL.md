@@ -123,6 +123,10 @@ A non-pinned worktree with no upstream is reported per-repo as `no upstream — 
 individually, not an env-wide group skip), while its connected siblings still push. Run
 `winter ws connect <name> <feature-branch>` for the unconnected repo, then retry.
 
+**After a `winter ws restack`**, a rebased worktree's push is rejected as non-fast-forward — `winter ws push` never
+force-pushes and carries no force option at all. Recourse is a raw `git push --force` per repo, not a `push` flag; see
+[workspace:/context/winter-cli/usage/ws/restack.md § Publishing a restacked env](workspace:/context/winter-cli/usage/ws/restack.md#publishing-a-restacked-env).
+
 ## Report
 
 Output a concise summary based on what `winter ws push` printed. For workspace and standalone targets, report the raw
@@ -137,6 +141,7 @@ For a feature environment, include a per-repo line — what each repo did (pushe
 - repo-b: nothing to push
 - repo-c: failed (no upstream — run winter ws connect first)
 - repo-d: skipped (pinned — needs --include-pinned/--only-pinned)
+- repo-e: rejected (non-fast-forward after a restack — push raw git with --force)
 ```
 
 If `winter ws push` prints a `! <name>: N pinned repo(s) with commits skipped` line, don't relay it as a passive

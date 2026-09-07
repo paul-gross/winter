@@ -17,6 +17,8 @@ from winter_cli.modules.workspace.models import (
     PartialCleanError,
     ProjectRepository,
     PullMode,
+    RebaseConflict,
+    RebaseOntoResult,
     RepoError,
     RepoMergeOutcome,
     RepoSyncOutcome,
@@ -345,6 +347,62 @@ class WriteRepoRepository(ReadRepoRepository):
                     message=f"reset failed for {worktree.repository.name}",
                     cwd=worktree.path,
                 ) from exc
+
+    def rebase_onto(self, worktree: FeatureWorktree, newbase: str, oldbase: str, branch: str) -> RebaseOntoResult:
+        """`git rebase --onto <newbase> <oldbase> <branch>` — replay `branch`'s
+        own commits past `oldbase` onto `newbase`, checking `branch` out as a
+        side effect (git's own behavior when a branch argument is given).
+
+        Deliberately never aborts on conflict — the opposite postcondition
+        from `_ff_or_rebase` below, which `ws pull --rebase` depends on. A
+        conflict here leaves the worktree mid-rebase and returns the detail,
+        regardless of which rebase backend (`rebase.backend` — merge or
+        apply) actually ran; an unexpected failure that isn't a
+        conflict-stop under either backend's on-disk state still raises,
+        same as every other write op.
+        """
+        with git.Repo(str(worktree.path)) as r:
+            try:
+                r.git.rebase("--onto", newbase, oldbase, branch)
+            except git.GitCommandError as exc:
+                conflict = self._read_rebase_conflict(r)
+                if conflict is None:
+                    raise self._error_factory.from_git(
+                        exc,
+                        message=f"rebase_onto failed for {worktree.repository.name}",
+                        cwd=worktree.path,
+                    ) from exc
+                return RebaseOntoResult(conflict=conflict)
+            return RebaseOntoResult()
+
+    def _read_rebase_conflict(self, r: git.Repo) -> RebaseConflict | None:
+        """The detail of a rebase git just stopped mid-way through, or None
+        when the worktree isn't actually left mid-rebase at all — i.e. the
+        failure `rebase_onto` caught wasn't a conflict-stop, and the caller
+        should raise instead of reporting a conflict that never happened.
+
+        `git rebase --onto` runs under whichever backend `rebase.backend`
+        selects — the merge backend (default since git 2.26) leaves its
+        state under `rebase-merge/`, the older apply backend under
+        `rebase-apply/` — the same two directories `is_rebase_in_progress`
+        already probes to answer "mid rebase?" honestly; the two checks
+        have to agree on what that means, so this probes both in the same
+        way rather than assuming the merge backend alone. Each backend
+        records the commit it was replaying when it stopped under its own
+        directory, by a different name — `stopped-sha` for the merge
+        backend, `original-commit` for the apply backend — so both are
+        checked, in order, and whichever one is actually present on disk
+        supplies `replayed_commit`. Conflicted paths come from the unmerged
+        entries `git diff` itself reports, not from parsing `git status`,
+        which is already backend-agnostic.
+        """
+        for relative in ("rebase-merge/stopped-sha", "rebase-apply/original-commit"):
+            replayed_commit_path = self._git_path(r, relative)
+            if replayed_commit_path is not None and replayed_commit_path.exists():
+                replayed_commit = replayed_commit_path.read_text().strip()
+                conflicted_paths = [p for p in r.git.diff("--name-only", "--diff-filter=U").splitlines() if p]
+                return RebaseConflict(replayed_commit=replayed_commit, conflicted_paths=conflicted_paths)
+        return None
 
     def list_untracked(self, worktree: FeatureWorktree) -> list[str]:
         """Worktree-relative paths `clean_untracked` would remove. No network.

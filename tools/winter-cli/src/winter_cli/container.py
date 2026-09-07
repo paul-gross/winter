@@ -33,6 +33,8 @@ from winter_cli.modules.workspace.drift import DriftWarningService
 from winter_cli.modules.workspace.env_checkout_service import EnvCheckoutService
 from winter_cli.modules.workspace.env_clean_service import EnvCleanService
 from winter_cli.modules.workspace.env_reset_service import EnvResetService
+from winter_cli.modules.workspace.env_restack_plan_service import EnvRestackPlanService
+from winter_cli.modules.workspace.env_restack_service import EnvRestackService
 from winter_cli.modules.workspace.env_status_service import EnvStatusService
 from winter_cli.modules.workspace.extension_agentsmd_service import ExtensionAgentsMdService
 from winter_cli.modules.workspace.extension_exclude_service import ExtensionExcludeService
@@ -43,6 +45,7 @@ from winter_cli.modules.workspace.fetch_reporter import JsonFetchReporter, Strea
 from winter_cli.modules.workspace.handlers.destroy_handler import DestroyHandler
 from winter_cli.modules.workspace.handlers.init_handler import InitHandler
 from winter_cli.modules.workspace.handlers.repo_handler import RepoHandler
+from winter_cli.modules.workspace.handlers.restack_handler import RestackHandler
 from winter_cli.modules.workspace.handlers.workspace_handler import WorkspaceHandler
 from winter_cli.modules.workspace.init_reporter import JsonReporter, StreamReporter
 from winter_cli.modules.workspace.init_service import InitService
@@ -277,6 +280,16 @@ class Container(containers.DeclarativeContainer):
         repo_repo=repo_repo,
     )
 
+    env_restack_plan_svc = providers.Factory(
+        EnvRestackPlanService,
+        repo_repo=repo_repo,
+    )
+
+    env_restack_svc = providers.Factory(
+        EnvRestackService,
+        repo_repo=repo_repo,
+    )
+
     extension_manifest_loader = providers.Singleton(
         ExtensionManifestLoader,
         config_file_reader=config_file_reader,
@@ -490,6 +503,15 @@ class Container(containers.DeclarativeContainer):
         InitHandler,
         init_service=init_svc,
         reporter_factory=reporter_factory,
+    )
+
+    restack_handler = providers.Factory(
+        RestackHandler,
+        plan_svc=env_restack_plan_svc,
+        execute_svc=env_restack_svc,
+        repo_factory=repo_factory,
+        workspace=workspace,
+        cli_output_svc=cli_output_svc,
     )
 
     # ── capability spec loader: machine-readable contracts (cold path) ──────

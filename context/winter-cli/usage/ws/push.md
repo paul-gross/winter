@@ -20,6 +20,10 @@ integrate deliberately, and a dirty checkout is never force-advanced. The result
 `<branch> +N` for each repo advanced, or `<branch> skipped (<reason>)` when an applicable ff was declined. Each repo is
 evaluated independently: in a multi-repo env, only the repos whose local branch was in sync are advanced.
 
+**After a [`winter ws restack`](./restack.md)**, this command rejects the rebased branch as non-fast-forward — `push`
+never force-pushes. Publish a restacked env with raw git per repo instead; see
+[restack.md § Publishing a restacked env](./restack.md#publishing-a-restacked-env).
+
 `push` excludes pinned worktrees by default because pinned repos track the main branch and aren't part of the
 feature-push flow. Use `--include-pinned` when you've landed commits on a pinned repo's main branch and want to ship
 them, or `--only-pinned` to ship just those without touching feature branches.

@@ -6,6 +6,7 @@ from winter_cli.modules.workspace.handlers.repo_handler import (
     RepoListParams,
     RepoRemoveParams,
 )
+from winter_cli.modules.workspace.handlers.restack_handler import RestackHandler, RestackParams
 from winter_cli.modules.workspace.handlers.workspace_handler import (
     EnvCheckoutParams,
     EnvCleanParams,
@@ -50,6 +51,8 @@ __all__ = [
     "RepoHandler",
     "RepoListParams",
     "RepoRemoveParams",
+    "RestackHandler",
+    "RestackParams",
     "WorkspaceHandler",
     "WorkspacePruneParams",
 ]

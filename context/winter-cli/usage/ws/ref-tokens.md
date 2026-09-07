@@ -39,3 +39,4 @@ command examples and the token itself. A behavior description that isn't giving 
 - [`winter ws merge SOURCE_REF`](./merge.md)
 - [`winter ws checkout ENV FEATURE_BRANCH`](./checkout.md)
 - [`winter ws reset PATTERNS... REF`](./reset.md)
+- [`winter ws restack ENV... BASE`](./restack.md), and its `--cut ENV_OR_REF` option

@@ -4,6 +4,8 @@ from winter_cli.container import Container
 from winter_cli.modules.workspace.agent_install import ExtensionAgentService
 from winter_cli.modules.workspace.drift import DriftWarningService
 from winter_cli.modules.workspace.env_checkout_service import EnvCheckoutService
+from winter_cli.modules.workspace.env_restack_plan_service import EnvRestackPlanService
+from winter_cli.modules.workspace.env_restack_service import EnvRestackService
 from winter_cli.modules.workspace.env_status_service import EnvStatusService
 from winter_cli.modules.workspace.extension_agentsmd_service import ExtensionAgentsMdService
 from winter_cli.modules.workspace.extension_exclude_service import ExtensionExcludeService
@@ -57,3 +59,13 @@ def test_container_resolves_capabilities_handler(container: Container) -> None:
     from winter_cli.modules.capability.handler import CapabilitiesHandler
 
     assert isinstance(container.capabilities_handler(), CapabilitiesHandler)
+
+
+def test_container_resolves_restack_providers(container: Container) -> None:
+    """The `winter ws restack` dispatch chain wires end-to-end: both services
+    and the handler that composes them resolve through the full DI graph."""
+    from winter_cli.modules.workspace.handlers.restack_handler import RestackHandler
+
+    assert isinstance(container.env_restack_plan_svc(), EnvRestackPlanService)
+    assert isinstance(container.env_restack_svc(), EnvRestackService)
+    assert isinstance(container.restack_handler(), RestackHandler)
