@@ -605,11 +605,86 @@ def test_reset_neither_str_nor_list_fail() -> None:
     assert "reset" in r.message
 
 
+# ── clean field: optional, same validation ────────────────────────────────────
+
+
+def test_clean_absent_ok() -> None:
+    raw = {"dependency": [{"scope": "feature-worktree", "apply": "echo hello"}]}
+    config = _build_config(provision_raw=raw)
+    svc, _repo = _build_service(config)
+    results = svc.run([])
+    assert len(results) == 1
+    assert results[0].status == ProbeStatus.pass_
+
+
+def test_clean_string_ok() -> None:
+    raw = {"resource": [{"scope": "workspace", "apply": "echo apply", "clean": "echo clean"}]}
+    config = _build_config(provision_raw=raw)
+    svc, _repo = _build_service(config)
+    results = svc.run([])
+    assert len(results) == 1
+    assert results[0].status == ProbeStatus.pass_
+
+
+def test_clean_list_ok() -> None:
+    raw = {"resource": [{"scope": "workspace", "apply": "echo apply", "clean": ["echo a", "echo b"]}]}
+    config = _build_config(provision_raw=raw)
+    svc, _repo = _build_service(config)
+    results = svc.run([])
+    assert len(results) == 1
+    assert results[0].status == ProbeStatus.pass_
+
+
+def test_clean_empty_string_fail() -> None:
+    raw = {"resource": [{"scope": "workspace", "apply": "echo apply", "clean": ""}]}
+    config = _build_config(provision_raw=raw)
+    svc, _repo = _build_service(config)
+    results = svc.run([])
+    assert len(results) == 1
+    r = results[0]
+    assert r.status == ProbeStatus.fail
+    assert "clean" in r.message
+
+
+def test_clean_empty_list_fail() -> None:
+    raw = {"resource": [{"scope": "workspace", "apply": "echo apply", "clean": []}]}
+    config = _build_config(provision_raw=raw)
+    svc, _repo = _build_service(config)
+    results = svc.run([])
+    assert len(results) == 1
+    r = results[0]
+    assert r.status == ProbeStatus.fail
+    assert "clean" in r.message
+    assert "empty list" in r.message
+
+
+def test_clean_non_string_element_fail() -> None:
+    raw = {"resource": [{"scope": "workspace", "apply": "echo apply", "clean": ["ok", None]}]}
+    config = _build_config(provision_raw=raw)
+    svc, _repo = _build_service(config)
+    results = svc.run([])
+    assert len(results) == 1
+    r = results[0]
+    assert r.status == ProbeStatus.fail
+    assert "clean" in r.message
+
+
+def test_clean_neither_str_nor_list_fail() -> None:
+    raw = {"resource": [{"scope": "workspace", "apply": "echo apply", "clean": 99}]}
+    config = _build_config(provision_raw=raw)
+    svc, _repo = _build_service(config)
+    results = svc.run([])
+    assert len(results) == 1
+    r = results[0]
+    assert r.status == ProbeStatus.fail
+    assert "clean" in r.message
+
+
 # ── multi-field well-formed manifest ─────────────────────────────────────────
 
 
 def test_well_formed_multi_field_manifest_emits_single_pass() -> None:
-    """An entry with apply/destroy/reset all as lists yields a single pass."""
+    """An entry with apply/destroy/reset/clean all as lists yields a single pass."""
     raw = {
         "resource": [
             {
@@ -617,6 +692,7 @@ def test_well_formed_multi_field_manifest_emits_single_pass() -> None:
                 "apply": ["echo step-1", "echo step-2"],
                 "destroy": ["echo clean-1", "echo clean-2"],
                 "reset": "echo reset",
+                "clean": ["echo clean-3", "echo clean-4"],
                 "required_services": ["workspace/postgres"],
             }
         ],
@@ -655,6 +731,25 @@ def test_invalid_destroy_and_reset_both_reported() -> None:
     messages = " ".join(r.message for r in results)
     assert "destroy" in messages
     assert "reset" in messages
+
+
+def test_invalid_clean_reported() -> None:
+    """A clean violation on an otherwise-valid entry produces one finding."""
+    raw = {
+        "resource": [
+            {
+                "scope": "workspace",
+                "apply": "echo ok",
+                "clean": [],
+            }
+        ],
+    }
+    config = _build_config(provision_raw=raw)
+    svc, _repo = _build_service(config)
+    results = svc.run([])
+    assert len(results) == 1
+    assert results[0].status == ProbeStatus.fail
+    assert "clean" in results[0].message
 
 
 def test_workspace_and_extension_findings_combined() -> None:

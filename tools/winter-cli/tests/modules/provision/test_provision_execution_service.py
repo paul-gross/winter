@@ -9,7 +9,7 @@ from winter_cli.config.models import AdoptExtensions, ProjectRepositoryConfig, W
 from winter_cli.modules.provision.execution_service import (
     ProvisionExecutionService,
 )
-from winter_cli.modules.provision.manifest import ProvisionHandler, ProvisionScope
+from winter_cli.modules.provision.manifest import ProvisionAction, ProvisionHandler, ProvisionScope
 from winter_cli.modules.workspace.extension_manifest import ExtensionManifestLoader
 from winter_cli.modules.workspace.repository_factory import RepositoryFactory
 
@@ -114,6 +114,7 @@ def _project_handler(
     apply: tuple[str, ...] = ("echo apply",),
     destroy: tuple[str, ...] | None = None,
     reset: tuple[str, ...] | None = None,
+    clean: tuple[str, ...] | None = None,
 ) -> ProvisionHandler:
     return ProvisionHandler(
         subtarget=subtarget,
@@ -122,6 +123,7 @@ def _project_handler(
         source="project",
         destroy=destroy,
         reset=reset,
+        clean=clean,
     )
 
 
@@ -146,7 +148,7 @@ def test_workspace_scope_apply_cwd_is_workspace_root() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.workspace, apply=(cmd,))
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert result.ok
     assert len(result.runs) == 1
@@ -167,7 +169,7 @@ def test_workspace_scope_apply_popen_called_with_sh_c() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.workspace, apply=(cmd,))
-    svc.run_handler(handler, "apply", ENV_NAME, sink)
+    svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert subprocess.popen_calls[0][0] == ["sh", "-c", cmd]
 
@@ -185,7 +187,7 @@ def test_workspace_scope_apply_base_env_no_env_trio() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.workspace, apply=(cmd,))
-    svc.run_handler(handler, "apply", ENV_NAME, sink)
+    svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     env = subprocess.popen_envs[0]
     assert env["WINTER_WORKSPACE_DIR"] == str(WORKSPACE_ROOT)
@@ -208,7 +210,7 @@ def test_workspace_scope_apply_streams_output_to_sink() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.workspace, apply=(cmd,))
-    svc.run_handler(handler, "apply", ENV_NAME, sink)
+    svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     lines = [line for _, line in sink.output_lines]
     assert "line one" in lines
@@ -231,7 +233,7 @@ def test_feature_environment_scope_cwd_is_env_root() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.feature_environment, apply=(cmd,))
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert result.ok
     assert result.runs[0].cwd == ENV_ROOT
@@ -252,7 +254,7 @@ def test_feature_environment_scope_env_trio_present() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.feature_environment, apply=(cmd,))
-    svc.run_handler(handler, "apply", ENV_NAME, sink)
+    svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     env = subprocess.popen_envs[0]
     assert env["WINTER_ENV"] == "alpha"
@@ -274,7 +276,7 @@ def test_feature_environment_scope_env_trio_uses_registry_index() -> None:
     svc = _make_service(config, fs, {}, subprocess, registry=registry)
 
     handler = _project_handler(scope=ProvisionScope.feature_environment, apply=(cmd,))
-    svc.run_handler(handler, "apply", ENV_NAME, sink)
+    svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     env = subprocess.popen_envs[0]
     assert env["WINTER_ENV_INDEX"] == "7"
@@ -302,7 +304,7 @@ def test_feature_worktree_scope_runs_once_per_project_repo() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.feature_worktree, apply=(cmd,))
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert result.ok
     assert len(result.runs) == 2
@@ -331,7 +333,7 @@ def test_feature_worktree_scope_correct_cwd_per_repo() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.feature_worktree, apply=(cmd,))
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert result.runs[0].cwd == WORKSPACE_ROOT / ENV_NAME / "myrepo"
     assert subprocess.popen_calls[0][1] == WORKSPACE_ROOT / ENV_NAME / "myrepo"
@@ -355,7 +357,7 @@ def test_feature_worktree_scope_env_trio_present_for_each_run() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.feature_worktree, apply=(cmd,))
-    svc.run_handler(handler, "apply", ENV_NAME, sink)
+    svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert len(subprocess.popen_envs) == 2
     for env in subprocess.popen_envs:
@@ -380,7 +382,7 @@ def test_non_zero_exit_code_captured_in_result() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.workspace, apply=(cmd,))
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert not result.ok
     assert len(result.runs) == 1
@@ -406,7 +408,7 @@ def test_non_zero_exit_among_worktrees_propagates() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.feature_worktree, apply=(cmd,))
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert not result.ok
 
@@ -433,7 +435,7 @@ def test_multi_command_apply_runs_in_order() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.workspace, apply=(cmd1, cmd2, cmd3))
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert result.ok
     assert len(result.runs) == 1
@@ -464,7 +466,7 @@ def test_multi_command_stops_at_first_failure() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.workspace, apply=(cmd1, cmd2, cmd3))
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert not result.ok
     assert result.runs[0].exit_code == 1
@@ -486,7 +488,7 @@ def test_single_string_same_as_single_element_tuple() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.workspace, apply=(cmd,))
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert result.ok
     assert len(result.runs) == 1
@@ -511,7 +513,7 @@ def test_multi_command_all_pass_exit_code_zero() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.workspace, apply=(cmd1, cmd2))
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert result.ok
     assert result.runs[0].exit_code == 0
@@ -534,7 +536,7 @@ def test_execution_started_completed_once_per_cwd_multi_command() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.workspace, apply=(cmd1, cmd2))
-    svc.run_handler(handler, "apply", ENV_NAME, sink)
+    svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     # workspace scope → one cwd → one started, one completed
     assert len(sink.started) == 1
@@ -565,7 +567,7 @@ def test_destroy_action_runs_destroy_commands() -> None:
         apply=(apply_cmd,),
         destroy=(destroy_cmd,),
     )
-    result = svc.run_handler(handler, "destroy", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.destroy, ENV_NAME, sink)
 
     assert result.ok
     assert subprocess.popen_calls[0][0] == ["sh", "-c", destroy_cmd]
@@ -592,10 +594,62 @@ def test_reset_action_runs_reset_commands() -> None:
         apply=(apply_cmd,),
         reset=(reset_cmd,),
     )
-    result = svc.run_handler(handler, "reset", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.reset, ENV_NAME, sink)
 
     assert result.ok
     assert subprocess.popen_calls[0][0] == ["sh", "-c", reset_cmd]
+
+
+def test_clean_action_runs_clean_commands() -> None:
+    """ProvisionAction.clean resolves to handler.clean, not apply, destroy, or reset."""
+    config = _make_config()
+    fs = FakeFilesystem()
+    apply_cmd = "echo apply"
+    destroy_cmd = "echo destroy"
+    reset_cmd = "echo reset"
+    clean_cmd = "echo clean"
+
+    subprocess = FakeSubprocessRunner(
+        popen_responses={
+            _sh_c_key(apply_cmd): ([], 0),
+            _sh_c_key(destroy_cmd): ([], 0),
+            _sh_c_key(reset_cmd): ([], 0),
+            _sh_c_key(clean_cmd): (["cleaned"], 0),
+        }
+    )
+    sink = FakeProvisionOutputSink()
+    svc = _make_service(config, fs, {}, subprocess)
+
+    handler = _project_handler(
+        scope=ProvisionScope.workspace,
+        apply=(apply_cmd,),
+        destroy=(destroy_cmd,),
+        reset=(reset_cmd,),
+        clean=(clean_cmd,),
+    )
+    result = svc.run_handler(handler, ProvisionAction.clean, ENV_NAME, sink)
+
+    assert result.ok
+    assert subprocess.popen_calls[0][0] == ["sh", "-c", clean_cmd]
+    assert result.action == ProvisionAction.clean
+    assert sink.started[0][1] == "clean"
+
+
+def test_clean_action_returns_error_when_no_clean_commands() -> None:
+    """When handler.clean is None, the clean action returns an error and runs nothing."""
+    config = _make_config()
+    fs = FakeFilesystem()
+
+    subprocess = FakeSubprocessRunner()
+    sink = FakeProvisionOutputSink()
+    svc = _make_service(config, fs, {}, subprocess)
+
+    handler = _project_handler(scope=ProvisionScope.workspace, clean=None)
+    result = svc.run_handler(handler, ProvisionAction.clean, ENV_NAME, sink)
+
+    assert not result.ok
+    assert result.error is not None
+    assert not subprocess.popen_calls
 
 
 def test_destroy_action_returns_error_when_no_destroy_commands() -> None:
@@ -608,7 +662,7 @@ def test_destroy_action_returns_error_when_no_destroy_commands() -> None:
     svc = _make_service(config, fs, {}, subprocess)
 
     handler = _project_handler(scope=ProvisionScope.workspace, destroy=None)
-    result = svc.run_handler(handler, "destroy", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.destroy, ENV_NAME, sink)
 
     assert not result.ok
     assert result.error is not None
@@ -662,7 +716,7 @@ def test_extension_source_env_vars_set_correctly() -> None:
         apply=(cmd,),
         source="my-ext",
     )
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert result.ok
     env = subprocess.popen_envs[0]
@@ -685,7 +739,7 @@ def test_unknown_extension_source_produces_error() -> None:
         apply=("echo apply",),
         source="no-such-ext",
     )
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert not result.ok
     assert result.error is not None
@@ -713,7 +767,7 @@ def test_feature_environment_with_project_cwd_is_env_project_subdir() -> None:
         source="project",
         project="web",
     )
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert result.ok
     assert len(result.runs) == 1
@@ -741,10 +795,45 @@ def test_feature_environment_with_project_missing_worktree_raises_click_exceptio
     )
 
     with pytest.raises(_click.ClickException) as exc_info:
-        svc.run_handler(handler, "apply", ENV_NAME, sink)
+        svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert "web" in str(exc_info.value)
     assert ENV_NAME in str(exc_info.value)
+    assert not subprocess.popen_calls
+
+
+def test_feature_environment_with_project_missing_worktree_under_clean_degrades_to_error_result() -> None:
+    """Under ProvisionAction.clean, a missing project worktree degrades to an
+    errored HandlerExecutionResult instead of raising.
+
+    Clean's contract is best-effort: a per-handler cwd-resolution failure
+    must not escape as an uncaught exception, or the caller never gets to
+    run this handler's siblings, the remaining sub-targets, or (via the
+    per-env loop above ProvisionService) the remaining envs.
+    """
+    config = _make_config(project_repos=[ProjectRepositoryConfig(name="web", url="git@example.com:org/web.git")])
+    # Filesystem does NOT contain the project worktree directory.
+    fs = FakeFilesystem()
+    subprocess = FakeSubprocessRunner()
+    sink = FakeProvisionOutputSink()
+    svc = _make_service(config, fs, {}, subprocess)
+
+    handler = ProvisionHandler(
+        subtarget="data",
+        scope=ProvisionScope.feature_environment,
+        apply=("echo apply",),
+        clean=("rm -rf dist",),
+        source="project",
+        project="web",
+    )
+
+    result = svc.run_handler(handler, ProvisionAction.clean, ENV_NAME, sink)
+
+    assert not result.ok
+    assert result.error is not None
+    assert "web" in result.error
+    assert ENV_NAME in result.error
+    assert sink.errors, "execution_error must be reported on the handler's line"
     assert not subprocess.popen_calls
 
 
@@ -767,7 +856,7 @@ def test_feature_environment_with_project_error_names_env_and_project() -> None:
     )
 
     with pytest.raises(_click.ClickException) as exc_info:
-        svc.run_handler(handler, "apply", ENV_NAME, sink)
+        svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     message = str(exc_info.value)
     assert "api" in message
@@ -791,7 +880,7 @@ def test_feature_environment_without_project_still_uses_env_root() -> None:
         source="project",
         project=None,
     )
-    result = svc.run_handler(handler, "apply", ENV_NAME, sink)
+    result = svc.run_handler(handler, ProvisionAction.apply, ENV_NAME, sink)
 
     assert result.ok
     assert result.runs[0].cwd == ENV_ROOT

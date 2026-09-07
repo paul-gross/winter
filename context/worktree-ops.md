@@ -172,35 +172,58 @@ git -C <workspace-root>/projects/<repo-name> worktree remove <workspace-root>/<n
 
 ## Verifying destructive commands safely
 
-`winter ws checkout`, `winter ws reset --hard`, `winter ws clean`, and `winter ws destroy` mutate real worktrees and
-none of them can be scoped narrower than their own `PATTERNS`/`ENV` argument — a wrong or missing pattern reaches every
-worktree it matches, not just the one you meant to touch. `ws checkout` in particular has **no repo-scoping flag at
-all**: it always operates env-wide (see [Adopting a remote feature branch](#adopting-a-remote-feature-branch) below);
-use `ws reset <env>/<repo> REF` when you need to touch exactly one worktree.
+`winter ws checkout`, `winter ws reset --hard`, `winter ws clean`, `winter ws destroy`, and `winter clean` mutate real
+worktrees or run project-declared removal commands, and none of them can be scoped narrower than their own
+`PATTERNS`/`ENV` argument — a wrong or missing pattern reaches every worktree or env it matches, not just the one you
+meant to touch. `ws checkout` in particular has **no repo-scoping flag at all**: it always operates env-wide (see
+[Adopting a remote feature branch](#adopting-a-remote-feature-branch) below); use `ws reset <env>/<repo> REF` when you
+need to touch exactly one worktree. `winter clean` is a distinct verb from `winter ws clean` — it runs each provision
+handler's own declared `clean` command rather than `git clean -fd`; see
+[winter-cli/usage/clean.md](./winter-cli/usage/clean.md). For a `winter clean` run, `PATTERNS`/`ENV` does not even bound
+a `workspace`-scope handler the way it bounds everything else in this list: that scope resolves to the live workspace
+root with no per-env qualification, so the handler's `clean` command runs at the shared workspace root — not inside the
+matched env's own directory — once for every env `PATTERNS` matches, not once total.
 
-**`ws clean` needs its own care, because the usual audit will not catch a bad one.** `checkout` and `reset` move refs,
-so a mistake is normally recoverable from the reflog and detectable by checking where each branch points. `ws clean`
-removes untracked files inside an env you otherwise intend to keep: nothing restores them, and a branch-position audit
-sees nothing wrong. (`ws destroy` is also irreversible — it drops databases and deletes the env — but it announces
-itself by taking the whole env, where a clean leaves the env looking intact.) Preview with `--dry-run` every time the
-`PATTERNS` are not ones you have run before.
+**`winter clean` alone among this group has no prompt, no `--force`, and no refusal guard.** That's a deliberate
+exemption, not an oversight: `winter provision --destroy` is likewise ungated. Neither gate rests on a guarantee winter
+enforces — a declared `clean` (or `destroy`) command is an arbitrary shell string invoked via `sh -c`
+([winter-cli/configuration/provision.md](./winter-cli/configuration/provision.md#command-execution-semantics)), so
+winter neither knows nor checks what it removes; each handler's author is trusted to declare only what's safe to run
+unprompted, and that authoring convention, not the verb itself, is what the missing prompt relies on. The two verbs do
+differ in confinement: `provision --destroy` requires an explicit sub-target selector (`--stage` or `--name`), so one
+invocation reaches at most one stage or one named entry per matched env; `winter clean` has no such confinement — a bare
+invocation runs every matched handler across the whole `dependency → resource → data` chain. (Both fan out identically
+across every env `PATTERNS` matches — that part isn't what distinguishes them.) `--dry-run` is the operator's check in
+place of a prompt; preview with it every time the `PATTERNS` are not ones you have run before.
+
+**`ws clean` and `winter clean` both need their own care, because the usual audit will not catch a bad one.** `checkout`
+and `reset` move refs, so a mistake is normally recoverable from the reflog and detectable by checking where each branch
+points. `ws clean` removes untracked files, and `winter clean` runs a handler's declared removal command, inside an env
+you otherwise intend to keep: nothing restores what either deletes, and a branch-position audit sees nothing wrong.
+(`ws destroy` is also irreversible — it drops databases and deletes the env — but it announces itself by taking the
+whole env, where a clean leaves the env looking intact.) Preview with `--dry-run` every time the `PATTERNS` are not ones
+you have run before.
 
 **Never run or exercise a destructive `winter` command against a live env you don't intend to mutate** — including via
 `--winter=<path>`/`--service-orchestrator=<path>` core overrides, which still target the live workspace they're invoked
 from, not a sandbox. To verify destructive-command behavior:
 
 - Build a throwaway env (`winter ws init <scratch-env>`) or a fully scratch workspace (its own config + throwaway git
-  repos) and exercise the command there.
+  repos) and exercise the command there. A throwaway env only contains a `winter clean` run for `feature-environment`-
+  and `feature-worktree`-scope handlers — a `workspace`-scope handler's `clean` command still runs at the live workspace
+  root regardless of which env you named, so verifying one of those needs the fully scratch workspace, not just a
+  throwaway env.
 - When a throwaway env isn't practical, drive the underlying service classes directly against a scoped, disposable git
   repo instead of going through the live CLI.
-- Prefer `--dry-run`/`--json` to preview a command's plan before running it for real — every destructive `ws` verb that
-  supports it reports the exact per-repo effect with no side effects.
+- Prefer `--dry-run`/`--json` to preview a command's plan before running it for real — every destructive `ws` verb, and
+  `winter clean`, reports the exact per-repo or per-handler effect with no side effects when it supports the flag.
 - Before finishing, audit every worktree you touched (or could have touched): branch attached where expected, working
   tree clean unless intentionally left dirty, and the commits you expect are present — not silently stranded off every
   ref. After a `ws clean`, also confirm no untracked file you meant to keep is gone — read the per-path list the command
   prints, which is the only record of what it took. `winter ws status --json` reports a per-repo `untracked` count, but
   it counts one entry per file and cannot see an empty untracked directory, so it is a rough cross-check rather than a
-  match.
+  match. After a `winter clean`, the same rule applies to declared artifacts: nothing else records what a handler's
+  `clean` command removed, so the per-handler run report — not a status snapshot — is the only audit trail.
 
 This came out of a real incident: an agent reproducing a bug ran `winter ws checkout alpha master --force` through the
 core-override against its own live `alpha` env; `ws checkout` has no repo-scoping flag, so it force-moved every worktree

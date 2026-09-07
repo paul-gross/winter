@@ -1,6 +1,6 @@
 """CLI argument-parsing tests for the glob/multi-target surface added to
-`provision`, `ws destroy`, `ws diff`, `ws disconnect`, `ws update`, `ws reset`,
-`ws clean`, and `lint`.
+`provision`, `clean`, `ws destroy`, `ws diff`, `ws disconnect`, `ws update`,
+`ws reset`, `ws clean`, and `lint`.
 
 Covers argument shape only (nargs, required-ness, removed/renamed flags) via
 `click.testing.CliRunner` with no container wiring — these assertions run
@@ -13,6 +13,7 @@ from __future__ import annotations
 from click.testing import CliRunner
 
 from winter_cli.modules.lint.command import lint_command
+from winter_cli.modules.provision.clean_command import clean_command
 from winter_cli.modules.provision.command import provision_command
 from winter_cli.modules.workspace.command import (
     ws_clean,
@@ -50,6 +51,56 @@ class TestProvisionCli:
         result = CliRunner().invoke(provision_command, ["alpha/winter"])
         assert result.exit_code != 0
         assert "no '/'" in result.output
+
+
+class TestCleanCli:
+    def test_no_patterns_is_a_usage_error(self) -> None:
+        result = CliRunner().invoke(clean_command, [])
+        assert result.exit_code != 0
+        assert "Missing argument" in result.output or "PATTERNS" in result.output
+
+    def test_stage_option_present_in_help(self) -> None:
+        result = CliRunner().invoke(clean_command, ["--help"])
+        assert result.exit_code == 0
+        assert "--stage" in result.output
+
+    def test_name_option_present_in_help(self) -> None:
+        result = CliRunner().invoke(clean_command, ["--help"])
+        assert result.exit_code == 0
+        assert "--name" in result.output
+
+    def test_empty_pattern_rejected(self) -> None:
+        result = CliRunner().invoke(clean_command, [""])
+        assert result.exit_code != 0
+        assert "Empty pattern" in result.output
+
+    def test_slash_qualified_pattern_rejected(self) -> None:
+        result = CliRunner().invoke(clean_command, ["alpha/winter"])
+        assert result.exit_code != 0
+        assert "no '/'" in result.output
+
+    def test_help_states_it_is_not_ws_clean(self) -> None:
+        """This is a distinct verb from `winter ws clean` — its own help text
+        must say so, so the two are never confused."""
+        result = CliRunner().invoke(clean_command, ["--help"])
+        assert result.exit_code == 0
+        assert "ws clean" in result.output
+
+    def test_no_reset_destroy_or_seed_flags(self) -> None:
+        """`clean` always runs the `clean` action — there is no action flag to
+        select, unlike `provision`."""
+        result = CliRunner().invoke(clean_command, ["--help"])
+        assert result.exit_code == 0
+        assert "--reset" not in result.output
+        assert "--destroy" not in result.output
+        assert "--seed" not in result.output
+
+    def test_no_force_flag(self) -> None:
+        """`clean` is ungated: there is no `--force` to skip a prompt that
+        does not exist."""
+        result = CliRunner().invoke(clean_command, ["--help"])
+        assert result.exit_code == 0
+        assert "--force" not in result.output
 
 
 class TestWsDestroyCli:

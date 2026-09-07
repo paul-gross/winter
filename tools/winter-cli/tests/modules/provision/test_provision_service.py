@@ -9,7 +9,7 @@ import pytest
 
 from tests.conftest import FakeFilesystem
 from winter_cli.config.models import AdoptExtensions, WorkspaceConfig
-from winter_cli.modules.provision.manifest import ProvisionHandler, ProvisionScope
+from winter_cli.modules.provision.manifest import ProvisionAction, ProvisionHandler, ProvisionScope
 from winter_cli.modules.provision.provision_service import NoOpServiceCheck, ProvisionService
 
 WORKSPACE_ROOT = Path("/ws")
@@ -24,7 +24,7 @@ ENV_NAME = "alpha"
 class _FakeHandlerExecutionResult:
     """Minimal HandlerExecutionResult-alike returned by the fake execution service."""
 
-    def __init__(self, handler: ProvisionHandler, action: str, ok: bool) -> None:
+    def __init__(self, handler: ProvisionHandler, action: ProvisionAction, ok: bool) -> None:
         self.handler = handler
         self.action = action
         self.runs: tuple[Any, ...] = ()
@@ -39,15 +39,15 @@ class _FakeHandlerExecutionResult:
 class _FakeExecutionService:
     """Records run_handler calls in order; returns canned ok/fail by (handler_id, action)."""
 
-    def __init__(self, fail_on: set[tuple[int, str]] | None = None) -> None:
+    def __init__(self, fail_on: set[tuple[int, ProvisionAction]] | None = None) -> None:
         # fail_on: set of (id(handler), action) pairs that should return ok=False
-        self._fail_on: set[tuple[int, str]] = fail_on or set()
-        self.calls: list[tuple[ProvisionHandler, str, str]] = []
+        self._fail_on: set[tuple[int, ProvisionAction]] = fail_on or set()
+        self.calls: list[tuple[ProvisionHandler, ProvisionAction, str]] = []
 
     def run_handler(
         self,
         handler: ProvisionHandler,
-        action: str,
+        action: ProvisionAction,
         env_name: str,
         sink: Any,
     ) -> _FakeHandlerExecutionResult:
@@ -89,7 +89,7 @@ class _FakeReporter:
     """Records every IProvisionReporter event."""
 
     def __init__(self) -> None:
-        self.provision_started_calls: list[tuple[str, list[str]]] = []
+        self.provision_started_calls: list[tuple[str, list[str], ProvisionAction]] = []
         self.subtarget_started_calls: list[str] = []
         self.no_handlers_calls: list[str] = []
         self.handler_result_calls: list[dict[str, Any]] = []
@@ -102,8 +102,8 @@ class _FakeReporter:
         self.execution_completed_calls: list[Any] = []
         self.execution_errors: list[Any] = []
 
-    def provision_started(self, env: str, subtargets: list[str]) -> None:
-        self.provision_started_calls.append((env, subtargets))
+    def provision_started(self, env: str, subtargets: list[str], action: ProvisionAction) -> None:
+        self.provision_started_calls.append((env, subtargets, action))
 
     def subtarget_started(self, subtarget: str) -> None:
         self.subtarget_started_calls.append(subtarget)
@@ -144,6 +144,7 @@ class _FakeReporter:
         action: str,
         required_services: list[str],
         service_check_preview: str | None,
+        cwd: str,
         project: str | None = None,
     ) -> None:
         self.plan_handler_calls.append(
@@ -155,6 +156,7 @@ class _FakeReporter:
                 "action": action,
                 "required_services": required_services,
                 "service_check_preview": service_check_preview,
+                "cwd": cwd,
                 "project": project,
             }
         )
@@ -251,7 +253,7 @@ def test_full_chain_runs_subtargets_in_order() -> None:
     )
     svc, exec_svc, reporter = _make_service(config=config)
     summary = svc.run(
-        ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+        ENV_NAME, subtarget=None, action=ProvisionAction.apply, seed=False, no_service_check=False, reporter=reporter
     )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
@@ -279,8 +281,7 @@ def test_scope_substrate_first_within_subtarget() -> None:
     svc.run(
         ENV_NAME,
         subtarget="dependency",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -329,8 +330,7 @@ def test_project_before_extension_within_same_scope() -> None:
     svc.run(
         ENV_NAME,
         subtarget="dependency",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -380,8 +380,7 @@ def test_collects_handlers_from_extension_repo_path_not_workspace_root_name() ->
     svc.run(
         ENV_NAME,
         subtarget="dependency",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -406,8 +405,7 @@ def test_declaration_order_tiebreak() -> None:
     svc.run(
         ENV_NAME,
         subtarget="dependency",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -442,9 +440,9 @@ def test_apply_failure_in_dependency_aborts_resource_and_data() -> None:
     # that fails on the first call.
     class _FailFirstCallExecSvc:
         def __init__(self) -> None:
-            self.calls: list[tuple[ProvisionHandler, str, str]] = []
+            self.calls: list[tuple[ProvisionHandler, ProvisionAction, str]] = []
 
-        def run_handler(self, handler: ProvisionHandler, action: str, env_name: str, sink: Any) -> Any:
+        def run_handler(self, handler: ProvisionHandler, action: ProvisionAction, env_name: str, sink: Any) -> Any:
             self.calls.append((handler, action, env_name))
             # First call (dependency apply) fails
             ok = len(self.calls) != 1
@@ -461,7 +459,7 @@ def test_apply_failure_in_dependency_aborts_resource_and_data() -> None:
         fs=_make_fs_with_env(),
     )
     summary = svc2.run(
-        ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+        ENV_NAME, subtarget=None, action=ProvisionAction.apply, seed=False, no_service_check=False, reporter=reporter
     )  # type: ignore[arg-type]
 
     assert summary.status == "aborted"
@@ -492,9 +490,9 @@ def test_apply_failure_stops_within_subtarget_too() -> None:
 
     class _FailFirstCallExecSvc:
         def __init__(self) -> None:
-            self.calls: list[tuple[ProvisionHandler, str, str]] = []
+            self.calls: list[tuple[ProvisionHandler, ProvisionAction, str]] = []
 
-        def run_handler(self, handler: ProvisionHandler, action: str, env_name: str, sink: Any) -> Any:
+        def run_handler(self, handler: ProvisionHandler, action: ProvisionAction, env_name: str, sink: Any) -> Any:
             self.calls.append((handler, action, env_name))
             ok = len(self.calls) != 1
             return _FakeHandlerExecutionResult(handler=handler, action=action, ok=ok)
@@ -512,8 +510,7 @@ def test_apply_failure_stops_within_subtarget_too() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget="dependency",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -534,7 +531,7 @@ def test_no_handlers_emits_no_handlers_event_and_finishes_ok() -> None:
     config = _make_config(provision_raw={})
     svc, exec_svc, reporter = _make_service(config=config)
     summary = svc.run(
-        ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+        ENV_NAME, subtarget=None, action=ProvisionAction.apply, seed=False, no_service_check=False, reporter=reporter
     )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
@@ -551,8 +548,7 @@ def test_single_subtarget_no_handlers_emits_one_no_handlers_event() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget="dependency",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -576,12 +572,17 @@ def test_destroy_flag_runs_destroy_script_when_declared() -> None:
     )
     svc, exec_svc, reporter = _make_service(config=config)
     summary = svc.run(
-        ENV_NAME, subtarget="resource", reset=False, destroy=True, seed=False, no_service_check=False, reporter=reporter
+        ENV_NAME,
+        subtarget="resource",
+        action=ProvisionAction.destroy,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
     )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert len(exec_svc.calls) == 1
-    assert exec_svc.calls[0][1] == "destroy"
+    assert exec_svc.calls[0][1] is ProvisionAction.destroy
 
 
 def test_destroy_flag_warns_and_noop_when_no_destroy_declared() -> None:
@@ -593,7 +594,12 @@ def test_destroy_flag_warns_and_noop_when_no_destroy_declared() -> None:
     )
     svc, exec_svc, reporter = _make_service(config=config)
     summary = svc.run(
-        ENV_NAME, subtarget="resource", reset=False, destroy=True, seed=False, no_service_check=False, reporter=reporter
+        ENV_NAME,
+        subtarget="resource",
+        action=ProvisionAction.destroy,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
     )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
@@ -616,12 +622,12 @@ def test_reset_uses_declared_reset_script() -> None:
     )
     svc, exec_svc, reporter = _make_service(config=config)
     summary = svc.run(
-        ENV_NAME, subtarget="data", reset=True, destroy=False, seed=False, no_service_check=False, reporter=reporter
+        ENV_NAME, subtarget="data", action=ProvisionAction.reset, seed=False, no_service_check=False, reporter=reporter
     )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert len(exec_svc.calls) == 1
-    assert exec_svc.calls[0][1] == "reset"
+    assert exec_svc.calls[0][1] is ProvisionAction.reset
 
 
 def test_reset_composes_destroy_then_apply_when_no_reset_but_destroy_declared() -> None:
@@ -633,13 +639,18 @@ def test_reset_composes_destroy_then_apply_when_no_reset_but_destroy_declared() 
     )
     svc, exec_svc, reporter = _make_service(config=config)
     summary = svc.run(
-        ENV_NAME, subtarget="resource", reset=True, destroy=False, seed=False, no_service_check=False, reporter=reporter
+        ENV_NAME,
+        subtarget="resource",
+        action=ProvisionAction.reset,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
     )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert len(exec_svc.calls) == 2
-    assert exec_svc.calls[0][1] == "destroy"
-    assert exec_svc.calls[1][1] == "apply"
+    assert exec_svc.calls[0][1] is ProvisionAction.destroy
+    assert exec_svc.calls[1][1] is ProvisionAction.apply
 
 
 def test_reset_warns_and_degrades_to_apply_when_neither_reset_nor_destroy() -> None:
@@ -651,14 +662,348 @@ def test_reset_warns_and_degrades_to_apply_when_neither_reset_nor_destroy() -> N
     )
     svc, exec_svc, reporter = _make_service(config=config)
     summary = svc.run(
-        ENV_NAME, subtarget="data", reset=True, destroy=False, seed=False, no_service_check=False, reporter=reporter
+        ENV_NAME, subtarget="data", action=ProvisionAction.reset, seed=False, no_service_check=False, reporter=reporter
     )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert len(exec_svc.calls) == 1
-    assert exec_svc.calls[0][1] == "apply"
+    assert exec_svc.calls[0][1] is ProvisionAction.apply
     assert len(reporter.handler_warn_calls) == 1
     assert "degrading" in reporter.handler_warn_calls[0]["message"]
+
+
+# ---------------------------------------------------------------------------
+# clean action
+# ---------------------------------------------------------------------------
+
+
+def test_clean_runs_declared_clean_script() -> None:
+    """clean: handler with a declared clean script → runs the clean action."""
+    config = _make_config(
+        provision_raw={
+            "dependency": [{"scope": "workspace", "apply": "scripts/apply.sh", "clean": "scripts/clean.sh"}],
+        }
+    )
+    svc, exec_svc, reporter = _make_service(config=config)
+    summary = svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
+
+    assert summary.status == "ok"
+    assert len(exec_svc.calls) == 1
+    assert exec_svc.calls[0][1] is ProvisionAction.clean
+    assert len(reporter.handler_warn_calls) == 0
+
+
+def test_clean_filters_out_handler_with_no_clean_declared() -> None:
+    """clean: a handler declaring no clean contributes nothing; its sibling still runs."""
+    config = _make_config(
+        provision_raw={
+            "dependency": [
+                {"scope": "workspace", "apply": "scripts/apply-a.sh", "clean": "scripts/clean-a.sh"},
+                {"scope": "workspace", "apply": "scripts/apply-b.sh"},
+            ],
+        }
+    )
+    svc, exec_svc, reporter = _make_service(config=config)
+    summary = svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
+
+    assert summary.status == "ok"
+    assert len(exec_svc.calls) == 1
+    assert exec_svc.calls[0][0].apply == ("scripts/apply-a.sh",)
+    # The handler with no declared clean is silently absent — not a warning or error.
+    assert len(reporter.handler_warn_calls) == 0
+
+
+def test_clean_subtarget_with_nothing_declared_reports_no_handlers_and_skips_service_check() -> None:
+    """clean: a sub-target where nothing declares clean is a no-op — no_handlers, no service check."""
+    config = _make_config(
+        provision_raw={
+            "resource": [{"scope": "workspace", "apply": "scripts/apply.sh", "required_services": ["workspace/db"]}],
+        }
+    )
+    sc = _RecordingServiceCheck(result="ok")
+    svc, exec_svc, reporter = _make_service_with_check(config, sc)
+    summary = svc.run(
+        ENV_NAME,
+        subtarget="resource",
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
+
+    assert summary.status == "ok"
+    assert reporter.no_handlers_calls == ["resource"]
+    assert len(exec_svc.calls) == 0
+    assert len(sc.ensure_calls) == 0
+
+
+def test_clean_full_chain_runs_in_dependency_resource_data_order() -> None:
+    """clean with no explicit --stage fans out across the full chain in declared order."""
+    config = _make_config(
+        provision_raw={
+            "dependency": [{"scope": "workspace", "apply": "scripts/dep.sh", "clean": "scripts/clean-dep.sh"}],
+            "resource": [{"scope": "workspace", "apply": "scripts/res.sh", "clean": "scripts/clean-res.sh"}],
+            "data": [{"scope": "workspace", "apply": "scripts/dat.sh", "clean": "scripts/clean-dat.sh"}],
+        }
+    )
+    svc, exec_svc, reporter = _make_service(config=config)
+    summary = svc.run(
+        ENV_NAME, subtarget=None, action=ProvisionAction.clean, seed=False, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
+
+    assert summary.status == "ok"
+    assert reporter.subtarget_started_calls == ["dependency", "resource", "data"]
+    assert [h.subtarget for h, _action, _env in exec_svc.calls] == ["dependency", "resource", "data"]
+    assert all(action is ProvisionAction.clean for _h, action, _env in exec_svc.calls)
+
+
+def test_clean_name_selector_without_clean_warns() -> None:
+    """--name selecting a handler with no declared clean warns and no-ops (destroy's treatment)."""
+    config = _make_config(
+        provision_raw={
+            "resource": [{"scope": "workspace", "apply": "scripts/create-db.sh", "name": "mydb"}],
+        }
+    )
+    svc, exec_svc, reporter = _make_service(config=config)
+    summary = svc.run(
+        ENV_NAME,
+        subtarget=None,
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+        name_selector="workspace.mydb",
+    )  # type: ignore[arg-type]
+
+    assert summary.status == "ok"
+    assert len(exec_svc.calls) == 0
+    assert len(reporter.handler_warn_calls) == 1
+    assert "skipping" in reporter.handler_warn_calls[0]["message"]
+
+
+def test_clean_name_selector_without_clean_starts_no_service() -> None:
+    """--name selecting a handler with required_services but no declared clean must not
+    start those services — _run_clean warns and no-ops, so the handler has no work for
+    the service check to protect."""
+    config = _make_config(
+        provision_raw={
+            "resource": [
+                {
+                    "scope": "workspace",
+                    "apply": "scripts/create-db.sh",
+                    "required_services": ["workspace/db"],
+                    "name": "mydb",
+                }
+            ],
+        }
+    )
+    sc = _RecordingServiceCheck(result="ok")
+    svc, exec_svc, reporter = _make_service_with_check(config, sc)
+    summary = svc.run(
+        ENV_NAME,
+        subtarget=None,
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+        name_selector="workspace.mydb",
+    )  # type: ignore[arg-type]
+
+    assert summary.status == "ok"
+    assert len(exec_svc.calls) == 0
+    assert len(reporter.handler_warn_calls) == 1
+    assert "skipping" in reporter.handler_warn_calls[0]["message"]
+    # The service check sees no handlers with actual work — it starts nothing.
+    assert sc.ensure_calls == [([], ENV_NAME, False)]
+
+
+def test_clean_name_selector_with_clean_runs_only_the_named_entry() -> None:
+    """--name selecting a handler that declares clean runs only that entry."""
+    config = _make_config(
+        provision_raw={
+            "resource": [
+                {
+                    "scope": "workspace",
+                    "apply": "scripts/create-db.sh",
+                    "clean": "scripts/clean-db.sh",
+                    "name": "mydb",
+                },
+                {
+                    "scope": "workspace",
+                    "apply": "scripts/create-bucket.sh",
+                    "clean": "scripts/clean-bucket.sh",
+                    "name": "mybucket",
+                },
+            ],
+        }
+    )
+    svc, exec_svc, reporter = _make_service(config=config)
+    summary = svc.run(
+        ENV_NAME,
+        subtarget=None,
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+        name_selector="workspace.mydb",
+    )  # type: ignore[arg-type]
+
+    assert summary.status == "ok"
+    assert len(exec_svc.calls) == 1
+    assert exec_svc.calls[0][0].name == "mydb"
+    assert exec_svc.calls[0][1] is ProvisionAction.clean
+
+
+def test_failing_clean_produces_error_summary() -> None:
+    """A failing clean script → summary.status='error', exit_code=1, no chain-abort label."""
+    config = _make_config(
+        provision_raw={
+            "dependency": [{"scope": "workspace", "apply": "scripts/apply.sh", "clean": "scripts/clean.sh"}],
+        }
+    )
+
+    class _FailCleanExecSvc:
+        def __init__(self) -> None:
+            self.calls: list[tuple[ProvisionHandler, ProvisionAction, str]] = []
+
+        def run_handler(self, handler: ProvisionHandler, action: ProvisionAction, env_name: str, sink: Any) -> Any:
+            self.calls.append((handler, action, env_name))
+            return _FakeHandlerExecutionResult(handler=handler, action=action, ok=False)
+
+    fail_exec = _FailCleanExecSvc()
+    reporter = _FakeReporter()
+    svc = ProvisionService(
+        config=config,
+        execution_svc=fail_exec,  # type: ignore[arg-type]
+        manifest_loader=_FakeManifestLoader(),
+        repo_factory=_FakeRepoFactory(),
+        service_check=NoOpServiceCheck(),
+        fs=_make_fs_with_env(),
+    )
+    summary = svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
+
+    assert summary.status == "error"
+    assert summary.exit_code == 1
+    assert reporter.provision_finished_calls == [("error", None)]
+    assert len(fail_exec.calls) == 1
+    assert fail_exec.calls[0][1] is ProvisionAction.clean
+
+
+def test_failing_clean_in_dependency_does_not_abort_resource_and_data() -> None:
+    """A failing clean in dependency still runs resource and data — best-effort, not chain-abort.
+
+    Mirrors `test_apply_failure_in_dependency_aborts_resource_and_data`, but for
+    `clean` the opposite must hold: every sub-target still runs, and every
+    failure is reported, while the overall run still ends non-ok.
+    """
+    config = _make_config(
+        provision_raw={
+            "dependency": [{"scope": "workspace", "apply": "scripts/dep.sh", "clean": "scripts/clean-dep.sh"}],
+            "resource": [{"scope": "workspace", "apply": "scripts/res.sh", "clean": "scripts/clean-res.sh"}],
+            "data": [{"scope": "workspace", "apply": "scripts/dat.sh", "clean": "scripts/clean-dat.sh"}],
+        }
+    )
+
+    class _FailFirstCallExecSvc:
+        def __init__(self) -> None:
+            self.calls: list[tuple[ProvisionHandler, ProvisionAction, str]] = []
+
+        def run_handler(self, handler: ProvisionHandler, action: ProvisionAction, env_name: str, sink: Any) -> Any:
+            self.calls.append((handler, action, env_name))
+            # Only the first call (dependency's clean) fails.
+            ok = len(self.calls) != 1
+            return _FakeHandlerExecutionResult(handler=handler, action=action, ok=ok)
+
+    fail_exec = _FailFirstCallExecSvc()
+    reporter = _FakeReporter()
+    svc = ProvisionService(
+        config=config,
+        execution_svc=fail_exec,  # type: ignore[arg-type]
+        manifest_loader=_FakeManifestLoader(),
+        repo_factory=_FakeRepoFactory(),
+        service_check=NoOpServiceCheck(),
+        fs=_make_fs_with_env(),
+    )
+    summary = svc.run(
+        ENV_NAME, subtarget=None, action=ProvisionAction.clean, seed=False, no_service_check=False, reporter=reporter
+    )  # type: ignore[arg-type]
+
+    assert summary.status == "error"
+    assert summary.exit_code == 1
+
+    # All three sub-targets ran despite dependency's clean failing.
+    assert reporter.subtarget_started_calls == ["dependency", "resource", "data"]
+    assert [h.subtarget for h, _action, _env in fail_exec.calls] == ["dependency", "resource", "data"]
+
+    # Every failure is reported, not just the first: dependency's handler_result
+    # shows the failing exit status alongside resource/data's successes.
+    assert [r["exit_status"] for r in reporter.handler_result_calls] == [1, 0, 0]
+    assert reporter.provision_finished_calls == [("error", None)]
+
+
+def test_failing_clean_does_not_stop_sibling_handlers_in_same_subtarget() -> None:
+    """A failing clean handler still lets its siblings in the same sub-target run."""
+    config = _make_config(
+        provision_raw={
+            "dependency": [
+                {"scope": "workspace", "apply": "scripts/apply-a.sh", "clean": "scripts/clean-a.sh"},
+                {"scope": "workspace", "apply": "scripts/apply-b.sh", "clean": "scripts/clean-b.sh"},
+            ],
+        }
+    )
+
+    class _FailFirstCallExecSvc:
+        def __init__(self) -> None:
+            self.calls: list[tuple[ProvisionHandler, ProvisionAction, str]] = []
+
+        def run_handler(self, handler: ProvisionHandler, action: ProvisionAction, env_name: str, sink: Any) -> Any:
+            self.calls.append((handler, action, env_name))
+            ok = len(self.calls) != 1
+            return _FakeHandlerExecutionResult(handler=handler, action=action, ok=ok)
+
+    fail_exec = _FailFirstCallExecSvc()
+    reporter = _FakeReporter()
+    svc = ProvisionService(
+        config=config,
+        execution_svc=fail_exec,  # type: ignore[arg-type]
+        manifest_loader=_FakeManifestLoader(),
+        repo_factory=_FakeRepoFactory(),
+        service_check=NoOpServiceCheck(),
+        fs=_make_fs_with_env(),
+    )
+    summary = svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
+
+    assert summary.status == "error"
+    assert len(fail_exec.calls) == 2
+    assert [r["exit_status"] for r in reporter.handler_result_calls] == [1, 0]
 
 
 # ---------------------------------------------------------------------------
@@ -676,16 +1021,21 @@ def test_seed_runs_resource_apply_then_data_apply() -> None:
     )
     svc, exec_svc, reporter = _make_service(config=config)
     summary = svc.run(
-        ENV_NAME, subtarget="resource", reset=False, destroy=False, seed=True, no_service_check=False, reporter=reporter
+        ENV_NAME,
+        subtarget="resource",
+        action=ProvisionAction.apply,
+        seed=True,
+        no_service_check=False,
+        reporter=reporter,
     )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
     assert reporter.subtarget_started_calls == ["resource", "data"]
     assert len(exec_svc.calls) == 2
     assert exec_svc.calls[0][0].subtarget == "resource"
-    assert exec_svc.calls[0][1] == "apply"
+    assert exec_svc.calls[0][1] is ProvisionAction.apply
     assert exec_svc.calls[1][0].subtarget == "data"
-    assert exec_svc.calls[1][1] == "apply"
+    assert exec_svc.calls[1][1] is ProvisionAction.apply
 
 
 # ---------------------------------------------------------------------------
@@ -706,8 +1056,7 @@ def test_explicit_subtarget_runs_only_that_one() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget="resource",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -876,7 +1225,7 @@ def test_service_check_ensure_called_before_resource_handlers() -> None:
     class _TrackingExecSvc:
         calls: ClassVar[list[Any]] = []
 
-        def run_handler(self, handler: Any, action: str, env_name: str, sink: Any) -> Any:
+        def run_handler(self, handler: Any, action: ProvisionAction, env_name: str, sink: Any) -> Any:
             call_order.append(f"exec:{handler.subtarget}")
             return _FakeHandlerExecutionResult(handler=handler, action=action, ok=True)
 
@@ -900,8 +1249,7 @@ def test_service_check_ensure_called_before_resource_handlers() -> None:
     svc2.run(
         ENV_NAME,
         subtarget="resource",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -924,8 +1272,7 @@ def test_service_check_ensure_not_called_for_dependency_subtarget() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget="dependency",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -943,6 +1290,13 @@ def test_orchestrator_error_in_ensure_aborts_run_cleanly() -> None:
     The ClickException surfaces as a non-zero exit at the CLI boundary (cli.py:192-194).
     At the ProvisionService level it propagates uncaught — that is the intended behavior:
     the handler/command's sys.exit path doesn't apply here; the CLI boundary does.
+
+    This is a whole-run precondition failure (unlike a per-handler
+    cwd-resolution failure under clean — see execution_service.py), so it
+    legitimately still aborts by propagating. But the reporter must still see
+    a closing `provision_finished` event first, or a `--json` consumer is
+    left with an unterminated stream (no `finished` line) even though the
+    run is over.
     """
     import click
 
@@ -960,8 +1314,7 @@ def test_orchestrator_error_in_ensure_aborts_run_cleanly() -> None:
         svc.run(
             ENV_NAME,
             subtarget="resource",
-            reset=False,
-            destroy=False,
+            action=ProvisionAction.apply,
             seed=False,
             no_service_check=False,
             reporter=reporter,
@@ -970,6 +1323,43 @@ def test_orchestrator_error_in_ensure_aborts_run_cleanly() -> None:
     assert "no service orchestrator" in exc_info.value.format_message()
     # No handler was executed
     assert len(exec_svc.calls) == 0
+    # The stream is still closed with a finished event before the exception
+    # propagates, even though the run ended via an exception rather than a
+    # normal return.
+    assert reporter.provision_finished_calls == [("error", None)]
+
+
+def test_orchestrator_error_in_ensure_under_clean_still_closes_the_json_stream() -> None:
+    """The same close-before-propagate behavior holds for a --json clean run.
+
+    ``winter clean`` always drives ``ProvisionAction.clean`` — this pins the
+    exact failure mode from the bug report: a service-check precondition
+    failure during a clean run must not leave the `--json` NDJSON stream
+    without a `finished` line.
+    """
+    import click
+
+    config = _make_config(
+        provision_raw={
+            "resource": [{"scope": "workspace", "apply": "scripts/apply.sh", "clean": "scripts/clean.sh"}],
+        }
+    )
+    error = click.ClickException("no service orchestrator registered")
+    sc = _RecordingServiceCheck(raises=error)
+    svc, exec_svc, reporter = _make_service_with_check(config, sc)
+
+    with pytest.raises(click.ClickException):
+        svc.run(
+            ENV_NAME,
+            subtarget="resource",
+            action=ProvisionAction.clean,
+            seed=False,
+            no_service_check=False,
+            reporter=reporter,
+        )  # type: ignore[arg-type]
+
+    assert len(exec_svc.calls) == 0
+    assert reporter.provision_finished_calls == [("error", None)]
 
 
 def test_service_check_result_appears_in_handler_result_event() -> None:
@@ -984,8 +1374,7 @@ def test_service_check_result_appears_in_handler_result_event() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget="resource",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -1006,7 +1395,12 @@ def test_no_service_check_flag_forwarded_to_ensure() -> None:
     sc = _RecordingServiceCheck(result="skipped")
     svc, _exec_svc, reporter = _make_service_with_check(config, sc)
     svc.run(
-        ENV_NAME, subtarget="resource", reset=False, destroy=False, seed=False, no_service_check=True, reporter=reporter
+        ENV_NAME,
+        subtarget="resource",
+        action=ProvisionAction.apply,
+        seed=False,
+        no_service_check=True,
+        reporter=reporter,
     )  # type: ignore[arg-type]
 
     assert len(sc.ensure_calls) == 1
@@ -1031,11 +1425,11 @@ def test_failing_destroy_produces_error_summary() -> None:
     # Make the destroy action fail on the resource handler.
     class _FailDestroyExecSvc:
         def __init__(self) -> None:
-            self.calls: list[tuple[ProvisionHandler, str, str]] = []
+            self.calls: list[tuple[ProvisionHandler, ProvisionAction, str]] = []
 
-        def run_handler(self, handler: ProvisionHandler, action: str, env_name: str, sink: Any) -> Any:
+        def run_handler(self, handler: ProvisionHandler, action: ProvisionAction, env_name: str, sink: Any) -> Any:
             self.calls.append((handler, action, env_name))
-            ok = action != "destroy"
+            ok = action is not ProvisionAction.destroy
             return _FakeHandlerExecutionResult(handler=handler, action=action, ok=ok)
 
     fail_exec = _FailDestroyExecSvc()
@@ -1051,8 +1445,7 @@ def test_failing_destroy_produces_error_summary() -> None:
     summary = svc2.run(
         ENV_NAME,
         subtarget="resource",
-        reset=False,
-        destroy=True,
+        action=ProvisionAction.destroy,
         seed=False,
         no_service_check=False,
         reporter=reporter2,
@@ -1063,7 +1456,7 @@ def test_failing_destroy_produces_error_summary() -> None:
     assert reporter2.provision_finished_calls == [("error", None)]
     # Only the destroy call was made
     assert len(fail_exec.calls) == 1
-    assert fail_exec.calls[0][1] == "destroy"
+    assert fail_exec.calls[0][1] is ProvisionAction.destroy
 
 
 def test_failing_reset_compose_destroy_does_not_run_apply() -> None:
@@ -1076,11 +1469,11 @@ def test_failing_reset_compose_destroy_does_not_run_apply() -> None:
 
     class _FailDestroyExecSvc:
         def __init__(self) -> None:
-            self.calls: list[tuple[ProvisionHandler, str, str]] = []
+            self.calls: list[tuple[ProvisionHandler, ProvisionAction, str]] = []
 
-        def run_handler(self, handler: ProvisionHandler, action: str, env_name: str, sink: Any) -> Any:
+        def run_handler(self, handler: ProvisionHandler, action: ProvisionAction, env_name: str, sink: Any) -> Any:
             self.calls.append((handler, action, env_name))
-            ok = action != "destroy"
+            ok = action is not ProvisionAction.destroy
             return _FakeHandlerExecutionResult(handler=handler, action=action, ok=ok)
 
     fail_exec = _FailDestroyExecSvc()
@@ -1094,14 +1487,19 @@ def test_failing_reset_compose_destroy_does_not_run_apply() -> None:
         fs=_make_fs_with_env(),
     )
     summary = svc.run(
-        ENV_NAME, subtarget="resource", reset=True, destroy=False, seed=False, no_service_check=False, reporter=reporter
+        ENV_NAME,
+        subtarget="resource",
+        action=ProvisionAction.reset,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
     )  # type: ignore[arg-type]
 
     assert summary.status == "error"
     assert summary.exit_code == 1
     # Only destroy was called — apply was NOT invoked
     assert len(fail_exec.calls) == 1
-    assert fail_exec.calls[0][1] == "destroy"
+    assert fail_exec.calls[0][1] is ProvisionAction.destroy
     assert reporter.provision_finished_calls == [("error", None)]
 
 
@@ -1116,9 +1514,9 @@ def test_existing_apply_abort_semantics_unchanged() -> None:
 
     class _FailApplyExecSvc:
         def __init__(self) -> None:
-            self.calls: list[tuple[ProvisionHandler, str, str]] = []
+            self.calls: list[tuple[ProvisionHandler, ProvisionAction, str]] = []
 
-        def run_handler(self, handler: ProvisionHandler, action: str, env_name: str, sink: Any) -> Any:
+        def run_handler(self, handler: ProvisionHandler, action: ProvisionAction, env_name: str, sink: Any) -> Any:
             self.calls.append((handler, action, env_name))
             ok = len(self.calls) != 1
             return _FakeHandlerExecutionResult(handler=handler, action=action, ok=ok)
@@ -1134,7 +1532,7 @@ def test_existing_apply_abort_semantics_unchanged() -> None:
         fs=_make_fs_with_env(),
     )
     summary = svc.run(
-        ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+        ENV_NAME, subtarget=None, action=ProvisionAction.apply, seed=False, no_service_check=False, reporter=reporter
     )  # type: ignore[arg-type]
 
     assert summary.status == "aborted"
@@ -1162,7 +1560,7 @@ def test_missing_env_raises_click_exception() -> None:
 
     with pytest.raises(click.ClickException) as exc_info:
         svc.run(
-            "alpah", subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+            "alpah", subtarget=None, action=ProvisionAction.apply, seed=False, no_service_check=False, reporter=reporter
         )  # type: ignore[arg-type]
 
     assert "alpah" in exc_info.value.format_message()
@@ -1175,7 +1573,7 @@ def test_valid_env_does_not_raise() -> None:
     svc, _exec_svc, reporter = _make_service(config=config)
     # _make_service uses _make_fs_with_env() which includes WORKSPACE_ROOT/alpha
     summary = svc.run(
-        ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+        ENV_NAME, subtarget=None, action=ProvisionAction.apply, seed=False, no_service_check=False, reporter=reporter
     )  # type: ignore[arg-type]
 
     assert summary.status == "ok"
@@ -1196,7 +1594,12 @@ def test_malformed_workspace_provision_raises_click_exception() -> None:
 
     with pytest.raises(click.ClickException) as exc_info:
         svc.run(
-            ENV_NAME, subtarget=None, reset=False, destroy=False, seed=False, no_service_check=False, reporter=reporter
+            ENV_NAME,
+            subtarget=None,
+            action=ProvisionAction.apply,
+            seed=False,
+            no_service_check=False,
+            reporter=reporter,
         )  # type: ignore[arg-type]
 
     msg = exc_info.value.format_message()
@@ -1253,8 +1656,7 @@ def test_name_selector_apply_runs_only_the_named_entry() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget=None,
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -1264,7 +1666,7 @@ def test_name_selector_apply_runs_only_the_named_entry() -> None:
     assert summary.status == "ok"
     assert len(exec_svc.calls) == 1
     assert exec_svc.calls[0][0].name == "mydb"
-    assert exec_svc.calls[0][1] == "apply"
+    assert exec_svc.calls[0][1] is ProvisionAction.apply
     # Only the matched sub-target's started event fires.
     assert reporter.subtarget_started_calls == ["resource"]
 
@@ -1292,8 +1694,7 @@ def test_name_selector_destroy_runs_only_the_named_entry() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget=None,
-        reset=False,
-        destroy=True,
+        action=ProvisionAction.destroy,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -1303,7 +1704,7 @@ def test_name_selector_destroy_runs_only_the_named_entry() -> None:
     assert summary.status == "ok"
     assert len(exec_svc.calls) == 1
     assert exec_svc.calls[0][0].name == "mydb"
-    assert exec_svc.calls[0][1] == "destroy"
+    assert exec_svc.calls[0][1] is ProvisionAction.destroy
 
 
 def test_name_selector_reset_runs_only_the_named_entry() -> None:
@@ -1329,8 +1730,7 @@ def test_name_selector_reset_runs_only_the_named_entry() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget=None,
-        reset=True,
-        destroy=False,
+        action=ProvisionAction.reset,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -1340,7 +1740,7 @@ def test_name_selector_reset_runs_only_the_named_entry() -> None:
     assert summary.status == "ok"
     assert len(exec_svc.calls) == 1
     assert exec_svc.calls[0][0].name == "mydb"
-    assert exec_svc.calls[0][1] == "reset"
+    assert exec_svc.calls[0][1] is ProvisionAction.reset
 
 
 def test_name_selector_unknown_name_raises_clean_error() -> None:
@@ -1358,8 +1758,7 @@ def test_name_selector_unknown_name_raises_clean_error() -> None:
         svc.run(
             ENV_NAME,
             subtarget=None,
-            reset=False,
-            destroy=False,
+            action=ProvisionAction.apply,
             seed=False,
             no_service_check=False,
             reporter=reporter,
@@ -1384,8 +1783,7 @@ def test_name_selector_unknown_scope_token_raises_clean_error() -> None:
         svc.run(
             ENV_NAME,
             subtarget=None,
-            reset=False,
-            destroy=False,
+            action=ProvisionAction.apply,
             seed=False,
             no_service_check=False,
             reporter=reporter,
@@ -1410,8 +1808,7 @@ def test_name_selector_malformed_selector_raises_clean_error() -> None:
         svc.run(
             ENV_NAME,
             subtarget=None,
-            reset=False,
-            destroy=False,
+            action=ProvisionAction.apply,
             seed=False,
             no_service_check=False,
             reporter=reporter,
@@ -1463,8 +1860,7 @@ def test_name_selector_ambiguous_match_raises_clean_error() -> None:
         svc.run(
             ENV_NAME,
             subtarget=None,
-            reset=False,
-            destroy=False,
+            action=ProvisionAction.apply,
             seed=False,
             no_service_check=False,
             reporter=reporter,
@@ -1489,8 +1885,7 @@ def test_name_selector_same_name_different_scope_disambiguates() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget=None,
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -1515,8 +1910,7 @@ def test_name_selector_works_without_explicit_stage() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget=None,
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -1544,8 +1938,7 @@ def test_name_selector_mismatched_explicit_stage_raises_clean_error() -> None:
         svc.run(
             ENV_NAME,
             subtarget="data",
-            reset=False,
-            destroy=False,
+            action=ProvisionAction.apply,
             seed=False,
             no_service_check=False,
             reporter=reporter,
@@ -1553,3 +1946,114 @@ def test_name_selector_mismatched_explicit_stage_raises_clean_error() -> None:
         )  # type: ignore[arg-type]
 
     assert "resname" in exc_info.value.format_message() or "workspace.resname" in exc_info.value.format_message()
+
+
+# ---------------------------------------------------------------------------
+# `started` event action key
+# ---------------------------------------------------------------------------
+
+
+def test_started_event_carries_the_run_action() -> None:
+    """provision_started's action argument is the run's ProvisionAction value."""
+    config = _make_config(
+        provision_raw={
+            "dependency": [{"scope": "workspace", "apply": "scripts/apply.sh", "clean": "scripts/clean.sh"}],
+        }
+    )
+    svc, _exec_svc, reporter = _make_service(config=config)
+    svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+    )  # type: ignore[arg-type]
+
+    assert reporter.provision_started_calls == [(ENV_NAME, ["dependency"], ProvisionAction.clean)]
+
+
+def test_json_started_event_includes_action_key() -> None:
+    """--json started event includes the additive `action` key."""
+    import json
+
+    from winter_cli.modules.provision.provision_reporter import JsonProvisionReporter
+
+    class _CapturingClick:
+        def __init__(self) -> None:
+            self.lines: list[str] = []
+
+        def echo(self, msg: str, err: bool = False) -> None:
+            self.lines.append(msg)
+
+    capturing_click = _CapturingClick()
+    json_reporter = JsonProvisionReporter(click=capturing_click)
+
+    config = _make_config(
+        provision_raw={
+            "dependency": [{"scope": "workspace", "apply": "scripts/apply.sh", "clean": "scripts/clean.sh"}],
+        }
+    )
+    svc, _exec_svc, _reporter = _make_service(config=config)
+    svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=json_reporter,  # type: ignore[arg-type]
+    )
+
+    events = [json.loads(line) for line in capturing_click.lines]
+    started_events = [e for e in events if e.get("type") == "started"]
+    assert len(started_events) == 1
+    assert started_events[0]["action"] == "clean"
+    assert started_events[0]["subtargets"] == ["dependency"]
+
+
+def test_stream_provision_started_uses_clean_verb() -> None:
+    """StreamProvisionReporter prints 'Cleaning' rather than 'Provisioning' for a clean run."""
+    from winter_cli.modules.provision.provision_reporter import StreamProvisionReporter
+
+    class _CapturingClick:
+        def __init__(self) -> None:
+            self.lines: list[str] = []
+
+        def echo(self, msg: str, err: bool = False) -> None:
+            self.lines.append(msg)
+
+        def style(self, msg: str, **kwargs: Any) -> str:
+            return msg
+
+    capturing_click = _CapturingClick()
+    stream_reporter = StreamProvisionReporter(click=capturing_click)
+    stream_reporter.provision_started(ENV_NAME, ["dependency"], ProvisionAction.clean)
+
+    assert capturing_click.lines == [f"Cleaning {ENV_NAME!r}: dependency"]
+
+
+def test_stream_provision_started_uses_the_right_verb_for_every_action() -> None:
+    """Every ProvisionAction member maps to its own verb — no silent 'Provisioning' fallback."""
+    from winter_cli.modules.provision.provision_reporter import StreamProvisionReporter
+
+    class _CapturingClick:
+        def __init__(self) -> None:
+            self.lines: list[str] = []
+
+        def echo(self, msg: str, err: bool = False) -> None:
+            self.lines.append(msg)
+
+        def style(self, msg: str, **kwargs: Any) -> str:
+            return msg
+
+    expected = {
+        ProvisionAction.apply: "Provisioning",
+        ProvisionAction.destroy: "Destroying",
+        ProvisionAction.reset: "Resetting",
+        ProvisionAction.clean: "Cleaning",
+    }
+    for action, verb in expected.items():
+        capturing_click = _CapturingClick()
+        stream_reporter = StreamProvisionReporter(click=capturing_click)
+        stream_reporter.provision_started(ENV_NAME, ["dependency"], action)
+        assert capturing_click.lines == [f"{verb} {ENV_NAME!r}: dependency"]

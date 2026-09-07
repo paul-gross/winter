@@ -10,6 +10,10 @@ mechanics live in its own reference, linked below — this page is the map, not 
 | Run        | `winter service up <env>` | starts the env's services                                                               |
 | Teardown   | `winter ws destroy <env>` | provision teardown → extension hooks → worktree/env removal                             |
 
+`winter clean <env>` sits outside this four-phase sequence: it is a handover reset between tenants, not a phase every
+env passes through once. See [winter-cli/usage/clean.md](./winter-cli/usage/clean.md) for what it runs and why it
+exists.
+
 ## Baseline rule: never run an env you have not provisioned
 
 **Structural creation is not readiness.** `winter ws init` gives you worktrees and an env index; it does **not** install
@@ -38,3 +42,5 @@ the lifecycle, the commands, and the ordering rule above are winter's regardless
   [winter-cli/usage/service.md](./winter-cli/usage/service.md)
 - The service provider protocol winter dispatches to:
   [winter-cli/contracts/service-orchestrator.md](./winter-cli/contracts/service-orchestrator.md)
+- Handover command surface (stages, named selectors, declared `clean` commands):
+  [winter-cli/usage/clean.md](./winter-cli/usage/clean.md)

@@ -2,7 +2,9 @@
 
 The `[[provision.*]]` manifest — the handlers `winter provision` runs to bring a feature environment to a working state.
 This page owns the declarable shape and its validation rules; for running the command (actions, ordering, service check,
-output), see [../usage/provision.md](../usage/provision.md).
+output), see [../usage/provision.md](../usage/provision.md). The same manifest also backs `winter clean`, which runs
+each handler's declared `clean` command instead of `apply`/`destroy`/`reset` — see
+[../usage/clean.md](../usage/clean.md) for that command's surface.
 
 Handlers are declared with the **same shape** in two places — the workspace config (`.winter/config.toml`) and each
 installed extension's `winter-ext.toml` — as an array-of-tables under one of the three sub-targets: `dependency`,
@@ -21,6 +23,7 @@ scope            = "workspace"
 # Array form — commands run in order; stop at first non-zero exit:
 apply            = ["createdb myapp", "psql myapp -f schema.sql"]
 destroy          = "dropdb --if-exists myapp"
+clean            = "rm -rf .cache/myapp-dump"
 required_services = ["workspace/postgres"]
 
 [[provision.data]]
@@ -48,15 +51,16 @@ destroy = "dropdb --if-exists myapp_ext"
 
 ## Per-entry fields
 
-| Field               | Required | Meaning                                                                                                                                                                                                                                                           |
-| ------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scope`             | yes      | Where the handler runs (see [Scope: working directory and environment](#scope-working-directory-and-environment) below). One of `workspace`, `feature-environment`, `feature-worktree`.                                                                           |
-| `apply`             | yes      | Inline shell command (string) or list of inline shell commands (array), run via `sh -c`.                                                                                                                                                                          |
-| `destroy`           | no       | Inline shell command (string) or list (array) run by `--destroy`. If absent, `--destroy` warns and no-ops.                                                                                                                                                        |
-| `reset`             | no       | Inline shell command (string) or list (array) run by `--reset`. If absent, winter composes destroy + apply when both exist; otherwise warns and degrades to re-apply.                                                                                             |
-| `required_services` | no       | Services that must be running before this handler executes (valid only on `resource` and `data` — rejected on `dependency`). The runtime check is [../usage/provision.md#service-check-required_services](../usage/provision.md#service-check-required_services). |
-| `project`           | no       | Project repo name (must be a declared `[[project_repository]]`). Valid only on `feature-environment` scope. When set, the handler's cwd is `<workspace>/<env>/<project>/` instead of the env root. See [Project field](#project-field) below.                     |
-| `name`              | no       | Identifies this entry for single-handler targeting (`winter provision <env> --name <scope>.<name>`). Must be unique within its `scope` grouping — see [Name field](#name-field) below.                                                                            |
+| Field               | Required | Meaning                                                                                                                                                                                                                                                                                                         |
+| ------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scope`             | yes      | Where the handler runs (see [Scope: working directory and environment](#scope-working-directory-and-environment) below). One of `workspace`, `feature-environment`, `feature-worktree`.                                                                                                                         |
+| `apply`             | yes      | Inline shell command (string) or list of inline shell commands (array), run via `sh -c`.                                                                                                                                                                                                                        |
+| `destroy`           | no       | Inline shell command (string) or list (array) run by `--destroy`. If absent, `--destroy` warns and no-ops.                                                                                                                                                                                                      |
+| `reset`             | no       | Inline shell command (string) or list (array) run by `--reset`. If absent, winter composes destroy + apply when both exist; otherwise warns and degrades to re-apply.                                                                                                                                           |
+| `clean`             | no       | Inline shell command (string) or list (array) that removes this handler's build output, caches, or other artifacts a `.gitignore` entry would hide. If absent, the handler contributes nothing to a `clean` run — no error. The runtime behavior is [../usage/clean.md#what-runs](../usage/clean.md#what-runs). |
+| `required_services` | no       | Services that must be running before this handler executes (valid only on `resource` and `data` — rejected on `dependency`). The runtime check is [../usage/provision.md#service-check-required_services](../usage/provision.md#service-check-required_services).                                               |
+| `project`           | no       | Project repo name (must be a declared `[[project_repository]]`). Valid only on `feature-environment` scope. When set, the handler's cwd is `<workspace>/<env>/<project>/` instead of the env root. See [Project field](#project-field) below.                                                                   |
+| `name`              | no       | Identifies this entry for single-handler targeting (`winter provision <env> --name <scope>.<name>`, or `winter clean <env> --name <scope>.<name>`). Must be unique within its `scope` grouping — see [Name field](#name-field) below.                                                                           |
 
 **Sub-targets:** `dependency`, `resource`, `data`. Unknown sub-target keys (e.g. `[[provision.custom]]`) are rejected.
 Unknown per-entry keys are also rejected.
@@ -132,9 +136,9 @@ apply   = "bundle exec rails db:seed"
 
 ## Name field
 
-`name` identifies an entry so it can be targeted individually — apply, `--destroy`, or `--reset` — instead of running
-the whole stage it belongs to. Declaring `name` is optional; entries without it remain reachable only via whole-stage
-actions.
+`name` identifies an entry so it can be targeted individually — apply, `--destroy`, `--reset`, or `winter clean` —
+instead of running the whole stage it belongs to. Declaring `name` is optional; entries without it remain reachable only
+via whole-stage actions.
 
 ```toml
 [[provision.resource]]
@@ -159,7 +163,8 @@ destroy = "rabbitmqadmin delete vhost name=myapp"
   `feature-environment`-scope `mydb` coexist). A collision is a `ConfigError` at parse time and a `[provision]` doctor
   finding.
 - Targeting a named entry uses the scope-qualified selector `<scope>.<name>` on `winter provision` — see
-  [../usage/provision.md#named-resource-selector---name](../usage/provision.md#named-resource-selector---name).
+  [../usage/provision.md#named-resource-selector---name](../usage/provision.md#named-resource-selector---name) — or on
+  `winter clean` — see [../usage/clean.md#named-entry-selector---name](../usage/clean.md#named-entry-selector---name).
 
 ## Validation
 

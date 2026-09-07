@@ -8,6 +8,7 @@ import click
 
 from winter_cli.config.models import WorkspaceConfig
 from winter_cli.core.filesystem import IFilesystemWriter
+from winter_cli.modules.provision.manifest import ProvisionAction
 from winter_cli.modules.provision.provision_reporter import IProvisionReporter
 from winter_cli.modules.workspace.env_index_registry import IEnvIndexRegistry
 from winter_cli.modules.workspace.extension_hook_service import ExtensionHookService
@@ -72,9 +73,10 @@ class _DestroyProvisionReporter:
 
     # ── Provision-level lifecycle ─────────────────────────────────────────
 
-    def provision_started(self, env: str, subtargets: list[str]) -> None:
+    def provision_started(self, env: str, subtargets: list[str], action: ProvisionAction) -> None:
         # Suppress the per-run started event; the outer bracket is emitted
-        # lazily on first provision_started call via _ensure_started.
+        # lazily on first provision_started call via _ensure_started. Teardown
+        # always drives ProvisionAction.destroy, so there's no verb to surface.
         self._ensure_started(subtargets)
 
     def subtarget_started(self, subtarget: str) -> None:
@@ -123,6 +125,7 @@ class _DestroyProvisionReporter:
         action: str,
         required_services: list[str],
         service_check_preview: str | None,
+        cwd: str,
         project: str | None = None,
     ) -> None:
         label = f"{source}/{subtarget}[{scope}]"
@@ -223,8 +226,7 @@ class DestroyService:
                     self._provision_svc.run(
                         env_name=name,
                         subtarget=st,
-                        reset=False,
-                        destroy=True,
+                        action=ProvisionAction.destroy,
                         seed=False,
                         no_service_check=True,
                         reporter=_conforms_destroy_provision_reporter(prov_reporter),
@@ -342,8 +344,7 @@ class DestroyService:
                 summary = provision_svc.run(
                     env_name=name,
                     subtarget=st,
-                    reset=False,
-                    destroy=True,
+                    action=ProvisionAction.destroy,
                     seed=False,
                     no_service_check=True,
                     reporter=adapted,

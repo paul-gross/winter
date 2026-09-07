@@ -205,6 +205,20 @@ def _validate_raw_provision(
                 )
                 entry_ok = False
 
+            # clean optional; present-but-invalid is a failure.
+            clean_raw = entry.get("clean")
+            clean_msg = _validate_command_field(clean_raw, location, "clean", required=False)
+            if clean_msg is not None:
+                findings.append(
+                    ProbeResult(
+                        source=PROVISION_SOURCE,
+                        name=f"provision manifest: {source}",
+                        status=ProbeStatus.fail,
+                        message=clean_msg,
+                    )
+                )
+                entry_ok = False
+
             # required_services only on resource/data.
             required_services_raw = entry.get("required_services")
             if required_services_raw is not None and key not in _SUBTARGETS_WITH_REQUIRED_SERVICES:

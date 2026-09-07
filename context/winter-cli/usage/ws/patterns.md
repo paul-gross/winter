@@ -2,11 +2,11 @@
 
 Shared vocabulary for every `winter ws` command that takes a `PATTERNS`/`REPOS`/`SCOPE` argument — the four remote-sync
 commands (`fetch`, `pull`, `push`, `merge`), `connect`/`disconnect`, `reset`, `clean`, `update`, `status`/`diff`, and
-`destroy` — plus the top-level `provision` command, whose env-level pattern grammar is identical to `ws destroy`'s and
-so is hosted here rather than duplicated under `usage/provision.md` (its placement under `ws/` is deliberate, not a
-routing miss). Each command's own file ([fetch](./fetch.md), [pull](./pull.md), [push](./push.md), [merge](./merge.md),
-etc.) covers its own deltas; this file is the single source for `PATTERNS` grammar, scope flags, and pinned-scope rules.
-For the family, see the [`winter ws` hub](./index.md).
+`destroy` — plus the top-level `provision` and `clean` commands, whose env-level pattern grammar is identical to
+`ws destroy`'s and so is hosted here rather than duplicated under `usage/provision.md` / `usage/clean.md` (its placement
+under `ws/` is deliberate, not a routing miss). Each command's own file ([fetch](./fetch.md), [pull](./pull.md),
+[push](./push.md), [merge](./merge.md), etc.) covers its own deltas; this file is the single source for `PATTERNS`
+grammar, scope flags, and pinned-scope rules. For the family, see the [`winter ws` hub](./index.md).
 
 All four commands accept any number of segment-aware glob `PATTERNS` over `<env>/<repo>`. A bare env name is treated as
 `<env>/*`. Standalone repos are reached via `--standalone` / `--all` and ignore `PATTERNS` — to operate on a single
@@ -113,23 +113,27 @@ winter ws diff alpha/winter        # in place of: winter ws diff alpha --repo wi
 A glob or multiple `PATTERNS` that resolve to more than one env produce concatenated per-repo diff sections, one bold
 env header per env; a single matched env renders with no env header.
 
-## `winter provision` / `winter ws destroy` — env-level patterns
+## `winter provision` / `winter clean` / `winter ws destroy` — env-level patterns
 
-`provision` and `destroy` operate on whole feature environments, not `<env>/<repo>` worktrees, so their `PATTERNS` are
-**bare env-name globs only** — a `/`-qualified pattern (`alpha/winter`) is rejected with a clear error rather than
-silently matching nothing. Both require at least one `PATTERN` (no implicit "all").
+`provision`, `clean`, and `destroy` operate on whole feature environments, not `<env>/<repo>` worktrees, so their
+`PATTERNS` are **bare env-name globs only** — a `/`-qualified pattern (`alpha/winter`) is rejected with a clear error
+rather than silently matching nothing. All three require at least one `PATTERN` (no implicit "all"). `winter clean` is
+not `winter ws clean`, which takes the segment-aware `<env>/<repo>` glob above — see [`clean`](../clean.md) and
+[`ws clean`](./clean.md) for what each verb does.
 
-| Invocation                                                       | Operates on                                       |
-| ---------------------------------------------------------------- | ------------------------------------------------- |
-| `winter provision alpha` / `winter ws destroy alpha`             | just `alpha`                                      |
-| `winter provision alpha beta` / `winter ws destroy alpha beta`   | `alpha` + `beta`, in deterministic (sorted) order |
-| `winter provision 'feature-*'` / `winter ws destroy 'feature-*'` | every env whose name matches the glob             |
+| Invocation                                                                                    | Operates on                                       |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `winter provision alpha` / `winter clean alpha` / `winter ws destroy alpha`                   | just `alpha`                                      |
+| `winter provision alpha beta` / `winter clean alpha beta` / `winter ws destroy alpha beta`    | `alpha` + `beta`, in deterministic (sorted) order |
+| `winter provision 'feature-*'` / `winter clean 'feature-*'` / `winter ws destroy 'feature-*'` | every env whose name matches the glob             |
 
-`ws destroy` is irreversible, so a glob or more than one `PATTERN` prints the resolved env list and asks for
-confirmation before touching anything; a single literal `PATTERN` destroys immediately with no prompt. `--force` skips
-the confirmation (in addition to its existing meaning: bypass the dirty-worktree check and force `git worktree remove`).
+**This confirmation rule belongs to `ws destroy` alone** — `winter provision` and `winter clean` above share the same
+env-level pattern grammar but neither prompts, at any pattern count. `ws destroy` is irreversible, so a glob or more
+than one `PATTERN` prints the resolved env list and asks for confirmation before touching anything; a single literal
+`PATTERN` destroys immediately with no prompt. `--force` skips the confirmation (in addition to its existing meaning:
+bypass the dirty-worktree check and force `git worktree remove`).
 
 `provision`'s sub-target (`dependency` / `resource` / `data`) is a `--stage` option, not a second positional — a bare
-positional there would be ambiguous with the variadic `PATTERNS` list. Use `winter provision alpha
---stage resource` to
-run a single stage.
+positional there would be ambiguous with the variadic `PATTERNS` list. Use `winter provision alpha --stage resource` to
+run a single stage. `winter clean` accepts the same `--stage` option, narrowing its full-chain default to one
+sub-target.

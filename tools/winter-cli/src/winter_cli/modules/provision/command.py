@@ -4,6 +4,7 @@ import click
 
 from winter_cli.cli_context import cli_ctx
 from winter_cli.modules.provision.handler import ProvisionParams
+from winter_cli.modules.provision.manifest import ProvisionAction
 from winter_cli.modules.workspace.pattern_match import validate_env_pattern
 
 
@@ -110,14 +111,15 @@ def provision_command(
     for pattern in patterns:
         validate_env_pattern(pattern)
 
+    action = ProvisionAction.destroy if destroy else (ProvisionAction.reset if reset else ProvisionAction.apply)
+
     container = cli_ctx(ctx).container
     handler = container.provision_command_handler()
     handler.run(
         ProvisionParams(
             patterns=list(patterns),
             subtarget=subtarget,
-            reset=reset,
-            destroy=destroy,
+            action=action,
             seed=seed,
             no_service_check=no_service_check,
             dry_run=dry_run,

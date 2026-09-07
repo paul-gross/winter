@@ -5,6 +5,7 @@ import sys
 
 import click
 
+from winter_cli.modules.provision.manifest import ProvisionAction
 from winter_cli.modules.provision.provision_reporter import (
     IProvisionReporter,
     JsonProvisionReporter,
@@ -19,12 +20,17 @@ from winter_cli.modules.workspace.workspace_repository import IReadWorkspaceRepo
 
 @dataclasses.dataclass
 class ProvisionParams:
-    """Parsed parameters for a ``winter provision`` invocation."""
+    """Parsed parameters for a ``winter provision`` or ``winter clean`` invocation.
+
+    ``action`` is what distinguishes the two verbs (and provision's own
+    ``--reset``/``--destroy`` narrowing): ``winter provision`` builds this with
+    ``ProvisionAction.apply``/``.reset``/``.destroy``; ``winter clean`` always
+    builds it with ``ProvisionAction.clean``.
+    """
 
     patterns: list[str]
     subtarget: str | None = None
-    reset: bool = False
-    destroy: bool = False
+    action: ProvisionAction = ProvisionAction.apply
     seed: bool = False
     no_service_check: bool = False
     dry_run: bool = False
@@ -33,17 +39,20 @@ class ProvisionParams:
 
 
 class ProvisionCommandHandler:
-    """Dispatches ``winter provision`` runs to the service with the right reporter.
+    """Dispatches ``winter provision`` and ``winter clean`` runs to the service with the right reporter.
 
     Named ``ProvisionCommandHandler`` (not ``ProvisionHandler``) to avoid
     collision with the manifest dataclass ``ProvisionHandler`` in
     ``modules.provision.manifest``.
 
+    The two verbs share this handler and ``ProvisionService`` entirely; only
+    ``ProvisionParams.action`` (set by each verb's own command function)
+    distinguishes a `provision` run from a `clean` run.
+
     ``patterns`` are env-level globs (bare ``<env>``, no ``<env>/<repo>``
-    segment — provision always operates on a whole env). Each matched env is
-    provisioned in turn against the same ``ProvisionService``, which still
-    only knows how to provision one env per call; the fan-out and ordering
-    live here.
+    segment — both verbs always operate on a whole env). Each matched env is
+    run in turn against the same ``ProvisionService``, which still only knows
+    how to run one env per call; the fan-out and ordering live here.
     """
 
     def __init__(
@@ -74,8 +83,7 @@ class ProvisionCommandHandler:
             summary = self._provision_service.run(
                 env_name=env_name,
                 subtarget=params.subtarget,
-                reset=params.reset,
-                destroy=params.destroy,
+                action=params.action,
                 seed=params.seed,
                 no_service_check=params.no_service_check,
                 reporter=reporter,  # type: ignore[arg-type]
@@ -91,11 +99,12 @@ class ProvisionCommandHandler:
         """Resolve env-level PATTERNS to concrete env names, in deterministic order.
 
         A literal pattern (no glob char) is always included verbatim — even if
-        the env doesn't exist on disk yet — so `winter provision <typo>` still
-        surfaces `ProvisionService`'s own "environment does not exist" error
-        instead of silently matching nothing. A glob pattern is expanded
-        against the envs discovered on disk, deduped against the literal
-        names so a mixed invocation never provisions the same env twice.
+        the env doesn't exist on disk yet — so `winter provision <typo>` or
+        `winter clean <typo>` still surfaces `ProvisionService`'s own
+        "environment does not exist" error instead of silently matching
+        nothing. A glob pattern is expanded against the envs discovered on
+        disk, deduped against the literal names so a mixed invocation never
+        runs the same env twice.
         """
 
         def discover_names() -> list[str]:

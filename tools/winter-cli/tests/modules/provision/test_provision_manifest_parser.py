@@ -390,6 +390,20 @@ def test_parse_reset_as_list_normalizes_to_tuple() -> None:
     assert handlers[0].reset == ("echo r1", "echo r2")
 
 
+def test_parse_clean_as_string_normalizes_to_single_element_tuple() -> None:
+    parser = ProvisionManifestParser()
+    raw = {"resource": [{"scope": "workspace", "apply": "echo apply", "clean": "echo clean"}]}
+    handlers = parser.parse(raw, SOURCE)
+    assert handlers[0].clean == ("echo clean",)
+
+
+def test_parse_clean_as_list_normalizes_to_tuple() -> None:
+    parser = ProvisionManifestParser()
+    raw = {"resource": [{"scope": "workspace", "apply": "echo apply", "clean": ["echo c1", "echo c2"]}]}
+    handlers = parser.parse(raw, SOURCE)
+    assert handlers[0].clean == ("echo c1", "echo c2")
+
+
 def test_parse_apply_empty_list_rejected() -> None:
     parser = ProvisionManifestParser()
     raw = {"dependency": [{"scope": "workspace", "apply": []}]}
@@ -439,6 +453,20 @@ def test_parse_reset_non_string_element_in_list_rejected() -> None:
         parser.parse(raw, SOURCE)
 
 
+def test_parse_clean_empty_list_rejected() -> None:
+    parser = ProvisionManifestParser()
+    raw = {"resource": [{"scope": "workspace", "apply": "echo apply", "clean": []}]}
+    with pytest.raises(ConfigError):
+        parser.parse(raw, SOURCE)
+
+
+def test_parse_clean_empty_string_element_rejected() -> None:
+    parser = ProvisionManifestParser()
+    raw = {"resource": [{"scope": "workspace", "apply": "echo apply", "clean": ["echo ok", ""]}]}
+    with pytest.raises(ConfigError):
+        parser.parse(raw, SOURCE)
+
+
 def test_parse_apply_empty_string_in_list_rejected() -> None:
     parser = ProvisionManifestParser()
     raw = {"dependency": [{"scope": "workspace", "apply": ["echo ok", ""]}]}
@@ -460,6 +488,13 @@ def test_parse_reset_neither_str_nor_list_rejected() -> None:
         parser.parse(raw, SOURCE)
 
 
+def test_parse_clean_neither_str_nor_list_rejected() -> None:
+    parser = ProvisionManifestParser()
+    raw = {"resource": [{"scope": "workspace", "apply": "echo apply", "clean": 99}]}
+    with pytest.raises(ConfigError):
+        parser.parse(raw, SOURCE)
+
+
 def test_parse_absent_destroy_is_none() -> None:
     parser = ProvisionManifestParser()
     raw = {"dependency": [{"scope": "workspace", "apply": "echo apply"}]}
@@ -472,6 +507,13 @@ def test_parse_absent_reset_is_none() -> None:
     raw = {"dependency": [{"scope": "workspace", "apply": "echo apply"}]}
     handlers = parser.parse(raw, SOURCE)
     assert handlers[0].reset is None
+
+
+def test_parse_absent_clean_is_none() -> None:
+    parser = ProvisionManifestParser()
+    raw = {"dependency": [{"scope": "workspace", "apply": "echo apply"}]}
+    handlers = parser.parse(raw, SOURCE)
+    assert handlers[0].clean is None
 
 
 # ── project field ─────────────────────────────────────────────────────────────

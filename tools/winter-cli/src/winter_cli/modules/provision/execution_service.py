@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, assert_never
 
 import click
 
@@ -11,7 +11,7 @@ from winter_cli.config.models import WorkspaceConfig
 from winter_cli.core.extension_invocation import build_extension_env
 from winter_cli.core.filesystem import IFilesystemWriter
 from winter_cli.core.subprocess_runner import ISubprocessRunner
-from winter_cli.modules.provision.manifest import ProvisionHandler, ProvisionScope
+from winter_cli.modules.provision.manifest import ProvisionAction, ProvisionHandler, ProvisionScope
 from winter_cli.modules.workspace.env_index import build_env_trio
 from winter_cli.modules.workspace.env_index_registry import IEnvIndexRegistry
 from winter_cli.modules.workspace.extension_manifest import EXT_MANIFEST, ExtensionManifestLoader
@@ -71,7 +71,7 @@ class HandlerExecutionResult:
     """
 
     handler: ProvisionHandler
-    action: str
+    action: ProvisionAction
     runs: tuple[SingleRunResult, ...] = field(default_factory=tuple)
     error: str | None = None
 
@@ -124,24 +124,39 @@ class ProvisionExecutionService:
     def run_handler(
         self,
         handler: ProvisionHandler,
-        action: str,
+        action: ProvisionAction,
         env_name: str,
         sink: IProvisionOutputSink,
     ) -> HandlerExecutionResult:
         """Run one handler's named action and return a structured result.
 
-        ``action`` must be one of ``"apply"``, ``"destroy"``, or ``"reset"``.
         The caller is responsible for ensuring the action's command tuple is
         non-None on the handler before calling here (Phase 4 owns the
-        decompose/warn/degrade decisions).
+        decompose/warn/degrade decisions). ``sink`` still speaks in the
+        action's string value — only this service and its caller deal in
+        ``ProvisionAction``.
 
         Returns ``HandlerExecutionResult`` with all per-run outcomes.  An
         OSError launching sh is captured in ``HandlerExecutionResult.error``
         and ``ok=False``; no exception is raised.
+
+        A ``click.ClickException`` from ``_resolve_cwds`` (a missing project
+        worktree for a ``feature-environment`` handler) is a per-handler
+        problem, not a whole-run precondition failure. Under
+        ``ProvisionAction.clean`` — whose contract is best-effort — it is
+        caught here and folded into ``HandlerExecutionResult.error`` exactly
+        like a ``RepoError`` from source resolution, so the caller's existing
+        ``clean_error`` degrade path (report on this handler's line, keep
+        going through siblings and remaining sub-targets/envs) applies
+        without ``ProvisionService`` needing to know why the cwd could not be
+        resolved. For every other action the exception still propagates
+        uncaught — a missing worktree is a hard error for apply/destroy/reset,
+        unchanged from before.
         """
+        action_str = action.value
         commands = self._resolve_script(handler, action)
         if commands is None:
-            error = f"handler for {handler.subtarget!r} has no script for action {action!r}"
+            error = f"handler for {handler.subtarget!r} has no script for action {action_str!r}"
             logger.warning("%s", error)
             return HandlerExecutionResult(handler=handler, action=action, error=error)
 
@@ -152,7 +167,14 @@ class ProvisionExecutionService:
             sink.execution_error(_handler_label(handler), error)
             return HandlerExecutionResult(handler=handler, action=action, error=error)
 
-        cwds = self._resolve_cwds(handler, env_name)
+        try:
+            cwds = self._resolve_cwds(handler, env_name)
+        except click.ClickException as exc:
+            if action is not ProvisionAction.clean:
+                raise
+            error = str(exc)
+            sink.execution_error(_handler_label(handler), error)
+            return HandlerExecutionResult(handler=handler, action=action, error=error)
         runs: list[SingleRunResult] = []
 
         for cwd in cwds:
@@ -168,7 +190,7 @@ class ProvisionExecutionService:
             # command sequence, not each individual command, so the reporter
             # sees one started/completed pair per cwd regardless of how many
             # commands the tuple contains.
-            sink.execution_started(label, action, cwd)
+            sink.execution_started(label, action_str, cwd)
             cwd_exit_code = 0
             try:
                 for command in commands:
@@ -183,7 +205,7 @@ class ProvisionExecutionService:
                 error = f"provision command — {exc}"
                 sink.execution_error(label, error)
                 return HandlerExecutionResult(handler=handler, action=action, runs=tuple(runs), error=error)
-            sink.execution_completed(label, action, cwd_exit_code)
+            sink.execution_completed(label, action_str, cwd_exit_code)
             runs.append(SingleRunResult(cwd=cwd, exit_code=cwd_exit_code))
 
         return HandlerExecutionResult(handler=handler, action=action, runs=tuple(runs))
@@ -191,15 +213,23 @@ class ProvisionExecutionService:
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     @staticmethod
-    def _resolve_script(handler: ProvisionHandler, action: str) -> tuple[str, ...] | None:
-        """Return the command tuple for the named action, or None."""
-        if action == "apply":
+    def _resolve_script(handler: ProvisionHandler, action: ProvisionAction) -> tuple[str, ...] | None:
+        """Return the command tuple for the named action.
+
+        Dispatches exhaustively over ``ProvisionAction`` so a member added to
+        that enum without a case here fails loudly (``pyright`` flags the
+        ``assert_never``) instead of silently falling through to a handler's
+        destructive ``clean`` command.
+        """
+        if action is ProvisionAction.apply:
             return handler.apply
-        if action == "destroy":
+        if action is ProvisionAction.destroy:
             return handler.destroy
-        if action == "reset":
+        if action is ProvisionAction.reset:
             return handler.reset
-        raise ValueError(f"unknown action {action!r}; must be 'apply', 'destroy', or 'reset'")
+        if action is ProvisionAction.clean:
+            return handler.clean
+        assert_never(action)
 
     def _resolve_source(
         self,
@@ -281,7 +311,13 @@ class ProvisionExecutionService:
         For ``feature-environment`` handlers with a ``project`` field, returns
         a single-element list containing ``<workspace>/<env>/<project>/``.
         Raises ``click.ClickException`` with a hard error when that directory
-        does not exist (missing worktree for the target env).
+        does not exist (missing worktree for the target env). This is a
+        per-handler resolution failure, not a whole-run precondition: the
+        caller, ``run_handler``, catches it and folds it into
+        ``HandlerExecutionResult.error`` when the action is
+        ``ProvisionAction.clean`` (best-effort — the run keeps going through
+        siblings and remaining sub-targets/envs); for every other action it
+        propagates as the hard error it already was.
         """
         workspace_root = self._config.workspace_root
         scope = handler.scope

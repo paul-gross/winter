@@ -43,10 +43,10 @@ under an `[agents]` source group.
 **Built-in provision probe** validates every `[[provision.*]]` entry declared in `.winter/config.toml` and in each
 installed extension's `winter-ext.toml`. Each bad entry emits one finding under a `[provision]` source group without
 aborting other checks. The probe validates: `scope` is a known value (`workspace`, `feature-environment`,
-`feature-worktree`); `apply` is present and is a non-empty string or a non-empty list of non-empty strings; `destroy`
-and `reset`, when present, are each a non-empty string or a non-empty list of non-empty strings; `required_services` is
-only declared on `resource` or `data` entries (not `dependency`); no unknown keys are present. A missing or empty
-`[provision]` table is silently skipped.
+`feature-worktree`); `apply` is present and is a non-empty string or a non-empty list of non-empty strings; `destroy`,
+`reset`, and `clean`, when present, are each a non-empty string or a non-empty list of non-empty strings;
+`required_services` is only declared on `resource` or `data` entries (not `dependency`); no unknown keys are present. A
+missing or empty `[provision]` table is silently skipped.
 
 **Built-in capabilities probes** run unconditionally — one probe per known capability slot (currently just `service`). A
 slot that is invalid (broken config binding, missing entrypoint) → `fail`; a slot whose bound provider declares an

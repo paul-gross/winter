@@ -39,12 +39,12 @@ It reads `[[provision.*]]` handlers declared in the workspace config (`.winter/c
 extension's `winter-ext.toml`, and runs them in a defined order against every env `PATTERNS` matches.
 
 `PATTERNS` is a **bare env-name glob** (see
-[patterns.md](./ws/patterns.md#winter-provision--winter-ws-destroy--env-level-patterns) for the shared grammar with
-`winter ws destroy`) — a `/`-qualified pattern is rejected, since provision operates on a whole env, not an
-`<env>/<repo>` worktree. At least one `PATTERN` is required. The sub-target is selected with `--stage`, not a positional
-— a bare positional after a variadic argument can't be told apart from one more pattern. Each matched env runs
-independently against the same handler set; `--json` emits one `started`/`finished`-bracketed event stream per env, in
-the same NDJSON stream.
+[patterns.md](./ws/patterns.md#winter-provision--winter-clean--winter-ws-destroy--env-level-patterns) for the shared
+grammar with `winter clean` and `winter ws destroy`) — a `/`-qualified pattern is rejected, since provision operates on
+a whole env, not an `<env>/<repo>` worktree. At least one `PATTERN` is required. The sub-target is selected with
+`--stage`, not a positional — a bare positional after a variadic argument can't be told apart from one more pattern.
+Each matched env runs independently against the same handler set; `--json` emits one `started`/`finished`-bracketed
+event stream per env, in the same NDJSON stream.
 
 ## Relationship to `winter ws init`
 
@@ -180,8 +180,9 @@ scripts execute. See [configuration/lint.md#built-in-core-checks](../configurati
 service:
 
 - Per-handler output: sub-target, scope, source, the commands that would run (joined with `&&` for display when
-  multiple), resolved action (apply / destroy / reset), resolved `project` cwd (when set), and which `required_services`
-  it would check (if any).
+  multiple), resolved action (apply / destroy / reset — or `clean` when this same preview contract is run via
+  [`winter clean`](./clean.md)), resolved `project` cwd (when set), and which `required_services` it would check (if
+  any).
 - A sub-target with no declared handlers is reported as a no-op.
 - No mutation occurs: no commands run, no `winter service up` calls are made.
 - See the flag validation rules under [Action vocabulary](#action-vocabulary), above, for what `--dry-run` can be
@@ -192,23 +193,41 @@ events with `plan_handler` events — one per resolved action in plan order. (A 
 field but does have a `destroy` field emits two events: a `destroy` then an `apply`.) The `plan_handler` event includes
 a `project` key (`null` or the project name) so the resolved cwd is visible in the structured output.
 
+**`--destroy` and `--reset` diverge from their real runs on warnings, but not the same way.** A real `--destroy` run
+emits a `handler_warn` for a handler with no declared `destroy`; the `--dry-run` plan is silent for that handler instead
+— it is simply absent from the `plan_handler` events, with no matching warn. A `--destroy --dry-run --json` consumer can
+still tell the two "nothing to run" cases apart, though: an empty sub-target (no handler matched at all) emits
+`no_handlers`, while a handler that matched but has no `destroy` script emits neither `no_handlers` nor `plan_handler`
+for that handler.
+
+A real `--reset` run emits a `handler_warn` for a handler with neither `reset` nor `destroy` declared, then runs `apply`
+as the degraded action. The `--dry-run` plan for that same handler shows the degrade — a `plan_handler` event with
+`action: "apply"` — it just omits the accompanying `handler_warn`.
+
+`clean` does not share either gap: an explicit `--name` selector naming a handler with no declared `clean` emits a
+`handler_warn` in the `--dry-run` plan too, matching what a real `clean` run does — see
+[clean.md § Named entry selector (`--name`)](./clean.md#named-entry-selector---name).
+
 ## `--json` output
 
-`--json` emits NDJSON, one JSON object per line. The event stream:
+`--json` emits NDJSON, one JSON object per line. This event stream is shared with [`winter clean`](./clean.md) —
+`IProvisionReporter` is the same reporter for both verbs, so the event vocabulary and field shapes below are one table,
+not two; the `started` event's `action` field reads `"clean"` only for a `winter clean` run, never for
+`winter provision` itself. The event stream:
 
-| `type`                  | When emitted                                          | Key fields                                                                                                            |
-| ----------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `started`               | Beginning of the run                                  | `env`, `subtargets` (ordered list of sub-targets to run)                                                              |
-| `subtarget_started`     | Before each sub-target                                | `subtarget`                                                                                                           |
-| `no_handlers`           | Sub-target has no declared handlers                   | `subtarget`                                                                                                           |
-| `execution_started`     | Before each command sequence invocation (one per cwd) | `label`, `action`, `cwd`                                                                                              |
-| `execution_output_line` | Each line from the running command                    | `label`, `line`                                                                                                       |
-| `execution_completed`   | Command sequence finished for this cwd                | `label`, `action`, `exit_status`                                                                                      |
-| `execution_error`       | Command could not be launched                         | `label`, `error`                                                                                                      |
-| `handler_result`        | Summary after a handler completes                     | `subtarget`, `scope`, `source`, `action`, `service_check`, `runs:[{cwd, exit_status}]`, `exit_status`                 |
-| `handler_warn`          | Degraded action (e.g. no destroy handler)             | `subtarget`, `scope`, `source`, `message`                                                                             |
-| `finished`              | End of the run                                        | `status` (`"ok"` / `"aborted"` / `"error"`), `aborted_at` (sub-target name when aborted, else absent)                 |
-| `plan_handler`          | (`--dry-run` only) Handler that would run             | `would_run: true`, `subtarget`, `scope`, `source`, `commands`, `action`, `required_services`, `service_check_preview` |
+| `type`                  | When emitted                                                                                                                   | Key fields                                                                                                                                                                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `started`               | Beginning of the run                                                                                                           | `env`, `subtargets` (ordered list of sub-targets to run), `action` (run verb: `apply` / `destroy` / `reset` / `clean`)                                                                                                                          |
+| `subtarget_started`     | Before each sub-target                                                                                                         | `subtarget`                                                                                                                                                                                                                                     |
+| `no_handlers`           | Sub-target has no declared handlers — for a `clean` run, also fires when the sub-target has handlers but none declares `clean` | `subtarget`                                                                                                                                                                                                                                     |
+| `execution_started`     | Before each command sequence invocation (one per cwd)                                                                          | `label`, `action`, `cwd`                                                                                                                                                                                                                        |
+| `execution_output_line` | Each line from the running command                                                                                             | `label`, `line`                                                                                                                                                                                                                                 |
+| `execution_completed`   | Command sequence finished for this cwd                                                                                         | `label`, `action`, `exit_status`                                                                                                                                                                                                                |
+| `execution_error`       | Command could not be launched                                                                                                  | `label`, `error`                                                                                                                                                                                                                                |
+| `handler_result`        | Summary after a handler completes                                                                                              | `subtarget`, `scope`, `source`, `action`, `service_check`, `runs:[{cwd, exit_status}]`, `exit_status`                                                                                                                                           |
+| `handler_warn`          | Degraded action (e.g. no destroy handler)                                                                                      | `subtarget`, `scope`, `source`, `message`                                                                                                                                                                                                       |
+| `finished`              | End of the run                                                                                                                 | `status` (`"ok"` / `"aborted"` / `"error"` — for a `clean` run, `"error"` means one or more handlers failed and the run continued to completion, not that it stopped), `aborted_at` (always present; sub-target name when aborted, else `null`) |
+| `plan_handler`          | (`--dry-run` only) Handler that would run                                                                                      | `would_run: true`, `subtarget`, `scope`, `source`, `commands`, `action`, `required_services`, `service_check_preview`                                                                                                                           |
 
 **`plan_handler` fields** (emitted only with `--dry-run --json`):
 
@@ -219,7 +238,7 @@ a `project` key (`null` or the project name) so the resolved cwd is visible in t
 | `scope`                 | string          | Handler scope (`workspace`, `feature-environment`, `feature-worktree`)                                                                       |
 | `source`                | string          | Declaring source (`project` or extension prefix)                                                                                             |
 | `commands`              | list of strings | Ordered list of shell commands that would run (each via `sh -c`)                                                                             |
-| `action`                | string          | Resolved action (`apply`, `destroy`, or `reset`)                                                                                             |
+| `action`                | string          | Resolved action (`apply`, `destroy`, `reset`, or `clean`)                                                                                    |
 | `required_services`     | list of strings | `required_services` tokens from the handler declaration                                                                                      |
 | `service_check_preview` | string or null  | Comma-separated owning scopes that would be checked/started; `null` when no `required_services`                                              |
 | `project`               | string or null  | Resolved project name when `project` is declared; `null` otherwise. Identifies the worktree subdir `<env>/<project>/` that would be the cwd. |

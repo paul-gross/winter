@@ -5,8 +5,8 @@ counterpart to [`winter ws init ENV`](./init.md), fanned out across every env `P
 
 Each `PATTERN` is a **bare env-name glob** — destroy operates on whole envs, not `<env>/<repo>` worktrees, so a
 `/`-qualified pattern is rejected. At least one `PATTERN` is required (no implicit "all"). See
-[patterns.md](./patterns.md#winter-provision--winter-ws-destroy--env-level-patterns) for the shared grammar with
-`winter provision`.
+[patterns.md](./patterns.md#winter-provision--winter-clean--winter-ws-destroy--env-level-patterns) for the shared
+grammar with `winter provision` and `winter clean`.
 
 ```bash
 winter ws destroy alpha              # one env, no prompt

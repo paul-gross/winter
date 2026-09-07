@@ -7,7 +7,7 @@ from winter_cli.core.config_file import ConfigError
 
 PROVISION_SUBTARGETS = ("dependency", "resource", "data")
 
-_ENTRY_ALLOWED_KEYS = frozenset({"scope", "apply", "destroy", "reset", "required_services", "project", "name"})
+_ENTRY_ALLOWED_KEYS = frozenset({"scope", "apply", "destroy", "reset", "clean", "required_services", "project", "name"})
 _SUBTARGETS_WITH_REQUIRED_SERVICES = frozenset({"resource", "data"})
 
 
@@ -15,6 +15,20 @@ class ProvisionScope(enum.Enum):
     workspace = "workspace"
     feature_environment = "feature-environment"
     feature_worktree = "feature-worktree"
+
+
+class ProvisionAction(enum.Enum):
+    """The action vocabulary a provision handler runs.
+
+    Members are named after the ``ProvisionHandler`` command-tuple fields they
+    resolve to (``apply``, ``destroy``, ``reset``, ``clean``) — the manifest
+    keys and the action names are the same vocabulary by construction.
+    """
+
+    apply = "apply"
+    destroy = "destroy"
+    reset = "reset"
+    clean = "clean"
 
 
 # Scopes on which ``project`` is permitted (defined after the enum so the enum members are available).
@@ -41,6 +55,7 @@ class ProvisionHandler:
     source: str
     destroy: tuple[str, ...] | None = None
     reset: tuple[str, ...] | None = None
+    clean: tuple[str, ...] | None = None
     required_services: tuple[str, ...] = field(default_factory=tuple)
     project: str | None = None
     name: str | None = None
@@ -166,6 +181,9 @@ class ProvisionManifestParser:
                 reset_raw = entry.get("reset")
                 reset = _parse_commands(reset_raw, f"provision.{key}[{i}]", "reset", source, required=False)
 
+                clean_raw = entry.get("clean")
+                clean = _parse_commands(clean_raw, f"provision.{key}[{i}]", "clean", source, required=False)
+
                 required_services_raw = entry.get("required_services")
                 if required_services_raw is not None:
                     if key not in _SUBTARGETS_WITH_REQUIRED_SERVICES:
@@ -225,6 +243,7 @@ class ProvisionManifestParser:
                         source=source,
                         destroy=destroy,
                         reset=reset,
+                        clean=clean,
                         required_services=required_services,
                         project=project,
                         name=name,

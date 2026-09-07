@@ -2,6 +2,9 @@
 
 For the rest of the family, see the [`winter ws` hub](./index.md).
 
+**This is not [`winter clean`](../clean.md)** — a project-declared removal step, not a git-level one. See that page for
+the full contrast; never assume one implies the other.
+
 `winter ws clean PATTERNS... [--force] [--dry-run] [--json]` removes untracked files and untracked directories from
 every matched, non-pinned project worktree. **A bare `<env>` matches every non-pinned worktree in that env** (`<env>/*`)
 — see [`winter ws clean`](./patterns.md#winter-ws-clean--patterns-only-no-trailing-ref) in `patterns.md` for the

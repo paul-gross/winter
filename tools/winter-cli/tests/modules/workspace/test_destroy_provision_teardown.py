@@ -27,7 +27,7 @@ from winter_cli.config.models import (
     ProjectRepositoryConfig,
     WorkspaceConfig,
 )
-from winter_cli.modules.provision.manifest import ProvisionHandler
+from winter_cli.modules.provision.manifest import ProvisionAction, ProvisionHandler
 from winter_cli.modules.workspace.destroy_service import DestroyService
 from winter_cli.modules.workspace.extension_hook_service import ExtensionHookService
 from winter_cli.modules.workspace.extension_manifest import ExtensionManifestLoader
@@ -43,7 +43,7 @@ DEMO_MAIN = WORKSPACE_ROOT / "projects" / "demo"
 
 
 class _FakeHandlerExecutionResult:
-    def __init__(self, handler: ProvisionHandler, action: str, ok: bool = True) -> None:
+    def __init__(self, handler: ProvisionHandler, action: ProvisionAction, ok: bool = True) -> None:
         self.handler = handler
         self.action = action
         self.runs: tuple[Any, ...] = ()
@@ -59,12 +59,12 @@ class _RecordingExecutionService:
     """Records run_handler calls; returns ok by default."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[ProvisionHandler, str, str]] = []
+        self.calls: list[tuple[ProvisionHandler, ProvisionAction, str]] = []
 
     def run_handler(
         self,
         handler: ProvisionHandler,
-        action: str,
+        action: ProvisionAction,
         env_name: str,
         sink: Any,
     ) -> _FakeHandlerExecutionResult:
@@ -95,7 +95,7 @@ class _FakeProvisionReporter:
     """Records IProvisionReporter events for assertion."""
 
     def __init__(self) -> None:
-        self.provision_started_calls: list[tuple[str, list[str]]] = []
+        self.provision_started_calls: list[tuple[str, list[str], ProvisionAction]] = []
         self.subtarget_started_calls: list[str] = []
         self.no_handlers_calls: list[str] = []
         self.handler_result_calls: list[dict[str, Any]] = []
@@ -103,8 +103,8 @@ class _FakeProvisionReporter:
         self.plan_handler_calls: list[dict[str, Any]] = []
         self.provision_finished_calls: list[tuple[str, str | None]] = []
 
-    def provision_started(self, env: str, subtargets: list[str]) -> None:
-        self.provision_started_calls.append((env, subtargets))
+    def provision_started(self, env: str, subtargets: list[str], action: ProvisionAction) -> None:
+        self.provision_started_calls.append((env, subtargets, action))
 
     def subtarget_started(self, subtarget: str) -> None:
         self.subtarget_started_calls.append(subtarget)
@@ -151,6 +151,7 @@ class _FakeProvisionReporter:
         action: str,
         required_services: list[str],
         service_check_preview: str | None,
+        cwd: str,
         project: str | None = None,
     ) -> None:
         self.plan_handler_calls.append(
@@ -160,6 +161,7 @@ class _FakeProvisionReporter:
                 "source": source,
                 "commands": commands,
                 "action": action,
+                "cwd": cwd,
                 "project": project,
             }
         )
@@ -191,8 +193,7 @@ class _FakeProvisionService:
         self,
         env_name: str,
         subtarget: str | None,
-        reset: bool,
-        destroy: bool,
+        action: ProvisionAction,
         seed: bool,
         no_service_check: bool,
         reporter: Any,
@@ -202,13 +203,13 @@ class _FakeProvisionService:
             {
                 "env_name": env_name,
                 "subtarget": subtarget,
-                "destroy": destroy,
+                "destroy": action is ProvisionAction.destroy,
                 "dry_run": dry_run,
             }
         )
         # Mirror the real ProvisionService lifecycle events so reporter adapters
         # behave correctly (e.g. _DestroyProvisionReporter._ensure_started fires).
-        reporter.provision_started(env_name, [subtarget] if subtarget else [])
+        reporter.provision_started(env_name, [subtarget] if subtarget else [], action.value)
         reporter.provision_finished(status="ok", aborted_at=None)
 
         class _OkSummary:
@@ -229,8 +230,7 @@ class _FailingProvisionService:
         self,
         env_name: str,
         subtarget: str | None,
-        reset: bool,
-        destroy: bool,
+        action: ProvisionAction,
         seed: bool,
         no_service_check: bool,
         reporter: Any,
@@ -240,12 +240,12 @@ class _FailingProvisionService:
             {
                 "env_name": env_name,
                 "subtarget": subtarget,
-                "destroy": destroy,
+                "destroy": action is ProvisionAction.destroy,
                 "dry_run": dry_run,
             }
         )
         # Emit lifecycle events so the reporter adapter behaves correctly.
-        reporter.provision_started(env_name, [subtarget] if subtarget else [])
+        reporter.provision_started(env_name, [subtarget] if subtarget else [], action.value)
 
         if subtarget == self.fail_subtarget:
             reporter.provision_finished(status="error", aborted_at=None)

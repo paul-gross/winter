@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import Any, Protocol
+from typing import Any, Protocol, assert_never
 
 import click
 
@@ -14,6 +14,7 @@ from winter_cli.modules.provision.execution_service import HandlerExecutionResul
 from winter_cli.modules.provision.manifest import (
     PROVISION_SUBTARGETS,
     SELECTOR_SCOPE_TOKENS,
+    ProvisionAction,
     ProvisionHandler,
     ProvisionScope,
 )
@@ -159,7 +160,21 @@ class ProvisionService:
       the execution service.
     - Implement abort semantics: a failing apply within a sub-target's handlers
       aborts that sub-target immediately AND skips all remaining sub-targets.
+      A failing ``destroy``/``reset`` ends the run non-ok without running the
+      rest of that single targeted sub-target. A failing ``clean`` is
+      best-effort: it neither stops the rest of its sub-target nor the
+      remaining sub-targets, but the run still ends non-ok. This best-effort
+      contract also covers a handler whose cwd cannot be resolved (e.g. a
+      ``feature-environment`` handler naming a ``project`` whose worktree is
+      missing in this env) — ``ProvisionExecutionService`` folds that failure
+      into the handler's result under ``clean`` instead of raising, so it
+      degrades exactly like a failing clean script.
     - Delegate service-check responsibility to the injected seam (Phase 5).
+    - A ``click.ClickException`` raised by the injected service-check
+      (``IProvisionServiceCheck.ensure``) is a precondition failure for the
+      whole run, not a per-handler one: it still aborts the run by
+      propagating uncaught, but ``provision_finished`` is emitted first so a
+      ``--json`` consumer still sees a closing ``finished`` event.
     """
 
     def __init__(
@@ -182,8 +197,7 @@ class ProvisionService:
         self,
         env_name: str,
         subtarget: str | None,
-        reset: bool,
-        destroy: bool,
+        action: ProvisionAction,
         seed: bool,
         no_service_check: bool,
         reporter: IProvisionReporter,
@@ -194,6 +208,13 @@ class ProvisionService:
 
         ``subtarget`` is the explicit sub-target name when given, or ``None``
         for the full dependency→resource→data chain.
+
+        ``action`` selects the run verb: bare ``ProvisionAction.apply``, or
+        ``ProvisionAction.destroy`` / ``ProvisionAction.reset`` to narrow a
+        single sub-target to that action instead. ``ProvisionAction.clean``
+        runs the full chain (or a narrowed sub-target) against each handler's
+        declared ``clean`` command; a handler declaring none is filtered out
+        at selection rather than run.
 
         ``name_selector``, when given, is a scope-qualified ``<scope>.<name>``
         token (see ``manifest.SELECTOR_SCOPE_TOKENS``) that narrows the run to
@@ -231,21 +252,24 @@ class ProvisionService:
         else:
             subtargets_to_run = self._resolve_subtargets(subtarget, seed)
 
-        reporter.provision_started(env_name, list(subtargets_to_run))
+        reporter.provision_started(env_name, list(subtargets_to_run), action)
 
         if dry_run:
             return self._run_dry(
                 subtargets_to_run=subtargets_to_run,
                 all_handlers=all_handlers,
                 env_name=env_name,
-                reset=reset,
-                destroy=destroy,
+                action=action,
                 reporter=reporter,
                 selected_handler=selected_handler,
             )
 
+        had_clean_failure = False
         for st in subtargets_to_run:
-            handlers = [selected_handler] if selected_handler is not None else self._filter_and_sort(all_handlers, st)
+            if selected_handler is not None:
+                handlers = [selected_handler]
+            else:
+                handlers = self._select_for_action(self._filter_and_sort(all_handlers, st), action)
 
             reporter.subtarget_started(st)
 
@@ -254,14 +278,32 @@ class ProvisionService:
                 continue
 
             # Phase 5 seam — service check before resource/data handlers run.
-            service_check_result = self._service_check.ensure(handlers, env_name, no_service_check)
+            # A --name selector bypasses the _select_for_action filtering
+            # above (handlers is always [selected_handler]), so re-apply the
+            # same "does this handler actually have work for this action"
+            # filter here — otherwise a clean run naming a handler with no
+            # declared clean would start required_services for a handler
+            # _run_clean is about to no-op.
+            #
+            # A ClickException here is a precondition failure for the whole
+            # run (unlike a per-handler cwd-resolution failure — see
+            # ProvisionExecutionService.run_handler) and legitimately aborts
+            # it by propagating uncaught; emit provision_finished first so a
+            # --json consumer still gets its closing `finished` event instead
+            # of a truncated stream.
+            try:
+                service_check_result = self._service_check.ensure(
+                    self._select_for_action(handlers, action), env_name, no_service_check
+                )
+            except click.ClickException:
+                reporter.provision_finished(status="error", aborted_at=None)
+                raise
 
             result = self._run_subtarget(
                 st=st,
                 handlers=handlers,
                 env_name=env_name,
-                reset=reset,
-                destroy=destroy,
+                action=action,
                 service_check_result=service_check_result,
                 reporter=reporter,
             )
@@ -271,9 +313,15 @@ class ProvisionService:
             if result == "error":
                 reporter.provision_finished(status="error", aborted_at=None)
                 return ProvisionSummary(status="error")
+            if result == "clean_error":
+                # Best-effort: a failing clean does not stop this sub-target's
+                # remaining handlers or the remaining sub-targets — keep going,
+                # but the run still ends non-ok.
+                had_clean_failure = True
 
-        reporter.provision_finished(status="ok", aborted_at=None)
-        return ProvisionSummary(status="ok")
+        final_status = "error" if had_clean_failure else "ok"
+        reporter.provision_finished(status=final_status, aborted_at=None)
+        return ProvisionSummary(status=final_status)
 
     # ── Dry-run path ──────────────────────────────────────────────────────
 
@@ -283,14 +331,16 @@ class ProvisionService:
         subtargets_to_run: tuple[str, ...],
         all_handlers: list[ProvisionHandler],
         env_name: str,
-        reset: bool,
-        destroy: bool,
+        action: ProvisionAction,
         reporter: IProvisionReporter,
         selected_handler: ProvisionHandler | None = None,
     ) -> ProvisionSummary:
         """Emit plan events for every handler that would run; no scripts executed."""
         for st in subtargets_to_run:
-            handlers = [selected_handler] if selected_handler is not None else self._filter_and_sort(all_handlers, st)
+            if selected_handler is not None:
+                handlers = [selected_handler]
+            else:
+                handlers = self._select_for_action(self._filter_and_sort(all_handlers, st), action)
 
             reporter.subtarget_started(st)
 
@@ -299,51 +349,129 @@ class ProvisionService:
                 continue
 
             for handler in handlers:
-                actions = self._resolve_dry_actions(handler, reset=reset, destroy=destroy)
+                if action is ProvisionAction.clean and handler.clean is None:
+                    # Mirrors the real run's warn for a --name selector naming
+                    # a handler with no declared clean (see _run_clean) — the
+                    # preview must warn everywhere the real run would.
+                    reporter.handler_warn(
+                        subtarget=handler.subtarget,
+                        scope=handler.scope.value,
+                        source=handler.source,
+                        message="no clean command declared — skipping",
+                    )
+                    continue
+                planned = self._resolve_dry_actions(handler, action)
                 service_check_preview = _service_check_preview(handler, env_name)
-                for action, commands in actions:
+                cwd_preview = self._dry_run_cwd(handler, env_name)
+                for planned_action, commands in planned:
                     reporter.plan_handler(
                         subtarget=handler.subtarget,
                         scope=handler.scope.value,
                         source=handler.source,
                         commands=list(commands),
-                        action=action,
+                        action=planned_action,
                         required_services=list(handler.required_services),
                         service_check_preview=service_check_preview,
+                        cwd=cwd_preview,
                         project=handler.project,
                     )
 
         reporter.provision_finished(status="ok", aborted_at=None)
         return ProvisionSummary(status="ok")
 
+    def _dry_run_cwd(self, handler: ProvisionHandler, env_name: str) -> str:
+        """Describe where *handler*'s action would actually run, for the preview.
+
+        Mirrors ``ProvisionExecutionService._resolve_cwds``'s scope rules
+        without touching the filesystem, so previewing a handler whose
+        project worktree doesn't exist yet never raises — it only describes
+        where the real run would look.
+
+        ``workspace`` scope is spelled out explicitly as the workspace root
+        rather than left to the ``scope`` field alone: a manifest declaring
+        ``scope = "workspace"`` runs its ``clean``/``apply``/etc. at the
+        shared workspace root, not inside *env_name* — the blast radius a
+        manifest author most often gets wrong, and the whole reason this
+        preview exists.
+        """
+        workspace_root = self._config.workspace_root
+        if handler.scope is ProvisionScope.workspace:
+            return f"{workspace_root} (workspace root — shared, not inside env {env_name!r})"
+        if handler.scope is ProvisionScope.feature_environment:
+            if handler.project is not None:
+                return str(workspace_root / env_name / handler.project)
+            return str(workspace_root / env_name)
+        # feature-worktree: one cwd per project repo in the env.
+        return f"{workspace_root / env_name}/<project-repo> (once per project repo)"
+
     @staticmethod
     def _resolve_dry_actions(
         handler: ProvisionHandler,
-        reset: bool,
-        destroy: bool,
+        action: ProvisionAction,
     ) -> list[tuple[str, tuple[str, ...]]]:
         """Return the (action, commands) pairs that would run for this handler.
 
-        Mirrors the real action-resolution logic in ``_run_handler_with_action``
-        / ``_run_destroy`` / ``_run_reset`` but returns the plan without executing.
+        Mirrors the action-resolution shape of ``_run_handler_with_action`` /
+        ``_run_destroy`` / ``_run_reset`` for the plan itself, but the two are
+        not fully in parity on warn events: the clean degrade case (a handler
+        with no declared ``clean``) is warned by the caller, ``_run_dry``,
+        before this is even called — matching ``_run_clean``'s warn. The
+        destroy and reset degrade cases below do not carry a matching warn:
+        the real run (``_run_destroy``, ``_run_reset``) emits a
+        ``handler_warn`` for a missing ``destroy`` script and for a missing
+        ``reset``/``destroy`` pair, but the plan returned here is silent for
+        both. Closing that gap would change ``--destroy``/``--reset`` dry-run
+        output, which is out of scope here.
+
+        Dispatches exhaustively over ``ProvisionAction`` — mirroring
+        ``ProvisionExecutionService._resolve_script`` and
+        ``_action_verb`` — so a member added to that enum without a case
+        here fails loudly (``pyright`` flags the ``assert_never``) instead of
+        silently previewing an apply for a verb this plan doesn't know about.
         """
-        if destroy:
+        if action is ProvisionAction.destroy:
             if handler.destroy is not None:
-                return [("destroy", handler.destroy)]
-            # No destroy script — would warn and no-op.
+                return [(ProvisionAction.destroy.value, handler.destroy)]
+            # No destroy script — the real run warns here; this plan does not.
             return []
 
-        if reset:
+        if action is ProvisionAction.reset:
             if handler.reset is not None:
-                return [("reset", handler.reset)]
+                return [(ProvisionAction.reset.value, handler.reset)]
             if handler.destroy is not None:
                 # Compose: destroy then apply.
-                return [("destroy", handler.destroy), ("apply", handler.apply)]
-            # No reset and no destroy — would warn and degrade to apply.
-            return [("apply", handler.apply)]
+                return [(ProvisionAction.destroy.value, handler.destroy), (ProvisionAction.apply.value, handler.apply)]
+            # No reset and no destroy — the real run warns and degrades to
+            # apply; this plan degrades to apply silently.
+            return [(ProvisionAction.apply.value, handler.apply)]
 
-        # Bare apply.
-        return [("apply", handler.apply)]
+        if action is ProvisionAction.clean:
+            if handler.clean is not None:
+                return [(ProvisionAction.clean.value, handler.clean)]
+            # No clean script declared — selection already filters this handler
+            # out of a full-chain/subtarget run; a name-selected handler with
+            # no clean would warn and no-op, so the plan has no entry for it.
+            return []
+
+        if action is ProvisionAction.apply:
+            return [(ProvisionAction.apply.value, handler.apply)]
+        assert_never(action)
+
+    @staticmethod
+    def _select_for_action(handlers: list[ProvisionHandler], action: ProvisionAction) -> list[ProvisionHandler]:
+        """Narrow *handlers* to those with a script for *action*, when the action requires it.
+
+        Only ``clean`` filters at selection time: a handler declaring no
+        ``clean`` contributes nothing to a clean run, so filtering it out here
+        makes a sub-target where nothing declares ``clean`` equivalent to an
+        empty sub-target — reported as ``no_handlers`` and starting no service,
+        rather than surfacing a per-handler error. ``apply``/``destroy``/``reset``
+        keep their existing runtime warn/compose/degrade semantics in
+        ``_run_handler_with_action`` and are returned unfiltered.
+        """
+        if action is ProvisionAction.clean:
+            return [h for h in handlers if h.clean is not None]
+        return handlers
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
@@ -444,8 +572,7 @@ class ProvisionService:
         st: str,
         handlers: list[ProvisionHandler],
         env_name: str,
-        reset: bool,
-        destroy: bool,
+        action: ProvisionAction,
         service_check_result: str | None,
         reporter: IProvisionReporter,
     ) -> str | None:
@@ -453,28 +580,34 @@ class ProvisionService:
 
         Returns ``"aborted"`` when an apply failure should abort the remaining
         sub-targets, ``"error"`` when a destroy/reset failure ends the run
-        non-ok, or ``None`` when all handlers succeeded.
+        non-ok, ``"clean_error"`` when at least one clean handler failed but
+        every handler in *handlers* still ran, or ``None`` when all handlers
+        succeeded.
         """
+        had_clean_failure = False
         for handler in handlers:
             signal = self._run_handler_with_action(
                 handler=handler,
                 env_name=env_name,
-                reset=reset,
-                destroy=destroy,
+                action=action,
                 service_check_result=service_check_result,
                 reporter=reporter,
             )
+            if signal == "clean_error":
+                # Best-effort: keep running the rest of this sub-target's
+                # handlers instead of stopping at the first failing clean.
+                had_clean_failure = True
+                continue
             if signal is not None:
                 return signal
-        return None
+        return "clean_error" if had_clean_failure else None
 
     def _run_handler_with_action(
         self,
         *,
         handler: ProvisionHandler,
         env_name: str,
-        reset: bool,
-        destroy: bool,
+        action: ProvisionAction,
         service_check_result: str | None,
         reporter: IProvisionReporter,
     ) -> str | None:
@@ -482,13 +615,21 @@ class ProvisionService:
 
         Returns ``"aborted"`` for an apply failure (abort the remaining
         sub-targets), ``"error"`` for a destroy/reset failure (end the run
-        non-ok without chain-abort semantics), or ``None`` on success.
+        non-ok without chain-abort semantics), ``"clean_error"`` for a clean
+        failure (end the run non-ok without stopping any other handler or
+        sub-target), or ``None`` on success.
+
+        Dispatches exhaustively over ``ProvisionAction`` — mirroring
+        ``ProvisionExecutionService._resolve_script`` and ``_action_verb`` —
+        so a member added to that enum without a case here fails loudly
+        (``pyright`` flags the ``assert_never``) instead of silently falling
+        through to ``_run_action``'s apply branch.
         """
         scope_str = handler.scope.value
         source_str = handler.source
         st = handler.subtarget
 
-        if destroy:
+        if action is ProvisionAction.destroy:
             return self._run_destroy(
                 handler=handler,
                 env_name=env_name,
@@ -499,7 +640,7 @@ class ProvisionService:
                 reporter=reporter,
             )
 
-        if reset:
+        if action is ProvisionAction.reset:
             return self._run_reset(
                 handler=handler,
                 env_name=env_name,
@@ -510,10 +651,58 @@ class ProvisionService:
                 reporter=reporter,
             )
 
-        # bare apply
+        if action is ProvisionAction.clean:
+            return self._run_clean(
+                handler=handler,
+                env_name=env_name,
+                scope_str=scope_str,
+                source_str=source_str,
+                st=st,
+                service_check_result=service_check_result,
+                reporter=reporter,
+            )
+
+        if action is ProvisionAction.apply:
+            return self._run_action(
+                handler=handler,
+                action=action,
+                env_name=env_name,
+                scope_str=scope_str,
+                source_str=source_str,
+                st=st,
+                service_check_result=service_check_result,
+                reporter=reporter,
+            )
+        assert_never(action)
+
+    def _run_clean(
+        self,
+        *,
+        handler: ProvisionHandler,
+        env_name: str,
+        scope_str: str,
+        source_str: str,
+        st: str,
+        service_check_result: str | None,
+        reporter: IProvisionReporter,
+    ) -> str | None:
+        """Run clean: declared clean → run it; no declared clean → warn and no-op.
+
+        Selection already filters a handler with no declared ``clean`` out of
+        a full-chain/subtarget run, so this warn path is reached only via an
+        explicit ``--name`` selector naming a handler that declares none.
+        """
+        if handler.clean is None:
+            reporter.handler_warn(
+                subtarget=st,
+                scope=scope_str,
+                source=source_str,
+                message="no clean command declared — skipping",
+            )
+            return None
         return self._run_action(
             handler=handler,
-            action="apply",
+            action=ProvisionAction.clean,
             env_name=env_name,
             scope_str=scope_str,
             source_str=source_str,
@@ -543,7 +732,7 @@ class ProvisionService:
             return None
         return self._run_action(
             handler=handler,
-            action="destroy",
+            action=ProvisionAction.destroy,
             env_name=env_name,
             scope_str=scope_str,
             source_str=source_str,
@@ -567,7 +756,7 @@ class ProvisionService:
         if handler.reset is not None:
             return self._run_action(
                 handler=handler,
-                action="reset",
+                action=ProvisionAction.reset,
                 env_name=env_name,
                 scope_str=scope_str,
                 source_str=source_str,
@@ -581,7 +770,7 @@ class ProvisionService:
             # "error" (via _run_action) and prevents apply from running.
             signal = self._run_action(
                 handler=handler,
-                action="destroy",
+                action=ProvisionAction.destroy,
                 env_name=env_name,
                 scope_str=scope_str,
                 source_str=source_str,
@@ -593,7 +782,7 @@ class ProvisionService:
                 return signal
             return self._run_action(
                 handler=handler,
-                action="apply",
+                action=ProvisionAction.apply,
                 env_name=env_name,
                 scope_str=scope_str,
                 source_str=source_str,
@@ -611,7 +800,7 @@ class ProvisionService:
         )
         return self._run_action(
             handler=handler,
-            action="apply",
+            action=ProvisionAction.apply,
             env_name=env_name,
             scope_str=scope_str,
             source_str=source_str,
@@ -624,7 +813,7 @@ class ProvisionService:
         self,
         *,
         handler: ProvisionHandler,
-        action: str,
+        action: ProvisionAction,
         env_name: str,
         scope_str: str,
         source_str: str,
@@ -636,7 +825,8 @@ class ProvisionService:
 
         Returns ``"aborted"`` when an apply failure should abort the remaining
         sub-targets, ``"error"`` when a destroy or reset script exits non-zero,
-        or ``None`` when the action succeeded.
+        ``"clean_error"`` when a clean script exits non-zero, or ``None`` when
+        the action succeeded.
         """
         result: HandlerExecutionResult = self._execution_svc.run_handler(handler, action, env_name, reporter)
         runs_json: list[dict[str, Any]] = [{"cwd": str(r.cwd), "exit_status": r.exit_code} for r in result.runs]
@@ -645,15 +835,21 @@ class ProvisionService:
             subtarget=st,
             scope=scope_str,
             source=source_str,
-            action=action,
+            action=action.value,
             service_check=service_check_result,
             runs=runs_json,
             exit_status=overall_exit,
         )
         if not result.ok:
-            if action == "apply":
+            if action is ProvisionAction.apply:
                 # Apply failure aborts the remaining sub-targets in the chain.
                 return "aborted"
+            if action is ProvisionAction.clean:
+                # Clean is best-effort artifact removal: a failing clean must
+                # not strand the rest of the run, so this signals failure
+                # without abort/chain-abort semantics — the caller keeps
+                # running the remaining handlers and sub-targets.
+                return "clean_error"
             # Destroy or reset failure: end the run with error status without
             # chain-abort semantics (destroy/reset target a single sub-target).
             return "error"

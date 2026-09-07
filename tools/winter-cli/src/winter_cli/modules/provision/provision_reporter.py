@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, assert_never
+
+from winter_cli.modules.provision.manifest import ProvisionAction
 
 # ---------------------------------------------------------------------------
 # Protocol seam
@@ -29,7 +31,7 @@ class IProvisionReporter(Protocol):
 
     # ── Provision-level lifecycle events ─────────────────────────────────
 
-    def provision_started(self, env: str, subtargets: list[str]) -> None: ...
+    def provision_started(self, env: str, subtargets: list[str], action: ProvisionAction) -> None: ...
     def subtarget_started(self, subtarget: str) -> None: ...
     def no_handlers(self, subtarget: str) -> None: ...
     def handler_result(
@@ -56,8 +58,32 @@ class IProvisionReporter(Protocol):
         action: str,
         required_services: list[str],
         service_check_preview: str | None,
+        cwd: str,
         project: str | None = None,
     ) -> None: ...
+
+
+def _action_verb(action: ProvisionAction) -> str:
+    """Return the human-readable run verb for *action*, used by
+    ``StreamProvisionReporter``'s started line so a clean run doesn't read
+    "Provisioning".
+
+    ``action`` is the ``ProvisionAction`` ``IProvisionReporter.provision_started``
+    carries — every producer already holds one, so there is nothing to parse
+    back and no invalid-string case to guard against. Dispatch is still
+    exhaustive over the enum so a member added without a case here fails
+    loudly (``pyright`` flags the ``assert_never``) instead of silently
+    printing "Provisioning" for a destructive run.
+    """
+    if action is ProvisionAction.apply:
+        return "Provisioning"
+    if action is ProvisionAction.destroy:
+        return "Destroying"
+    if action is ProvisionAction.reset:
+        return "Resetting"
+    if action is ProvisionAction.clean:
+        return "Cleaning"
+    assert_never(action)
 
 
 # ---------------------------------------------------------------------------
@@ -93,9 +119,10 @@ class StreamProvisionReporter:
 
     # ── Provision-level lifecycle ─────────────────────────────────────────
 
-    def provision_started(self, env: str, subtargets: list[str]) -> None:
+    def provision_started(self, env: str, subtargets: list[str], action: ProvisionAction) -> None:
         chain = " → ".join(subtargets)
-        self._click.echo(f"Provisioning {env!r}: {chain}")
+        verb = _action_verb(action)
+        self._click.echo(f"{verb} {env!r}: {chain}")
 
     def subtarget_started(self, subtarget: str) -> None:
         self._click.echo(f"\n[{subtarget}]")
@@ -147,6 +174,7 @@ class StreamProvisionReporter:
         action: str,
         required_services: list[str],
         service_check_preview: str | None,
+        cwd: str,
         project: str | None = None,
     ) -> None:
         svc_info = ""
@@ -154,7 +182,9 @@ class StreamProvisionReporter:
             svc_info = f" [requires: {', '.join(required_services)}]"
         project_info = f" (project={project})" if project is not None else ""
         cmds_display = " && ".join(commands) if len(commands) > 1 else (commands[0] if commands else "")
-        self._click.echo(f"  would {action}: {source}/{subtarget}[{scope}]{project_info} → {cmds_display}{svc_info}")
+        self._click.echo(
+            f"  would {action}: {source}/{subtarget}[{scope}]{project_info} → {cmds_display}{svc_info} (cwd={cwd})"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -171,8 +201,9 @@ class JsonProvisionReporter:
 
     --json event schema
     -------------------
-    ``{"type":"started", "env":str, "subtargets":[str,...]}``
-        Emitted once at the start of the run.
+    ``{"type":"started", "env":str, "subtargets":[str,...], "action":str}``
+        Emitted once at the start of the run. ``action`` is the run verb
+        (``"apply"``, ``"destroy"``, ``"reset"``, or ``"clean"``).
 
     ``{"type":"subtarget_started", "subtarget":str}``
         Emitted when a sub-target's handlers begin.
@@ -211,7 +242,8 @@ class JsonProvisionReporter:
 
     ``{"type":"plan_handler", "would_run":true, "subtarget":str, "scope":str,
        "source":str, "commands":[str,...], "action":str,
-       "required_services":[str,...], "service_check_preview":str|null}``
+       "required_services":[str,...], "service_check_preview":str|null,
+       "cwd":str}``
         Emitted in dry-run mode instead of ``execution_started`` / ``handler_result``.
         One event per handler in plan order.  ``would_run`` is always ``true``
         so agents can distinguish plan events from real-run events.
@@ -219,7 +251,11 @@ class JsonProvisionReporter:
         via ``sh -c``).  ``service_check_preview`` describes the service-check
         that WOULD run: ``null`` when no ``required_services`` are declared, or
         a scope string such as ``"workspace"`` / the env name indicating which
-        scope would be started if needed.
+        scope would be started if needed.  ``cwd`` describes where the
+        commands would actually run: for ``scope="workspace"`` this is the
+        shared workspace root — explicitly called out as such, since it is
+        the same regardless of which env the plan was run against, not a
+        path inside that env.
     """
 
     def __init__(self, click: Any) -> None:
@@ -246,8 +282,8 @@ class JsonProvisionReporter:
 
     # ── Provision-level lifecycle ─────────────────────────────────────────
 
-    def provision_started(self, env: str, subtargets: list[str]) -> None:
-        self._emit({"type": "started", "env": env, "subtargets": subtargets})
+    def provision_started(self, env: str, subtargets: list[str], action: ProvisionAction) -> None:
+        self._emit({"type": "started", "env": env, "subtargets": subtargets, "action": action.value})
 
     def subtarget_started(self, subtarget: str) -> None:
         self._emit({"type": "subtarget_started", "subtarget": subtarget})
@@ -301,6 +337,7 @@ class JsonProvisionReporter:
         action: str,
         required_services: list[str],
         service_check_preview: str | None,
+        cwd: str,
         project: str | None = None,
     ) -> None:
         self._emit(
@@ -314,6 +351,7 @@ class JsonProvisionReporter:
                 "action": action,
                 "required_services": required_services,
                 "service_check_preview": service_check_preview,
+                "cwd": cwd,
                 "project": project,
             }
         )

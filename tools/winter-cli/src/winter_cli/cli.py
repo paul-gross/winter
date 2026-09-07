@@ -43,6 +43,7 @@ from winter_cli.modules.workspace.models import RepoError
 # command trees it doesn't touch. Keep this in sync with the command modules.
 _LAZY_SUBCOMMANDS: dict[str, str] = {
     "capabilities": "winter_cli.modules.capability.command:capabilities_command",
+    "clean": "winter_cli.modules.provision.clean_command:clean_command",
     "dashboard": "winter_cli.modules.tui.command:dashboard",
     "doctor": "winter_cli.modules.doctor.command:doctor_command",
     "env": "winter_cli.modules.workspace.env_command:env_cmd",

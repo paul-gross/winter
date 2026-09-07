@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from winter_cli.modules.provision.handler import ProvisionCommandHandler, ProvisionParams
+from winter_cli.modules.provision.manifest import ProvisionAction
 
 
 class _FakeProvisionService:
@@ -31,8 +32,7 @@ class _FakeProvisionService:
         self,
         env_name: str,
         subtarget: str | None,
-        reset: bool,
-        destroy: bool,
+        action: ProvisionAction,
         seed: bool,
         no_service_check: bool,
         reporter: Any,

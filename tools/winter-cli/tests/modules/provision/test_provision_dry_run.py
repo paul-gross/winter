@@ -20,7 +20,7 @@ from click.testing import CliRunner
 
 from tests.conftest import FakeFilesystem
 from winter_cli.config.models import AdoptExtensions, WorkspaceConfig
-from winter_cli.modules.provision.manifest import ProvisionHandler, ProvisionScope
+from winter_cli.modules.provision.manifest import ProvisionAction, ProvisionHandler, ProvisionScope
 from winter_cli.modules.provision.provision_service import ProvisionService
 
 WORKSPACE_ROOT = Path("/ws")
@@ -33,7 +33,7 @@ ENV_NAME = "alpha"
 
 
 class _FakeHandlerExecutionResult:
-    def __init__(self, handler: ProvisionHandler, action: str, ok: bool = True) -> None:
+    def __init__(self, handler: ProvisionHandler, action: ProvisionAction, ok: bool = True) -> None:
         self.handler = handler
         self.action = action
         self.runs: tuple[Any, ...] = ()
@@ -49,12 +49,12 @@ class _RecordingExecutionService:
     """Records run_handler calls; dry_run tests must assert it is NEVER called."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[ProvisionHandler, str, str]] = []
+        self.calls: list[tuple[ProvisionHandler, ProvisionAction, str]] = []
 
     def run_handler(
         self,
         handler: ProvisionHandler,
-        action: str,
+        action: ProvisionAction,
         env_name: str,
         sink: Any,
     ) -> _FakeHandlerExecutionResult:
@@ -104,7 +104,7 @@ class _FakeRepoFactory:
 
 class _FakeReporter:
     def __init__(self) -> None:
-        self.provision_started_calls: list[tuple[str, list[str]]] = []
+        self.provision_started_calls: list[tuple[str, list[str], ProvisionAction]] = []
         self.subtarget_started_calls: list[str] = []
         self.no_handlers_calls: list[str] = []
         self.handler_result_calls: list[dict[str, Any]] = []
@@ -113,8 +113,8 @@ class _FakeReporter:
         self.provision_finished_calls: list[tuple[str, str | None]] = []
         self.execution_started_calls: list[Any] = []
 
-    def provision_started(self, env: str, subtargets: list[str]) -> None:
-        self.provision_started_calls.append((env, subtargets))
+    def provision_started(self, env: str, subtargets: list[str], action: ProvisionAction) -> None:
+        self.provision_started_calls.append((env, subtargets, action))
 
     def subtarget_started(self, subtarget: str) -> None:
         self.subtarget_started_calls.append(subtarget)
@@ -155,6 +155,7 @@ class _FakeReporter:
         action: str,
         required_services: list[str],
         service_check_preview: str | None,
+        cwd: str,
         project: str | None = None,
     ) -> None:
         self.plan_handler_calls.append(
@@ -166,6 +167,7 @@ class _FakeReporter:
                 "action": action,
                 "required_services": required_services,
                 "service_check_preview": service_check_preview,
+                "cwd": cwd,
                 "project": project,
             }
         )
@@ -264,8 +266,7 @@ def test_dry_run_full_chain_emits_plan_events_in_order() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget=None,
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -296,8 +297,7 @@ def test_dry_run_reports_subtarget_started_for_each_subtarget() -> None:
     svc.run(
         ENV_NAME,
         subtarget=None,
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -319,8 +319,7 @@ def test_dry_run_plan_event_fields_are_complete() -> None:
     svc.run(
         ENV_NAME,
         subtarget="resource",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -354,8 +353,7 @@ def test_dry_run_destroy_emits_destroy_action_when_declared() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget="resource",
-        reset=False,
-        destroy=True,
+        action=ProvisionAction.destroy,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -380,8 +378,7 @@ def test_dry_run_destroy_emits_no_plan_event_when_no_destroy_declared() -> None:
     svc.run(
         ENV_NAME,
         subtarget="resource",
-        reset=False,
-        destroy=True,
+        action=ProvisionAction.destroy,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -404,8 +401,7 @@ def test_dry_run_reset_with_dedicated_reset_script() -> None:
     svc.run(
         ENV_NAME,
         subtarget="data",
-        reset=True,
-        destroy=False,
+        action=ProvisionAction.reset,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -429,8 +425,7 @@ def test_dry_run_reset_compose_destroy_then_apply() -> None:
     svc.run(
         ENV_NAME,
         subtarget="resource",
-        reset=True,
-        destroy=False,
+        action=ProvisionAction.reset,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -456,8 +451,7 @@ def test_dry_run_reset_degrades_to_apply_when_neither_reset_nor_destroy() -> Non
     svc.run(
         ENV_NAME,
         subtarget="data",
-        reset=True,
-        destroy=False,
+        action=ProvisionAction.reset,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -467,6 +461,117 @@ def test_dry_run_reset_degrades_to_apply_when_neither_reset_nor_destroy() -> Non
     assert len(reporter.plan_handler_calls) == 1
     assert reporter.plan_handler_calls[0]["action"] == "apply"
     assert len(exec_svc.calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# clean action
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_clean_emits_clean_action_when_declared() -> None:
+    """--dry-run clean: plan shows clean action when a clean script is declared."""
+    config = _make_config(
+        provision_raw={
+            "dependency": [{"scope": "workspace", "apply": "scripts/dep.sh", "clean": "scripts/clean-dep.sh"}],
+        }
+    )
+    svc, exec_svc, _sc, reporter = _make_service(config)
+    summary = svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+        dry_run=True,  # type: ignore[arg-type]
+    )
+
+    assert summary.status == "ok"
+    assert len(reporter.plan_handler_calls) == 1
+    assert reporter.plan_handler_calls[0]["action"] == "clean"
+    assert reporter.plan_handler_calls[0]["commands"] == ["scripts/clean-dep.sh"]
+    assert len(exec_svc.calls) == 0
+
+
+def test_dry_run_clean_reports_no_handlers_when_nothing_declares_clean() -> None:
+    """--dry-run clean: a sub-target where nothing declares clean plans a no-op, not a plan_handler."""
+    config = _make_config(
+        provision_raw={
+            "dependency": [{"scope": "workspace", "apply": "scripts/dep.sh"}],
+        }
+    )
+    svc, exec_svc, _sc, reporter = _make_service(config)
+    summary = svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+        dry_run=True,  # type: ignore[arg-type]
+    )
+
+    assert summary.status == "ok"
+    assert reporter.no_handlers_calls == ["dependency"]
+    assert len(reporter.plan_handler_calls) == 0
+    assert len(exec_svc.calls) == 0
+
+
+def test_dry_run_clean_filters_out_handler_with_no_clean_declared() -> None:
+    """--dry-run clean: only the handler declaring clean gets a plan_handler event."""
+    config = _make_config(
+        provision_raw={
+            "dependency": [
+                {"scope": "workspace", "apply": "scripts/apply-a.sh", "clean": "scripts/clean-a.sh"},
+                {"scope": "workspace", "apply": "scripts/apply-b.sh"},
+            ],
+        }
+    )
+    svc, exec_svc, _sc, reporter = _make_service(config)
+    svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+        dry_run=True,  # type: ignore[arg-type]
+    )
+
+    assert len(reporter.plan_handler_calls) == 1
+    assert reporter.plan_handler_calls[0]["commands"] == ["scripts/clean-a.sh"]
+    assert len(exec_svc.calls) == 0
+
+
+def test_dry_run_clean_name_selector_without_clean_warns_and_emits_no_plan_event() -> None:
+    """--dry-run clean --name on a handler with no declared clean: warns, no plan event, no error.
+
+    The real run warns for this exact case (see `_run_clean`) — the preview
+    must say the same thing the real run would, not stay silent.
+    """
+    config = _make_config(
+        provision_raw={
+            "resource": [{"scope": "workspace", "apply": "scripts/create-db.sh", "name": "mydb"}],
+        }
+    )
+    svc, exec_svc, sc, reporter = _make_service(config)
+    summary = svc.run(
+        ENV_NAME,
+        subtarget=None,
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+        dry_run=True,
+        name_selector="workspace.mydb",
+    )  # type: ignore[arg-type]
+
+    assert summary.status == "ok"
+    assert len(reporter.plan_handler_calls) == 0
+    assert len(reporter.handler_warn_calls) == 1
+    assert "skipping" in reporter.handler_warn_calls[0]["message"]
+    assert len(exec_svc.calls) == 0
+    assert len(sc.ensure_calls) == 0
 
 
 def test_dry_run_seed_shows_resource_then_data() -> None:
@@ -481,8 +586,7 @@ def test_dry_run_seed_shows_resource_then_data() -> None:
     svc.run(
         ENV_NAME,
         subtarget="resource",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=True,
         no_service_check=False,
         reporter=reporter,
@@ -518,8 +622,7 @@ def test_dry_run_service_check_preview_when_required_services_declared() -> None
     svc.run(
         ENV_NAME,
         subtarget="resource",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -546,8 +649,7 @@ def test_dry_run_service_check_preview_none_when_no_required_services() -> None:
     svc.run(
         ENV_NAME,
         subtarget="data",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -574,8 +676,7 @@ def test_dry_run_service_check_preview_includes_env_scope() -> None:
     svc.run(
         ENV_NAME,
         subtarget="resource",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -600,8 +701,7 @@ def test_dry_run_no_handlers_reports_no_op_for_all_subtargets() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget=None,
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -622,8 +722,7 @@ def test_dry_run_single_subtarget_no_handlers() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget="resource",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -654,8 +753,7 @@ def test_dry_run_never_emits_handler_result() -> None:
     svc.run(
         ENV_NAME,
         subtarget=None,
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -710,8 +808,7 @@ def test_dry_run_json_emits_plan_handler_with_would_run_flag() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget=None,
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=json_reporter,  # type: ignore[arg-type]
@@ -775,8 +872,7 @@ def test_dry_run_json_destroy_emits_plan_handler_with_destroy_action() -> None:
     svc.run(
         ENV_NAME,
         subtarget="resource",
-        reset=False,
-        destroy=True,
+        action=ProvisionAction.destroy,
         seed=False,
         no_service_check=False,
         reporter=json_reporter,  # type: ignore[arg-type]
@@ -857,8 +953,7 @@ def test_dry_run_plan_preserves_scope_ordering() -> None:
     svc.run(
         ENV_NAME,
         subtarget="dependency",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -869,6 +964,172 @@ def test_dry_run_plan_preserves_scope_ordering() -> None:
     scopes = [e["scope"] for e in reporter.plan_handler_calls]
     assert scopes == ["workspace", "feature-environment", "feature-worktree"]
     assert len(exec_svc.calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# cwd preview in dry-run plan — workspace-scope blast radius
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_workspace_scope_cwd_states_workspace_root_not_env() -> None:
+    """A workspace-scoped handler's preview states its cwd is the shared
+    workspace root, explicitly called out as NOT a path inside the named
+    env — a workspace-scoped clean runs once at the shared root regardless
+    of which env the run was invoked against, so the preview must make that
+    unambiguous rather than leaving it to the ``scope`` field alone."""
+    config = _make_config(
+        provision_raw={
+            "dependency": [{"scope": "workspace", "apply": "scripts/apply.sh", "clean": "scripts/clean.sh"}],
+        }
+    )
+    svc, _, _, reporter = _make_service(config)
+    svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+        dry_run=True,  # type: ignore[arg-type]
+    )
+
+    assert len(reporter.plan_handler_calls) == 1
+    evt = reporter.plan_handler_calls[0]
+    assert evt["scope"] == "workspace"
+    assert str(WORKSPACE_ROOT) in evt["cwd"]
+    assert str(WORKSPACE_ROOT / ENV_NAME) not in evt["cwd"]
+    assert "not inside env" in evt["cwd"]
+    assert ENV_NAME in evt["cwd"]
+
+
+def test_dry_run_workspace_scope_cwd_is_the_same_across_different_envs() -> None:
+    """The same workspace-scoped handler previews the identical cwd for two
+    different envs — pinning that it never resolves to a per-env path."""
+    config = _make_config(
+        provision_raw={
+            "dependency": [{"scope": "workspace", "apply": "scripts/apply.sh", "clean": "scripts/clean.sh"}],
+        }
+    )
+    cwds: dict[str, str] = {}
+    for env_name in ("alpha", "beta"):
+        svc, _, _, reporter = _make_service(config, fs=_make_fs_with_env(env_name))
+        svc.run(
+            env_name,
+            subtarget="dependency",
+            action=ProvisionAction.clean,
+            seed=False,
+            no_service_check=False,
+            reporter=reporter,
+            dry_run=True,  # type: ignore[arg-type]
+        )
+        cwds[env_name] = reporter.plan_handler_calls[0]["cwd"]
+
+    assert cwds["alpha"] != cwds["beta"]  # each names its own env in the note
+    assert str(WORKSPACE_ROOT) in cwds["alpha"]
+    assert str(WORKSPACE_ROOT) in cwds["beta"]
+    assert str(WORKSPACE_ROOT / "alpha") not in cwds["alpha"]
+    assert str(WORKSPACE_ROOT / "beta") not in cwds["beta"]
+
+
+def test_dry_run_feature_environment_scope_cwd_is_env_root() -> None:
+    """A feature-environment handler without ``project`` previews the env
+    root as its cwd — contrast case for the workspace-scope note above."""
+    config = _make_config(
+        provision_raw={
+            "resource": [{"scope": "feature-environment", "apply": "scripts/apply.sh"}],
+        }
+    )
+    svc, _, _, reporter = _make_service(config)
+    svc.run(
+        ENV_NAME,
+        subtarget="resource",
+        action=ProvisionAction.apply,
+        seed=False,
+        no_service_check=False,
+        reporter=reporter,
+        dry_run=True,  # type: ignore[arg-type]
+    )
+
+    assert len(reporter.plan_handler_calls) == 1
+    assert reporter.plan_handler_calls[0]["cwd"] == str(WORKSPACE_ROOT / ENV_NAME)
+
+
+def test_dry_run_json_plan_handler_includes_cwd_field() -> None:
+    """--dry-run --json plan_handler event includes the cwd key, and states
+    the workspace root for a workspace-scoped handler."""
+    from winter_cli.modules.provision.provision_reporter import JsonProvisionReporter
+
+    class _CapturingClick:
+        def __init__(self) -> None:
+            self.lines: list[str] = []
+
+        def echo(self, msg: str, err: bool = False) -> None:
+            self.lines.append(msg)
+
+    capturing_click = _CapturingClick()
+    json_reporter = JsonProvisionReporter(click=capturing_click)
+
+    config = _make_config(
+        provision_raw={
+            "dependency": [{"scope": "workspace", "apply": "scripts/dep.sh", "clean": "scripts/clean.sh"}],
+        }
+    )
+    svc = ProvisionService(
+        config=config,
+        execution_svc=_RecordingExecutionService(),  # type: ignore[arg-type]
+        manifest_loader=_FakeManifestLoader(),
+        repo_factory=_FakeRepoFactory(),
+        service_check=_RecordingServiceCheck(),  # type: ignore[arg-type]
+        fs=_make_fs_with_env(),
+    )
+    svc.run(
+        ENV_NAME,
+        subtarget="dependency",
+        action=ProvisionAction.clean,
+        seed=False,
+        no_service_check=False,
+        reporter=json_reporter,  # type: ignore[arg-type]
+        dry_run=True,
+    )
+
+    events = [json.loads(line) for line in capturing_click.lines]
+    plan_events = [e for e in events if e.get("type") == "plan_handler"]
+    assert len(plan_events) == 1
+    assert "cwd" in plan_events[0]
+    assert str(WORKSPACE_ROOT) in plan_events[0]["cwd"]
+    assert str(WORKSPACE_ROOT / ENV_NAME) not in plan_events[0]["cwd"]
+
+
+def test_dry_run_stream_plan_handler_line_includes_cwd() -> None:
+    """StreamProvisionReporter's human-readable preview line surfaces cwd too."""
+    from winter_cli.modules.provision.provision_reporter import StreamProvisionReporter
+
+    class _CapturingClick:
+        def __init__(self) -> None:
+            self.lines: list[str] = []
+
+        def echo(self, msg: str, err: bool = False) -> None:
+            self.lines.append(msg)
+
+        def style(self, msg: str, **kwargs: Any) -> str:
+            return msg
+
+    capturing_click = _CapturingClick()
+    stream_reporter = StreamProvisionReporter(click=capturing_click)
+    stream_reporter.plan_handler(
+        subtarget="dependency",
+        scope="workspace",
+        source="project",
+        commands=["scripts/clean.sh"],
+        action="clean",
+        required_services=[],
+        service_check_preview=None,
+        cwd=f"{WORKSPACE_ROOT} (workspace root — shared, not inside env {ENV_NAME!r})",
+    )
+
+    assert len(capturing_click.lines) == 1
+    assert f"cwd={WORKSPACE_ROOT}" in capturing_click.lines[0]
+    assert "not inside env" in capturing_click.lines[0]
 
 
 # ---------------------------------------------------------------------------
@@ -893,8 +1154,7 @@ def test_dry_run_plan_handler_includes_project_when_set() -> None:
     svc.run(
         ENV_NAME,
         subtarget="data",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -917,8 +1177,7 @@ def test_dry_run_plan_handler_project_is_none_when_not_set() -> None:
     svc.run(
         ENV_NAME,
         subtarget="data",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -948,8 +1207,7 @@ def test_dry_run_name_selector_narrows_plan_to_one_handler() -> None:
     summary = svc.run(
         ENV_NAME,
         subtarget=None,
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=reporter,
@@ -997,8 +1255,7 @@ def test_dry_run_json_name_selector_narrows_plan_to_one_handler() -> None:
     svc.run(
         ENV_NAME,
         subtarget=None,
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=json_reporter,  # type: ignore[arg-type]
@@ -1046,8 +1303,7 @@ def test_dry_run_json_plan_handler_includes_project_field() -> None:
     svc.run(
         ENV_NAME,
         subtarget="data",
-        reset=False,
-        destroy=False,
+        action=ProvisionAction.apply,
         seed=False,
         no_service_check=False,
         reporter=json_reporter,  # type: ignore[arg-type]

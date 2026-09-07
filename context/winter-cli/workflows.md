@@ -121,6 +121,17 @@ winter ws destroy alpha --no-provision-teardown  # skip provision teardown; stru
 winter ws destroy alpha beta --force             # multiple envs, no confirmation prompt (scripted use)
 ```
 
+### Hand a feature environment to a new tenant
+
+```bash
+winter clean alpha --dry-run              # preview: which declared cleans would run, no side effects
+winter clean alpha                        # run them for real: disposable build output, caches, etc.
+winter provision alpha                    # bring the env back to a working state for the next tenant
+```
+
+`winter clean` sits between a tenant finishing and the next tenant's `winter provision` — see
+[usage/clean.md](./usage/clean.md) for why it exists, the full contract, and how it differs from `winter ws clean`.
+
 ### Clean up orphan disk state
 
 ```bash
