@@ -35,7 +35,7 @@ SERVICE_PREFIX = "winter"
 class _FakeEnvProvisionerService:
     """No-op env provisioner: computes an empty env map for every scope."""
 
-    def compute(self, scope: str) -> dict[str, str]:
+    def compute(self, scope: str, *, resolve_commands: bool) -> dict[str, str]:
         return {}
 
 

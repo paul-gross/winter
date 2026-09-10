@@ -85,7 +85,9 @@ winter.
 stable port allocation — and reconciles every installed extension's capabilities through their lifecycle hooks.
 Idempotent — safe to re-run. With no name, it bootstraps the workspace itself rather than a feature environment.
 Environment variables (the winter base vars like `WINTER_ENV` and `WINTER_PORT_BASE`, plus your `[env.*]` band entries)
-are computed at runtime and sourced with `source <(winter env <name>)` or injected automatically by `winter service up`.
+are computed at runtime and either sourced with `source <(winter env <name>)` — pass `--resolve` to also run any
+command-sourced band entry, otherwise it prints as a placeholder — or injected automatically, fully resolved, by
+`winter service up`.
 
 **Configurable port allocation.** Each environment gets a configurable port window keyed off its index
 (`base_port + index * ports_per_env`; defaults: `base_port=4000`, `ports_per_env=20`). Preconfigured shorthands (like

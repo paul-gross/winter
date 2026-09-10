@@ -70,7 +70,7 @@ def _opts(**kwargs: Any) -> StatusOptions:
 class _FakeEnvProvisionerService:
     """Fake EnvProvisionerService that returns empty dicts for all scopes."""
 
-    def compute(self, scope: str) -> dict[str, str]:
+    def compute(self, scope: str, *, resolve_commands: bool) -> dict[str, str]:
         return {}
 
 

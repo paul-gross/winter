@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import (
+    FakeCommandEntryRunner,
     FakeConfigFileReader,
     FakeFilesystem,
     FakeServiceReporter,
@@ -82,9 +83,11 @@ class FakeEnvProvisionerService:
         self._responses = responses or {}
         self._errors = errors or set()
         self.calls: list[str] = []
+        self.resolve_commands_calls: list[bool] = []
 
-    def compute(self, scope: str) -> dict[str, str]:
+    def compute(self, scope: str, *, resolve_commands: bool) -> dict[str, str]:
         self.calls.append(scope)
+        self.resolve_commands_calls.append(resolve_commands)
         if scope in self._errors:
             raise ValueError(f"bad template for {scope}")
         return self._responses.get(scope, {})
@@ -139,19 +142,23 @@ def _empty_doc_json(env: str) -> str:
 def _fake_ws_config(
     base_port: int = 4000,
     ports_per_env: int = 20,
+    env_bands: object | None = None,
 ) -> WorkspaceConfig:
     """Minimal WorkspaceConfig for testing (alpha=index 1 -> port_base=4020)."""
     from winter_cli.config.models import ProjectRepositoryConfig, SingletonRepository, SingletonType
 
-    return WorkspaceConfig(
-        workspace_root=WS,
-        service_prefix="test",
-        main_branch="main",
-        base_port=base_port,
-        ports_per_env=ports_per_env,
-        singleton_repos=[SingletonRepository(name="ws", type=SingletonType.workspace)],
-        project_repos=[ProjectRepositoryConfig(name="demo", url="git@example.com:demo.git")],
-    )
+    kwargs: dict = {
+        "workspace_root": WS,
+        "service_prefix": "test",
+        "main_branch": "main",
+        "base_port": base_port,
+        "ports_per_env": ports_per_env,
+        "singleton_repos": [SingletonRepository(name="ws", type=SingletonType.workspace)],
+        "project_repos": [ProjectRepositoryConfig(name="demo", url="git@example.com:demo.git")],
+    }
+    if env_bands is not None:
+        kwargs["env_bands"] = env_bands
+    return WorkspaceConfig(**kwargs)
 
 
 class _FakeEnvIndexRegistry:
@@ -177,18 +184,30 @@ def _matrix_svc(
     runner: FakeSubprocessRunner,
     provisioner: FakeEnvProvisionerService | None = None,
     registry_assignments: dict[str, int] | None = None,
+    env_bands: object | None = None,
+    command_runner: FakeCommandEntryRunner | None = None,
 ) -> ServiceStatusMatrixService:
     """Build a ServiceStatusMatrixService with test doubles.
 
     When no provisioner is given, a real EnvProvisionerService is wired so that
-    the env-injection tests can assert correct WINTER_* values.
+    the env-injection tests can assert correct WINTER_* values. *env_bands* and
+    *command_runner* let a test wire a command entry through to a real
+    ``ICommandEntryRunner`` it can then assert against — used to pin that
+    status's ``resolve_commands=False`` gate never actually executes a command.
     """
+    from winter_cli.modules.workspace.env_band_resolver_service import EnvBandResolverService
     from winter_cli.modules.workspace.env_provisioner import EnvProvisionerService
 
-    ws_config = _fake_ws_config()
+    ws_config = _fake_ws_config(env_bands=env_bands)
     reg = _FakeEnvIndexRegistry(registry_assignments or {"alpha": 1, "beta": 2})
     actual_provisioner = (
-        provisioner if provisioner is not None else EnvProvisionerService(config=ws_config, registry=reg)
+        provisioner
+        if provisioner is not None
+        else EnvProvisionerService(
+            config=ws_config,
+            registry=reg,
+            band_resolver=EnvBandResolverService(runner=command_runner or FakeCommandEntryRunner()),
+        )
     )
     describe_svc = ServiceDescribeService(
         subprocess_runner=runner,
@@ -793,6 +812,59 @@ def test_env_provisioner_compute_called_once_per_scope() -> None:
     assert provisioner.calls.count("alpha") == 1
 
 
+def test_status_always_gates_resolve_commands_false() -> None:
+    """run_matrix always computes env with resolve_commands=False, regardless of scope count."""
+    alpha_doc = _status_doc_json("alpha")
+    runner = FakeSubprocessRunner(
+        popen_responses={
+            f"{ENTRYPOINT_A} status alpha/*": ([alpha_doc], 0),
+        }
+    )
+    provisioner = FakeEnvProvisionerService()
+    svc = _matrix_svc(runner, provisioner=provisioner, registry_assignments={"alpha": 1})
+    pa = _provider_a()
+
+    cells = svc.build_matrix([pa], patterns=("alpha",))
+    svc.run_matrix(cells, reporter=None)
+
+    assert provisioner.resolve_commands_calls == [False]
+
+
+def test_status_never_runs_a_command_entry_even_when_polled_repeatedly() -> None:
+    """A command entry in a band never executes across repeated run_matrix calls (simulated `--wait` polling).
+
+    ServiceReadinessService re-invokes run_matrix on every poll (up to 120 times
+    under `--wait`). This pins the count claim directly against a real
+    ICommandEntryRunner: status's resolve_commands=False gate keeps the total
+    execution count at 0 no matter how many times run_matrix is called — a
+    regression that reintroduced per-poll resolution would fail this test by
+    making FakeCommandEntryRunner.calls non-empty.
+    """
+    from winter_cli.config.models import EnvCommandEntry, EnvVarBands
+
+    alpha_doc = _status_doc_json("alpha")
+    runner = FakeSubprocessRunner(
+        popen_responses={
+            f"{ENTRYPOINT_A} status alpha/*": ([alpha_doc], 0),
+        }
+    )
+    command_runner = FakeCommandEntryRunner({"echo hi": "hunter2"})
+    env_bands = EnvVarBands(feature={"SECRET": EnvCommandEntry(command="echo hi")})
+    svc = _matrix_svc(
+        runner,
+        registry_assignments={"alpha": 1},
+        env_bands=env_bands,
+        command_runner=command_runner,
+    )
+    pa = _provider_a()
+
+    cells = svc.build_matrix([pa], patterns=("alpha",))
+    for _ in range(5):  # simulate five readiness polls
+        svc.run_matrix(cells, reporter=None)
+
+    assert command_runner.calls == []
+
+
 def test_workspace_scope_env_trio_uses_index_zero() -> None:
     """Workspace cells receive WINTER_ENV_INDEX=0 and WINTER_ENV=workspace."""
     runner = FakeSubprocessRunner(
@@ -967,11 +1039,20 @@ def _make_status_svc(
     runner: FakeSubprocessRunner,
     resolver: ServiceOrchestratorResolver,
     registry_assignments: dict[str, int] | None = None,
+    env_bands: object | None = None,
+    command_runner: FakeCommandEntryRunner | None = None,
 ) -> ServiceStatusService:
-    """Build a ServiceStatusService with all Phase 2 deps wired."""
+    """Build a ServiceStatusService with all Phase 2 deps wired.
+
+    *env_bands* and *command_runner* let a test declare a command entry and
+    assert against the runner that would execute it — the readiness gate polls
+    through this service, so this is where the "never once per poll" claim is
+    observable end to end.
+    """
+    from winter_cli.modules.workspace.env_band_resolver_service import EnvBandResolverService
     from winter_cli.modules.workspace.env_provisioner import EnvProvisionerService
 
-    ws_config = _fake_ws_config()
+    ws_config = _fake_ws_config(env_bands=env_bands)
     reg = _FakeEnvIndexRegistry(registry_assignments or {"alpha": 1, "beta": 2})
     describe_svc = ServiceDescribeService(
         subprocess_runner=runner,
@@ -982,7 +1063,11 @@ def _make_status_svc(
     matrix_svc = ServiceStatusMatrixService(
         subprocess_runner=runner,
         describe_service=describe_svc,
-        env_provisioner=EnvProvisionerService(config=ws_config, registry=reg),
+        env_provisioner=EnvProvisionerService(
+            config=ws_config,
+            registry=reg,
+            band_resolver=EnvBandResolverService(runner=command_runner or FakeCommandEntryRunner()),
+        ),
         status_parser=StatusDocumentParser(),
         env_index_registry=reg,
         workspace_root=WS,
@@ -1193,12 +1278,15 @@ def _real_matrix_svc(
     provider_names: list[str],
 ) -> tuple[ServiceStatusMatrixService, list[ResolvedCapability]]:
     """Build a ServiceStatusMatrixService driven by real subprocesses."""
+    from winter_cli.modules.workspace.env_band_resolver_service import EnvBandResolverService
     from winter_cli.modules.workspace.env_provisioner import EnvProvisionerService
 
     runner = LocalSubprocessRunner()
     reg = _FakeEnvIndexRegistry(assignments)
     ws_config = _fake_ws_config(base_port=4000, ports_per_env=20)
-    provisioner = EnvProvisionerService(config=ws_config, registry=reg)
+    provisioner = EnvProvisionerService(
+        config=ws_config, registry=reg, band_resolver=EnvBandResolverService(runner=FakeCommandEntryRunner())
+    )
 
     providers = []
     for name in provider_names:
@@ -1352,3 +1440,74 @@ def test_subprocess_merged_docs_contain_all_env_scopes(tmp_workspace: Path) -> N
     env_names = {e.env for e in merged.envs}
     assert "alpha" in env_names
     assert "beta" in env_names
+
+
+# ── readiness-driven polling (the `up --wait` shape) ─────────────────────────
+
+
+def _ticking_monotonic(step: float = 1.0):
+    """A monotonic clock advancing *step* per call, so a wait loop times out deterministically."""
+    counter = {"n": -1}
+
+    def _clock() -> float:
+        counter["n"] += 1
+        return counter["n"] * step
+
+    return _clock
+
+
+def test_readiness_wait_never_runs_a_command_entry_across_its_own_poll_loop() -> None:
+    """A real ServiceReadinessService.wait loop drives status repeatedly and executes no command entry.
+
+    This is the `up --wait` shape rather than a simulation of it: the readiness
+    service's own loop calls ServiceStatusService.collect, which rebuilds and
+    re-runs the matrix — and therefore recomputes each scope's env — on every
+    poll. Status gates resolve_commands=False, so the command entry's runner is
+    never reached however many polls happen, and the placeholder is what the
+    provider subprocess actually receives.
+    """
+    from winter_cli.config.models import EnvCommandEntry, EnvVarBands
+    from winter_cli.modules.service.service_readiness_service import ServiceReadinessService
+    from winter_cli.modules.workspace.env_band_resolver_service import COMMAND_PLACEHOLDER
+
+    _registry, resolver = _make_single_provider_registry()
+    unhealthy_entry = {
+        "name": "db",
+        "state": "running",
+        "health": "unhealthy",
+        "ports": [],
+        "handle": None,
+        "log_path": None,
+        "since": None,
+    }
+    alpha_doc = _status_doc_json("alpha", port_base=4020, services=[unhealthy_entry])
+    runner = FakeSubprocessRunner(
+        popen_responses={
+            f"{ENTRYPOINT_A} status alpha/*": ([alpha_doc], 0),
+        }
+    )
+    command_runner = FakeCommandEntryRunner({"echo hi": "hunter2"})
+    status_svc = _make_status_svc(
+        runner,
+        resolver,
+        registry_assignments={"alpha": 1},
+        env_bands=EnvVarBands(feature={"SECRET": EnvCommandEntry(command="echo hi")}),
+        command_runner=command_runner,
+    )
+    sleeps: list[float] = []
+    readiness = ServiceReadinessService(
+        status_service=status_svc,
+        sleep=sleeps.append,
+        monotonic=_ticking_monotonic(),
+        poll_interval_s=0.25,
+    )
+
+    result = readiness.wait(("alpha",), timeout_s=5.0)
+
+    # The service stayed unhealthy, so the loop really polled repeatedly.
+    assert result.ready is False
+    assert len(sleeps) >= 4
+    assert len(runner.popen_calls) == len(sleeps) + 1
+    # Yet no command entry ran even once across all those polls.
+    assert command_runner.calls == []
+    assert runner.popen_envs[0]["SECRET"] == COMMAND_PLACEHOLDER

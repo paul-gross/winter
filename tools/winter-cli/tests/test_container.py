@@ -12,6 +12,7 @@ from winter_cli.modules.workspace.extension_exclude_service import ExtensionExcl
 from winter_cli.modules.workspace.extension_hook_service import ExtensionHookService
 from winter_cli.modules.workspace.extension_symlink_service import ExtensionSymlinkService
 from winter_cli.modules.workspace.init_service import InitService
+from winter_cli.modules.workspace.internal.subprocess_command_entry_runner import SubprocessCommandEntryRunner
 from winter_cli.modules.workspace.prune_service import PruneService
 from winter_cli.modules.workspace.workspace_push_service import WorkspacePushService
 from winter_cli.modules.workspace.workspace_snapshot_service import WorkspaceSnapshotService
@@ -59,6 +60,16 @@ def test_container_resolves_capabilities_handler(container: Container) -> None:
     from winter_cli.modules.capability.handler import CapabilitiesHandler
 
     assert isinstance(container.capabilities_handler(), CapabilitiesHandler)
+
+
+def test_container_resolves_command_entry_runner_and_env_provisioner(container: Container) -> None:
+    """The command-band execution seam and its resolver/provisioner consumers wire end-to-end."""
+    from winter_cli.modules.workspace.env_band_resolver_service import EnvBandResolverService
+    from winter_cli.modules.workspace.env_provisioner import EnvProvisionerService
+
+    assert isinstance(container.command_entry_runner(), SubprocessCommandEntryRunner)
+    assert isinstance(container.env_band_resolver(), EnvBandResolverService)
+    assert isinstance(container.env_provisioner(), EnvProvisionerService)
 
 
 def test_container_resolves_restack_providers(container: Container) -> None:

@@ -55,7 +55,7 @@ ENTRYPOINT_B = EXT_B / "workflow/service"
 class _FakeEnvProvisionerService:
     """Fake EnvProvisionerService that returns empty dicts for all scopes."""
 
-    def compute(self, scope: str) -> dict[str, str]:
+    def compute(self, scope: str, *, resolve_commands: bool) -> dict[str, str]:
         return {}
 
 

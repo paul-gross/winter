@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 class IEnvProvisioner(Protocol):
     """Minimal protocol for an object that can compute an env map for a scope."""
 
-    def compute(self, scope: str) -> dict[str, str]: ...
+    def compute(self, scope: str, *, resolve_commands: bool) -> dict[str, str]: ...
 
 
 def build_provider_env(provider: Any, workspace_root: Path, service_prefix: str) -> dict[str, str]:
@@ -65,6 +65,8 @@ def provision_scope_env(
     env_provisioner: IEnvProvisioner | None,
     scope: str,
     reporter: IServiceReporter | None,
+    *,
+    resolve_commands: bool,
 ) -> dict[str, str]:
     """Compute *scope*'s injected env map, degrading to ``{}`` on a config error.
 
@@ -73,11 +75,17 @@ def provision_scope_env(
     is caught and surfaced via ``reporter.env_provision_error`` rather than
     propagating as a raw traceback; the action then proceeds without injecting
     that scope's env (best-effort, mirroring the resilience contract elsewhere).
+
+    *resolve_commands* is forwarded verbatim to ``compute`` — this function
+    makes no gating decision of its own; the caller owns that policy. Only
+    ``ValueError`` is caught: a ``RepoError`` raised by a failed command entry
+    (possible only when *resolve_commands* is ``True``) propagates rather than
+    degrading, per the fail-loud contract command failures carry.
     """
     if env_provisioner is None:
         return {}
     try:
-        return env_provisioner.compute(scope)
+        return env_provisioner.compute(scope, resolve_commands=resolve_commands)
     except ValueError as exc:
         if reporter is not None:
             reporter.env_provision_error(scope, str(exc))

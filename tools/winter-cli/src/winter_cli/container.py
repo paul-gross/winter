@@ -54,6 +54,7 @@ from winter_cli.modules.workspace.internal.git_ops_service import GitOpsService
 from winter_cli.modules.workspace.internal.gitpython_repository import GitPythonRepository
 from winter_cli.modules.workspace.internal.read_workspace_repository import ReadWorkspaceRepository
 from winter_cli.modules.workspace.internal.repo_error_factory import RepoErrorFactory
+from winter_cli.modules.workspace.internal.subprocess_command_entry_runner import SubprocessCommandEntryRunner
 from winter_cli.modules.workspace.internal.toml_env_index_registry import TomlEnvIndexRegistry
 from winter_cli.modules.workspace.internal.write_repo_repository import WriteRepoRepository
 from winter_cli.modules.workspace.merge_reporter import JsonMergeReporter, StreamMergeReporter
@@ -407,10 +408,24 @@ class Container(containers.DeclarativeContainer):
         registry=env_index_registry,
     )
 
+    # Command-band execution seam — the only new `subprocess` import site for
+    # command-valued env-band entries. Fixed cwd at the workspace root.
+    command_entry_runner = providers.Singleton(
+        SubprocessCommandEntryRunner,
+        workspace_root=workspace_config.provided.workspace_root,
+        error_factory=repo_error_factory,
+    )
+
+    env_band_resolver = providers.Factory(
+        _lazy("winter_cli.modules.workspace.env_band_resolver_service:EnvBandResolverService"),
+        runner=command_entry_runner,
+    )
+
     env_provisioner = providers.Factory(
         _lazy("winter_cli.modules.workspace.env_provisioner:EnvProvisionerService"),
         config=workspace_config,
         registry=env_index_registry,
+        band_resolver=env_band_resolver,
     )
 
     stream_reporter = providers.Factory(

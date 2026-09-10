@@ -73,7 +73,7 @@ class _StubRepoFactory:
 
 
 class _FakeEnvProvisionerService:
-    def compute(self, scope: str) -> dict[str, str]:
+    def compute(self, scope: str, *, resolve_commands: bool) -> dict[str, str]:
         return {}
 
 

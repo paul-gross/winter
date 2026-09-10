@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import cast
 
 from tests.conftest import FakeFilesystem, make_workspace_config
-from winter_cli.config.models import EnvVarBands, WorkspaceConfig
+from winter_cli.config.models import EnvBandValue, EnvVarBands, WorkspaceConfig
 from winter_cli.core.filesystem import IFilesystemReader
 from winter_cli.modules.doctor.env_bands_probe_service import ENV_BANDS_SOURCE, EnvBandsProbeService
 from winter_cli.modules.doctor.env_discovery_service import EnvDiscoveryService
@@ -53,7 +53,7 @@ class _InMemoryRegistry:
 # ---------------------------------------------------------------------------
 
 
-def _config(named: dict[str, dict[str, str]] | None = None) -> WorkspaceConfig:
+def _config(named: dict[str, dict[str, EnvBandValue]] | None = None) -> WorkspaceConfig:
     return make_workspace_config(
         workspace_root=WORKSPACE_ROOT,
         env_aliases=["alpha", "beta"],

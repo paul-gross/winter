@@ -74,17 +74,33 @@ Every dispatch — regardless of action — sets these variables and runs the en
 | `WINTER_SERVICE_PREFIX`      | The resolved workspace-level service-orchestration namespace prefix. Providers derive per-env resource names (tmux session names, docker compose project names, etc.) from it. Workspace-invariant — the same value at every scope — so unlike the scope vars below it is always present, on every action (including `restart`/`logs`/`describe`/`catalog`). See [configuration/config-files.md](../configuration/config-files.md) for the default and override story. |
 | `WINTER_ENV`                 | The scope name — a feature-env name (e.g. `alpha`) or the reserved literal `workspace`. Injected on `up`/`down`/`status` only.                                                                                                                                                                                                                                                                                                                                         |
 | `WINTER_ENV_INDEX`           | The allocated integer index for the scope (0 for workspace, 1-N for feature envs). Injected on `up`/`down`/`status` only.                                                                                                                                                                                                                                                                                                                                              |
-| `WINTER_PORT_BASE`           | Port-band start for this scope: `base_port + WINTER_ENV_INDEX * ports_per_env`. Injected on `up`/`down`/`status` only.                                                                                                                                                                                                                                                                                                                                                 |
+| `WINTER_PORT_BASE`           | Port-band start for this scope: `base_port + WINTER_ENV_INDEX * ports_per_env`. Injected on `up`/`down`/`status` for a feature env; deliberately never emitted at all for the `workspace` scope — see `WINTER_WORKSPACE_PORT_BASE` below for that case.                                                                                                                                                                                                                |
 | `WINTER_WORKSPACE_PORT_BASE` | Port-band start for index 0 (the workspace scope); equals `WINTER_PORT_BASE` when scope is `workspace`. Injected on `up`/`down`/`status` only.                                                                                                                                                                                                                                                                                                                         |
 
-Plus the scope's computed env-band entries from `.winter/config.toml` — computed and injected into the provider process
-on `up`/`down`/`status` by `EnvProvisionerService` alongside the scope vars above. See
+Plus the scope's computed env-band entries from `.winter/config.toml` — computed by `EnvProvisionerService` and
+`EnvBandResolverService` and injected into the provider process on `up`/`down`/`status` alongside the scope vars above.
+A [command-valued band entry](../configuration/command-env-entries.md) only actually runs on `up`; `down` and `status`
+compute the same scope with command resolution gated off, so for those two actions a command entry's own declared key
+renders as the gate's placeholder rather than its real value — see
+[configuration/command-env-entries.md#the-gate](../configuration/command-env-entries.md#the-gate) for exactly which keys
+that covers and which are excluded. See
 [configuration/ports-and-environments.md](../configuration/ports-and-environments.md#env-var-bands) for which bands
-apply to a scope, their ordering, collision rules, and token grammar. The full set is inspectable via
-`winter env <scope>`. `up`/`down` and the `status` matrix inject the scope env for the target scope; `restart` and
-`logs` forward patterns verbatim and **do not inject scope vars** into the provider process (only the five base
-extension vars) — a tmux-style provider's services obtain their scope env by sourcing `winter env <scope>` in their own
-runtime, and docker restart/logs operate on already-provisioned resources.
+apply to a scope, their ordering, and collision rules. The full set is inspectable via `winter env <scope>` (add
+`--resolve` to see a command entry's real value, matching what `up` injects). `up`/`down` and the `status` matrix inject
+the scope env for the target scope; `restart` and `logs` forward patterns verbatim and **do not inject scope vars** into
+the provider process (only the five base extension vars) — a tmux-style provider's services obtain their scope env by
+sourcing `winter env <scope> --resolve` in their own runtime (plain `winter env <scope>`, without the flag, masks
+command-derived values — see [command-env-entries.md#the-gate](../configuration/command-env-entries.md#the-gate)), and
+docker restart/logs operate on already-provisioned resources.
+
+**Band-error collapse.** A band error is not limited to swallowing the one key it names: if computing the scope's env
+raises at all for `down` or `status` — an undefined reference to a key a gated-off command entry only *imports* (see
+[configuration/command-env-entries.md#the-gate](../configuration/command-env-entries.md#the-gate)) is the case that most
+commonly triggers this, but any band error does — `EnvProvisionerService.compute` raises, `provision_scope_env` catches
+it, and the scope's *entire* computed env collapses to `{}` for that call, not just the offending key. That drops
+`WINTER_ENV`, `WINTER_ENV_INDEX`, `WINTER_PORT_BASE`, `WINTER_WORKSPACE_PORT_BASE`, and `WINTER_SERVICE_PREFIX` along
+with every band value, so a provider invoked for `down` in that state cannot identify the scope's own services by name
+or port — not merely a missing secret.
 
 The first five form the winter base extension contract, set uniformly by
 `core/extension_invocation.py::build_extension_env`. They are defined for the hook/doctor/lint dispatches in

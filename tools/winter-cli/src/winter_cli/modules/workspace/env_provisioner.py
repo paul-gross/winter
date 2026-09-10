@@ -1,10 +1,16 @@
 """Single source of truth for computing the runtime environment map for a scope.
 
-``EnvProvisionerService.compute(scope)`` returns the complete ``{KEY: VALUE}``
-env map that winter injects into every provider subprocess and that
-``winter env`` prints as sourceable lines.  All callers — ``winter env``,
-``ServiceFanOutService`` (up/down), ``ServiceStatusMatrixService`` (status) —
-delegate here so the computation is never duplicated.
+``EnvProvisionerService.compute(scope, resolve_commands=...)`` returns the
+complete ``{KEY: VALUE}`` env map that winter injects into every provider
+subprocess and that ``winter env`` prints as sourceable lines.  All callers —
+``winter env``, ``ServiceFanOutService`` (up/down), ``ServiceStatusMatrixService``
+(status) — delegate here so the computation is never duplicated.
+
+``resolve_commands`` is keyword-only with no default: each call site owns a
+policy decision about whether a command entry's output is actually resolved
+(``True``) or masked to a placeholder (``False``), and ``compute`` merely
+forwards the caller's choice to ``EnvBandResolverService.resolve()`` — it makes
+no gating decision of its own.
 
 Scope semantics
 ---------------
@@ -35,36 +41,34 @@ Band selection
 ``[env.workspace.vars]``, ``[env.feature.vars]``, and the per-env
 ``[env.<name>.vars]`` override tables are selected by scope:
 
-- **workspace scope**: only ``[env.workspace.vars]`` entries are rendered.
-- **feature scope**: ``[env.workspace.vars]`` entries are rendered first (into the
-  accumulating dict), then ``[env.feature.vars]`` entries on top, then that env's
-  own ``[env.<name>.vars]`` band last.  Each layer wins key collisions against the
-  ones below it, and its templates may reference keys already rendered by them.
+- **workspace scope**: only ``[env.workspace.vars]`` entries are visible to
+  resolution.
+- **feature scope**: ``[env.workspace.vars]``, ``[env.feature.vars]``, and this
+  env's own ``[env.<name>.vars]`` band are all visible together.
 
-Only the band matching the scope's own name is rendered, so a per-env override never
-reaches a sibling env, and one naming an env that does not exist is simply never
-looked up — inert, not an error.
+Only the band matching the scope's own name is selected, so a per-env override
+never reaches a sibling env, and one naming an env that does not exist is
+simply never looked up — inert, not an error.
 
-Workspace-band template scope invariant
----------------------------------------
-``WINTER_PORT_BASE`` is **never** available when rendering ``[env.workspace.vars]``
-entries — neither at workspace scope (where it is not in the result at all) nor at
-feature scope (where it is excluded from the workspace-band template scope
-specifically).  This guarantees a workspace-band entry resolves identically at both
-scopes.  Workspace-band templates must use ``WINTER_WORKSPACE_PORT_BASE`` for
-workspace-relative port references; a reference to ``${WINTER_PORT_BASE+N}`` in the
-workspace band raises ``ValueError`` at any scope (undefined variable).
-
-Feature-band templates do have ``WINTER_PORT_BASE`` in scope (the feature's own port
-base) as well as all already-rendered workspace-band keys.
-
-Each entry may reference any earlier key (including the base vars available to that
-band's template scope) via ``${NAME}`` or ``${NAME+N}`` tokens.
+This service's job stops at selecting which bands apply and computing the base
+vars above; turning the selected bands into concrete values is
+``EnvBandResolverService.resolve()``'s job (see
+``modules/workspace/env_band_resolver_service.py``), which resolves every
+entry to a fixpoint rather than in a single ordered pass — a band entry may
+reference any other band's entry regardless of declaration order, with one
+exception: a workspace-band entry only ever sees the base vars — as originally
+computed here, never as any band entry (including the workspace band's own)
+may have since rewritten them — minus ``WINTER_PORT_BASE``, plus other
+workspace-band keys, so it resolves identically at every scope even when a
+feature-, named-, or the workspace band itself happens to declare a key
+sharing a base var's name. See that module's docstring for the
+full fixpoint contract, including how a key declared in a higher band shadows
+a lower band's entry for that key entirely, and how an unresolvable entry is
+diagnosed.
 """
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
 
 from winter_cli.modules.service.scope import WORKSPACE_SCOPE
@@ -72,77 +76,8 @@ from winter_cli.modules.workspace.env_index import build_env_trio
 
 if TYPE_CHECKING:
     from winter_cli.config.models import WorkspaceConfig
+    from winter_cli.modules.workspace.env_band_resolver_service import EnvBandResolverService
     from winter_cli.modules.workspace.env_index_registry import IEnvIndexRegistry
-
-# Matches ${NAME} or ${NAME+N}: a reference to an in-scope variable, optionally
-# plus a non-negative integer offset.  NAME is an env-var-style identifier.
-_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\+(\d+))?\}")
-# Matches any ${...} token the reference form did not consume — malformed/unsupported.
-_UNKNOWN_TOKEN_RE = re.compile(r"\$\{[^}]*\}")
-
-
-def _render_env_var_value(band: str, key: str, template: str, scope: dict[str, str]) -> str:
-    """Resolve ``${NAME}`` / ``${NAME+N}`` references in *template* against *scope*.
-
-    *band* is a label for error messages (e.g. ``"env.workspace.vars"``).
-    *scope* holds the variables visible to this entry: the managed base vars
-    (``WINTER_ENV``, ``WINTER_ENV_INDEX``, ``WINTER_PORT_BASE``,
-    ``WINTER_WORKSPACE_PORT_BASE``) plus every earlier env-band entry
-    already rendered, in declaration order.
-
-    - ``${NAME}``   → NAME's resolved string value.
-    - ``${NAME+N}`` → ``int(NAME) + N`` (NAME must parse as an int; N ≥ 0).
-
-    Literal values (no ``${...}`` token) pass through unchanged.  A reference to
-    an undefined name, a ``+N`` offset applied to a non-integer value, or any
-    other ``${...}`` token is a fatal substitution error — raises ``ValueError``
-    with a clear message.
-    """
-
-    def _replace(m: re.Match[str]) -> str:
-        name, offset = m.group(1), m.group(2)
-        if name not in scope:
-            raise ValueError(
-                f"{band} key {key!r}: reference to undefined variable {name!r} "
-                f"— reference a managed base var or an earlier env-band entry."
-            )
-        value = scope[name]
-        if offset is None:
-            return value
-        try:
-            return str(int(value) + int(offset))
-        except ValueError:
-            raise ValueError(
-                f"{band} key {key!r}: cannot apply +{offset} to non-integer value of {name!r} ({value!r})."
-            ) from None
-
-    rendered = _REF_RE.sub(_replace, template)
-
-    # Any ${...} the reference form left behind is an unsupported token.
-    unknown = _UNKNOWN_TOKEN_RE.search(rendered)
-    if unknown:
-        raise ValueError(
-            f"{band} key {key!r}: unsupported substitution token {unknown.group()!r}. "
-            f"Use ${{NAME}} or ${{NAME+N}} referencing a managed base var or an earlier entry."
-        )
-    return rendered
-
-
-def _render_band(
-    band_label: str,
-    band: dict[str, str],
-    template_scope: dict[str, str],
-    result: dict[str, str],
-) -> None:
-    """Render all entries in *band* against *template_scope*, accumulating into *result*.
-
-    Each rendered value is added to both *template_scope* (so later entries in
-    the same band can reference it) and *result* (the authoritative output map).
-    """
-    for key, template in band.items():
-        value = _render_env_var_value(band_label, key, template, template_scope)
-        template_scope[key] = value
-        result[key] = value
 
 
 class EnvProvisionerService:
@@ -155,23 +90,25 @@ class EnvProvisionerService:
 
     Construction::
 
-        EnvProvisionerService(config, registry)
+        EnvProvisionerService(config, registry, band_resolver)
     """
 
     def __init__(
         self,
         config: WorkspaceConfig,
         registry: IEnvIndexRegistry,
+        band_resolver: EnvBandResolverService,
     ) -> None:
         self._config = config
         self._registry = registry
+        self._band_resolver = band_resolver
 
-    def compute(self, scope: str) -> dict[str, str]:
+    def compute(self, scope: str, *, resolve_commands: bool) -> dict[str, str]:
         """Return the full env map for *scope*.
 
         For a feature env this is the env trio (``WINTER_ENV``,
         ``WINTER_ENV_INDEX``, ``WINTER_PORT_BASE``) plus
-        ``WINTER_WORKSPACE_PORT_BASE`` and any rendered band entries.
+        ``WINTER_WORKSPACE_PORT_BASE`` and every resolved band entry.
 
         For ``"workspace"``, ``WINTER_ENV``, ``WINTER_ENV_INDEX``, and
         ``WINTER_WORKSPACE_PORT_BASE`` are returned (index 0, the workspace port
@@ -183,13 +120,22 @@ class EnvProvisionerService:
         Band selection by scope:
 
         - workspace scope: ``[env.workspace.vars]`` entries only.
-        - feature scope: ``[env.workspace.vars]`` rendered first, then
-          ``[env.feature.vars]``, then this env's own ``[env.<name>.vars]`` band
-          last (each layer wins key collisions against the ones below it, and may
-          reference their already-rendered keys).
+        - feature scope: ``[env.workspace.vars]``, ``[env.feature.vars]``, and
+          this env's own ``[env.<name>.vars]`` band, all resolved together —
+          see ``EnvBandResolverService`` for how entries across bands may
+          reference one another.
 
-        Raises ``ValueError`` when a band template has an unsupported token or a
-        reference to an undefined variable.
+        *resolve_commands* gates command-entry execution: ``True`` runs each
+        command entry (once its references resolve) and merges its output;
+        ``False`` masks every command-derived key to the resolver's
+        placeholder without running anything. See
+        ``EnvBandResolverService.resolve()`` for the full gate contract.
+
+        Raises ``ValueError`` when a band entry has an unsupported token, a
+        non-integer ``+N`` offset, or cannot be resolved at all. Raises
+        ``RepoError`` when a command entry run under ``resolve_commands=True``
+        exits non-zero, times out, or produces output that does not parse as
+        its declared format.
         """
         workspace_port_base = str(self._config.port_base_for_index(0))
         # Workspace-invariant — same value at every scope. Resolved once here
@@ -198,7 +144,7 @@ class EnvProvisionerService:
         service_prefix = self._config.service_prefix
 
         if scope == WORKSPACE_SCOPE:
-            result: dict[str, str] = {
+            base_scope: dict[str, str] = {
                 "WINTER_ENV": WORKSPACE_SCOPE,
                 "WINTER_ENV_INDEX": "0",
                 "WINTER_WORKSPACE_PORT_BASE": workspace_port_base,
@@ -206,7 +152,7 @@ class EnvProvisionerService:
             }
         else:
             trio = build_env_trio(scope, self._config, self._registry)
-            result = {
+            base_scope = {
                 **trio,
                 "WINTER_WORKSPACE_PORT_BASE": workspace_port_base,
                 "WINTER_SERVICE_PREFIX": service_prefix,
@@ -214,39 +160,23 @@ class EnvProvisionerService:
 
         bands = self._config.env_bands
         workspace_band = bands.workspace
-        feature_band = bands.feature
-        # Per-env override band for this scope only. A miss — including every
-        # workspace-scope call and any [env.<name>.vars] naming an env that does
-        # not exist — yields an empty band and renders nothing.
-        named_band = bands.named.get(scope, {}) if scope != WORKSPACE_SCOPE else {}
+        if scope == WORKSPACE_SCOPE:
+            feature_band = {}
+            named_band = {}
+            named_band_label = "env.workspace.vars"
+        else:
+            feature_band = bands.feature
+            # Per-env override band for this scope only. A miss — including any
+            # [env.<name>.vars] naming an env that does not exist — yields an
+            # empty band and resolves nothing extra.
+            named_band = bands.named.get(scope, {})
+            named_band_label = f"env.{scope}.vars"
 
-        if workspace_band or feature_band or named_band:
-            if scope == WORKSPACE_SCOPE:
-                # Workspace band template scope: base vars only (no WINTER_PORT_BASE —
-                # it is not in `result` for workspace scope, and we do not inject an
-                # alias).  Workspace-band templates that reference ${WINTER_PORT_BASE+N}
-                # raise undefined-variable ValueError, surfacing the mistake.  Use
-                # ${WINTER_WORKSPACE_PORT_BASE+N} instead to target the workspace band.
-                ws_template_scope = dict(result)
-                _render_band("env.workspace.vars", workspace_band, ws_template_scope, result)
-            else:
-                # Feature scope: render the workspace band first so feature-band
-                # templates may reference workspace entries.  The workspace band's
-                # template scope deliberately EXCLUDES WINTER_PORT_BASE so workspace-
-                # band entries resolve identically regardless of which scope they are
-                # rendered in — a workspace-band template using ${WINTER_PORT_BASE+N}
-                # raises undefined-variable ValueError here too.
-                ws_template_scope = {k: v for k, v in result.items() if k != "WINTER_PORT_BASE"}
-                _render_band("env.workspace.vars", workspace_band, ws_template_scope, result)
-                # Feature band gets the full accumulated scope INCLUDING WINTER_PORT_BASE
-                # and already-rendered workspace-band keys.
-                feat_template_scope = dict(result)
-                _render_band("env.feature.vars", feature_band, feat_template_scope, result)
-                # This env's own band renders last, so it wins every key collision
-                # against the bands below it. Its template scope carries the fully
-                # accumulated result, so an override may reference WINTER_PORT_BASE
-                # and any workspace- or feature-band key it is replacing.
-                named_template_scope = dict(result)
-                _render_band(f"env.{scope}.vars", named_band, named_template_scope, result)
-
-        return result
+        return self._band_resolver.resolve(
+            workspace_band=workspace_band,
+            feature_band=feature_band,
+            named_band=named_band,
+            named_band_label=named_band_label,
+            base_scope=base_scope,
+            resolve_commands=resolve_commands,
+        )

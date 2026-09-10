@@ -8,6 +8,9 @@ from winter_cli.config.models import (
     AgentModelOverridesConfig,
     DashboardConfig,
     DashboardLayout,
+    EnvBandValue,
+    EnvCommandEntry,
+    EnvCommandFormat,
     EnvVarBands,
     FileSizeLintConfig,
     GitIdentity,
@@ -40,6 +43,9 @@ LOCAL_CONFIG_FILE = "config.local.toml"
 # here parses as a per-env override band, so any new non-band [env] sub-table
 # must be added here or it will be silently swallowed as an env name.
 _RESERVED_ENV_BANDS = frozenset({"workspace", "feature"})
+
+# Closed field set for an inline-table command entry ({ command = "...", ... }).
+_ENV_COMMAND_ENTRY_ALLOWED_KEYS = frozenset({"command", "format", "shell", "exports"})
 
 
 def _coerce_str_list(value: object) -> list[str]:
@@ -405,9 +411,10 @@ class WorkspaceConfigService:
         """Build an ``EnvVarBands`` from ``[env.workspace.vars]``, ``[env.feature.vars]``,
         and any per-env ``[env.<name>.vars]`` override tables.
 
-        Absent sub-tables produce empty bands (clean no-op).  Non-scalar values
-        (e.g. TOML arrays, tables, or booleans) raise ``ConfigError`` naming the
-        band and key.
+        Absent sub-tables produce empty bands (clean no-op).  A value is either a
+        scalar template string, an inline table declaring a command entry, or an
+        unsupported value (e.g. a TOML array or a boolean) — the last raises
+        ``ConfigError`` naming the band and key.
 
         Every ``[env]`` sub-table other than the two reserved band names is read as a
         per-env override band keyed by env name.  The name is not validated against the
@@ -431,7 +438,7 @@ class WorkspaceConfigService:
 
         workspace_band = WorkspaceConfigService._parse_env_band(env_raw, "workspace")
         feature_band = WorkspaceConfigService._parse_env_band(env_raw, "feature")
-        named_bands: dict[str, dict[str, str]] = {}
+        named_bands: dict[str, dict[str, EnvBandValue]] = {}
         for name in env_raw:
             if name in _RESERVED_ENV_BANDS:
                 continue
@@ -442,12 +449,14 @@ class WorkspaceConfigService:
         return EnvVarBands(workspace=workspace_band, feature=feature_band, named=named_bands)
 
     @staticmethod
-    def _parse_env_band(env_raw: dict, band: str) -> dict[str, str]:
+    def _parse_env_band(env_raw: dict, band: str) -> dict[str, EnvBandValue]:
         """Parse one band (``workspace``, ``feature``, or an env name) from the ``[env]`` table.
 
         Reads ``env_raw[band]["vars"]``; returns an empty dict when the sub-table or
-        the ``vars`` key is absent.  Non-scalar values raise ``ConfigError`` naming the
-        band and the offending key.
+        the ``vars`` key is absent.  A scalar value (string, integer, or float; not a
+        boolean) becomes a plain template-string entry.  An inline table becomes an
+        ``EnvCommandEntry`` (see ``_parse_env_command_entry``).  Any other value type
+        raises ``ConfigError`` naming the band and the offending key.
         """
         band_raw = env_raw.get(band)
         if not isinstance(band_raw, dict):
@@ -455,15 +464,85 @@ class WorkspaceConfigService:
         vars_raw = band_raw.get("vars")
         if not isinstance(vars_raw, dict):
             return {}
-        result: dict[str, str] = {}
+        result: dict[str, EnvBandValue] = {}
         for k, v in vars_raw.items():
+            key = str(k)
+            if isinstance(v, dict):
+                result[key] = WorkspaceConfigService._parse_env_command_entry(band, key, v)
+                continue
             if isinstance(v, bool) or not isinstance(v, (str, int, float)):
                 raise ConfigError(
                     f"[env.{band}.vars] key {k!r} has an unsupported value type "
-                    f"({type(v).__name__}); only string, integer, and float values are allowed."
+                    f"({type(v).__name__}); only string, integer, float, and command-entry "
+                    f"table values are allowed."
                 )
-            result[str(k)] = str(v)
+            result[key] = str(v)
         return result
+
+    @staticmethod
+    def _parse_env_command_entry(band: str, key: str, entry_raw: dict) -> EnvCommandEntry:
+        """Parse one inline-table env-band entry (``{ command = "...", ... }``).
+
+        ``command`` is required and must be a non-empty string.  ``format`` must be
+        one of ``EnvCommandFormat``'s values (default ``"raw"``).  ``shell`` must be
+        a boolean (default ``False``).  ``exports``, if present, must be a list of
+        strings.  Any other key, or any field with a wrong type, raises
+        ``ConfigError`` naming *band* and *key*.
+
+        A command entry declared under a ``WINTER_*`` name is rejected outright: its
+        output would always be dropped by ``_filtered_command_output``'s ``WINTER_*``
+        refusal, and its own declared key can never be written either — winter's
+        managed vars can never be overwritten by a command entry, gated or not. Such
+        an entry can never do anything useful, so it is unambiguously an operator
+        mistake rather than a silent no-op — this is a hard failure at load time, not
+        merely narrowing what ``EnvBandResolverService`` accepts at resolution time.
+        This does not apply to a plain string entry redeclaring a ``WINTER_*`` name;
+        that is a different, allowed shape the resolver's own provenance rules cover.
+        """
+        if key.startswith("WINTER_"):
+            raise ConfigError(
+                f"[env.{band}.vars] key {key!r} is a command entry declared under a `WINTER_*` name. "
+                "winter's managed vars can never be written by a command entry's output or its own "
+                f"declared key — declare {key!r} as a plain string instead, or use a different key."
+            )
+
+        unknown = set(entry_raw.keys()) - _ENV_COMMAND_ENTRY_ALLOWED_KEYS
+        if unknown:
+            bad = ", ".join(repr(k) for k in sorted(unknown))
+            allowed = ", ".join(repr(k) for k in sorted(_ENV_COMMAND_ENTRY_ALLOWED_KEYS))
+            raise ConfigError(f"[env.{band}.vars] key {key!r} has unknown field(s) {bad}. Allowed fields: {allowed}.")
+
+        command_raw = entry_raw.get("command")
+        if not isinstance(command_raw, str) or not command_raw:
+            raise ConfigError(
+                f"[env.{band}.vars] key {key!r} is a command entry missing a required non-empty 'command' string."
+            )
+
+        format_raw = entry_raw.get("format", EnvCommandFormat.raw.value)
+        valid_formats = {f.value for f in EnvCommandFormat}
+        if not isinstance(format_raw, str) or format_raw not in valid_formats:
+            valid = ", ".join(repr(f) for f in sorted(valid_formats))
+            raise ConfigError(
+                f"[env.{band}.vars] key {key!r} has invalid 'format' {format_raw!r}. Must be one of: {valid}."
+            )
+
+        shell_raw = entry_raw.get("shell", False)
+        if not isinstance(shell_raw, bool):
+            raise ConfigError(f"[env.{band}.vars] key {key!r}.shell must be a boolean, got {type(shell_raw).__name__}.")
+
+        exports_raw = entry_raw.get("exports")
+        exports: tuple[str, ...] | None = None
+        if exports_raw is not None:
+            if not isinstance(exports_raw, list) or not all(isinstance(e, str) for e in exports_raw):
+                raise ConfigError(f"[env.{band}.vars] key {key!r}.exports must be a list of strings.")
+            exports = tuple(exports_raw)
+
+        return EnvCommandEntry(
+            command=command_raw,
+            format=EnvCommandFormat(format_raw),
+            shell=shell_raw,
+            exports=exports,
+        )
 
     @staticmethod
     def _parse_space(space_raw: object) -> SpaceConfig:

@@ -9,6 +9,8 @@ from winter_cli.config.models import (
     _DEFAULT_ENV_ALIASES,
     AdoptExtensions,
     DashboardLayout,
+    EnvCommandEntry,
+    EnvCommandFormat,
     EnvVarBands,
     SingletonType,
     SpaceConfig,
@@ -1207,6 +1209,417 @@ def test_env_bands_local_overlay_deep_merges_sub_tables() -> None:
     # Both bands are present after the overlay merge.
     assert config.env_bands.feature == {"FE_VAR": "fe_value"}
     assert config.env_bands.workspace == {"WS_VAR": "ws_value"}
+
+
+# ---------------------------------------------------------------------------
+# EnvVarBands — inline-table command entries
+# ---------------------------------------------------------------------------
+
+
+def test_env_bands_workspace_command_entry_parses() -> None:
+    """[env.workspace.vars] accepts an inline-table command entry."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {"workspace": {"vars": {"DB_PASSWORD": {"command": "vals get ref+vault://db/password"}}}},
+            },
+        },
+    )
+
+    config = svc.load()
+
+    assert config.env_bands.workspace == {
+        "DB_PASSWORD": EnvCommandEntry(command="vals get ref+vault://db/password"),
+    }
+
+
+def test_env_bands_feature_command_entry_parses() -> None:
+    """[env.feature.vars] accepts an inline-table command entry."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {"feature": {"vars": {"DB_PASSWORD": {"command": "vals get ref+vault://db/password"}}}},
+            },
+        },
+    )
+
+    config = svc.load()
+
+    assert config.env_bands.feature == {
+        "DB_PASSWORD": EnvCommandEntry(command="vals get ref+vault://db/password"),
+    }
+
+
+def test_env_bands_named_command_entry_parses() -> None:
+    """[env.<name>.vars] accepts an inline-table command entry."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {"alpha": {"vars": {"SECRET": {"command": "op read op://vault/item/field"}}}},
+            },
+        },
+    )
+
+    config = svc.load()
+
+    assert config.env_bands.named == {
+        "alpha": {"SECRET": EnvCommandEntry(command="op read op://vault/item/field")},
+    }
+
+
+def test_env_bands_command_entry_full_field_set_parses() -> None:
+    """A command entry declaring every field parses with all values honored."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {
+                    "feature": {
+                        "vars": {
+                            "_aws": {
+                                "command": "chamber export myapp",
+                                "format": "json",
+                                "shell": True,
+                                "exports": ["A", "B"],
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    )
+
+    config = svc.load()
+
+    assert config.env_bands.feature == {
+        "_aws": EnvCommandEntry(
+            command="chamber export myapp",
+            format=EnvCommandFormat.json,
+            shell=True,
+            exports=("A", "B"),
+        ),
+    }
+
+
+def test_env_bands_command_entry_defaults() -> None:
+    """A minimal command entry defaults format=raw, shell=False, exports=None."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {"feature": {"vars": {"KEY": {"command": "echo hi"}}}},
+            },
+        },
+    )
+
+    config = svc.load()
+
+    entry = config.env_bands.feature["KEY"]
+    assert isinstance(entry, EnvCommandEntry)
+    assert entry.format is EnvCommandFormat.raw
+    assert entry.shell is False
+    assert entry.exports is None
+
+
+def test_env_bands_command_entry_and_string_entries_coexist() -> None:
+    """A band may mix plain string templates with command entries."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {
+                    "feature": {
+                        "vars": {
+                            "PLAIN": "value",
+                            "SECRET": {"command": "echo secret"},
+                        },
+                    },
+                },
+            },
+        },
+    )
+
+    config = svc.load()
+
+    assert config.env_bands.feature == {
+        "PLAIN": "value",
+        "SECRET": EnvCommandEntry(command="echo secret"),
+    }
+
+
+@pytest.mark.parametrize("band_table", ["workspace", "feature", "alpha"])
+def test_env_bands_command_entry_missing_command_raises_config_error(band_table: str) -> None:
+    """An inline table without a 'command' field raises ConfigError naming band and key."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {band_table: {"vars": {"BAD_KEY": {"format": "json"}}}},
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        svc.load()
+
+    error_msg = str(exc_info.value)
+    assert "BAD_KEY" in error_msg
+    assert band_table in error_msg
+    assert "command" in error_msg
+
+
+def test_env_bands_command_entry_empty_command_raises_config_error() -> None:
+    """An empty 'command' string is treated as missing and raises ConfigError."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {"feature": {"vars": {"BAD_KEY": {"command": ""}}}},
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        svc.load()
+
+    assert "BAD_KEY" in str(exc_info.value)
+
+
+def test_env_bands_command_entry_non_string_command_raises_config_error() -> None:
+    """A non-string 'command' value raises ConfigError naming band and key."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {"feature": {"vars": {"BAD_KEY": {"command": 123}}}},
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        svc.load()
+
+    assert "BAD_KEY" in str(exc_info.value)
+
+
+def test_env_bands_command_entry_unknown_field_raises_config_error() -> None:
+    """An inline table with an unknown field raises ConfigError naming band and key."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {"feature": {"vars": {"BAD_KEY": {"command": "echo hi", "bogus": "nope"}}}},
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        svc.load()
+
+    error_msg = str(exc_info.value)
+    assert "BAD_KEY" in error_msg
+    assert "feature" in error_msg
+    assert "bogus" in error_msg
+
+
+def test_env_bands_command_entry_invalid_format_raises_config_error() -> None:
+    """An unsupported 'format' value raises ConfigError naming band and key."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {"feature": {"vars": {"BAD_KEY": {"command": "echo hi", "format": "yaml"}}}},
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        svc.load()
+
+    error_msg = str(exc_info.value)
+    assert "BAD_KEY" in error_msg
+    assert "format" in error_msg
+
+
+def test_env_bands_command_entry_non_bool_shell_raises_config_error() -> None:
+    """A non-boolean 'shell' value raises ConfigError naming band and key."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {"feature": {"vars": {"BAD_KEY": {"command": "echo hi", "shell": "yes"}}}},
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        svc.load()
+
+    error_msg = str(exc_info.value)
+    assert "BAD_KEY" in error_msg
+    assert "shell" in error_msg
+
+
+@pytest.mark.parametrize("bad_exports", ["not-a-list", [1, 2], {"a": "b"}])
+def test_env_bands_command_entry_bad_exports_raises_config_error(bad_exports: object) -> None:
+    """A malformed 'exports' value raises ConfigError naming band and key."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {"feature": {"vars": {"BAD_KEY": {"command": "echo hi", "exports": bad_exports}}}},
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        svc.load()
+
+    error_msg = str(exc_info.value)
+    assert "BAD_KEY" in error_msg
+    assert "exports" in error_msg
+
+
+@pytest.mark.parametrize("band_table", ["workspace", "feature", "alpha"])
+def test_env_bands_command_entry_under_winter_prefixed_key_raises_config_error(band_table: str) -> None:
+    """A command entry declared under a ``WINTER_*`` name can never do anything useful:
+    its output is always dropped by the ``WINTER_*`` merge-policy refusal, and its own
+    declared key may never be written either — so it is unambiguously an operator
+    mistake, rejected at load time rather than silently no-op'd or (worse) corrupting
+    the managed var while the gate is closed.
+    """
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {band_table: {"vars": {"WINTER_PORT_BASE": {"command": "echo 5000"}}}},
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        svc.load()
+
+    error_msg = str(exc_info.value)
+    assert "WINTER_PORT_BASE" in error_msg
+    assert band_table in error_msg
+
+
+@pytest.mark.parametrize("band_table", ["workspace", "feature", "alpha"])
+def test_env_var_bands_refuses_a_winter_prefixed_command_entry_even_when_constructed_directly(
+    band_table: str,
+) -> None:
+    """The ``WINTER_*`` refusal lives on ``EnvVarBands`` itself, not only in
+    ``WorkspaceConfigService._parse_env_command_entry``.
+
+    ``_parse_env_command_entry`` is the only guard on the real config-load path, and
+    it always raises before an ``EnvVarBands`` bearing the bad entry is ever built —
+    so this is a defense-in-depth check for a caller that bypasses that seam and
+    constructs ``EnvVarBands`` directly. Without it, such a command entry reaches
+    ``EnvBandResolverService`` at resolution time, where the failure mode is worse
+    than a wrong value: gated (``resolve_commands=False``) it renders as the
+    ``COMMAND_PLACEHOLDER`` string, but resolved (``resolve_commands=True``) its
+    declared key is dropped entirely — a managed ``WINTER_*`` var silently missing
+    from the returned map rather than merely wrong.
+    """
+    entry = EnvCommandEntry(command="echo 5000")
+
+    with pytest.raises(ConfigError) as exc_info:
+        if band_table == "workspace":
+            EnvVarBands(workspace={"WINTER_PORT_BASE": entry})
+        elif band_table == "feature":
+            EnvVarBands(feature={"WINTER_PORT_BASE": entry})
+        else:
+            EnvVarBands(named={"alpha": {"WINTER_PORT_BASE": entry}})
+
+    error_msg = str(exc_info.value)
+    assert "WINTER_PORT_BASE" in error_msg
+    assert band_table in error_msg
+
+
+def test_env_bands_string_only_config_unaffected_by_widened_schema() -> None:
+    """A string-only config still parses to plain strings, unchanged by the widened schema."""
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {
+                    "workspace": {"vars": {"WS_VAR": "ws_value"}},
+                    "feature": {"vars": {"FE_VAR": "fe_value"}},
+                    "alpha": {"vars": {"HUB": "from-alpha"}},
+                },
+            },
+        },
+    )
+
+    config = svc.load()
+
+    assert config.env_bands.workspace == {"WS_VAR": "ws_value"}
+    assert config.env_bands.feature == {"FE_VAR": "fe_value"}
+    assert config.env_bands.named == {"alpha": {"HUB": "from-alpha"}}
+
+
+def test_env_bands_string_only_scalar_coercion_unchanged() -> None:
+    """Integer and float band values still coerce to their string form in every band.
+
+    The widened schema routes dict values to the command-entry parser before the
+    scalar branch; this pins that the scalar branch itself is untouched, so a
+    string-only config (including TOML's numeric scalars) parses to exactly the
+    plain-string map it parsed to before command entries existed.
+    """
+    config_path = WORKSPACE_ROOT / WINTER_DIR / CONFIG_FILE
+    fs = FakeFilesystem(files={config_path: ""})
+    svc = _service(
+        fs,
+        {
+            config_path: {
+                "env": {
+                    "workspace": {"vars": {"WS_PORT": 5432, "WS_RATIO": 1.5}},
+                    "feature": {"vars": {"FE_PORT": 8080}},
+                    "alpha": {"vars": {"AL_RATIO": 0.25}},
+                },
+            },
+        },
+    )
+
+    config = svc.load()
+
+    assert config.env_bands.workspace == {"WS_PORT": "5432", "WS_RATIO": "1.5"}
+    assert config.env_bands.feature == {"FE_PORT": "8080"}
+    assert config.env_bands.named == {"alpha": {"AL_RATIO": "0.25"}}
 
 
 # ── [space] artifact-space config ────────────────────────────────────────────

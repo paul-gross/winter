@@ -268,3 +268,138 @@ class TestConfigErrorBoundary:
         assert result.returncode != 0
         assert "error:" in result.stderr
         assert "Traceback" not in result.stderr
+
+
+# ── ctx.exit(n) propagation ───────────────────────────────────────────────────
+#
+# `_cli_group.main(standalone_mode=False)` does not exit the process on an
+# in-command `ctx.exit(n)` — Click raises `Exit(n)` internally and `main()`
+# hands the exit code back to its caller instead of calling `sys.exit`
+# (see `click.core.BaseCommand.main`). `cli()` must forward that return value
+# to `sys.exit` itself. Each test below runs the real `python -m
+# winter_cli.cli` entry point in a subprocess, so it pins the *process* exit
+# status rather than a command function's return value — a subprocess-less
+# test that only asserted the click command's own exit code (e.g. via
+# `CliRunner`, which manages `standalone_mode` itself) would not catch a
+# regression here.
+
+
+def _run_winter(cwd: Path, *args: str, config_toml: str = 'main_branch = "master"\n') -> subprocess.CompletedProcess:
+    """Run `python -m winter_cli.cli <args>` in a minimal workspace at *cwd*."""
+    winter_dir = cwd / ".winter"
+    winter_dir.mkdir(exist_ok=True)
+    (winter_dir / "config.toml").write_text(config_toml)
+    return subprocess.run(
+        [sys.executable, "-m", "winter_cli.cli", *args],
+        capture_output=True,
+        text=True,
+        cwd=str(cwd),
+    )
+
+
+class TestCtxExitPropagation:
+    def test_env_unknown_scope_exits_1_at_process_level(self, tmp_path: Path) -> None:
+        """`winter env <unregistered>` calls `ctx.exit(1)` — the process must exit 1."""
+        result = _run_winter(tmp_path, "env", "nosuchenv")
+        assert result.returncode == 1
+        assert "unknown scope" in result.stderr
+
+    def test_env_workspace_scope_still_exits_0(self, tmp_path: Path) -> None:
+        """The success path (no `ctx.exit` call) is unaffected — still exits 0."""
+        result = _run_winter(tmp_path, "env", "workspace")
+        assert result.returncode == 0
+        assert "export WINTER_ENV=workspace" in result.stdout
+
+    def test_space_invalid_kind_exits_1_at_process_level(self, tmp_path: Path) -> None:
+        """`winter space <bad-kind>` calls `ctx.exit(1)` — the process must exit 1."""
+        result = _run_winter(tmp_path, "space", "bad/kind")
+        assert result.returncode == 1
+        assert "invalid kind" in result.stderr
+
+    def test_space_valid_kind_still_exits_0(self, tmp_path: Path) -> None:
+        """The success path (no `ctx.exit` call) is unaffected — still exits 0."""
+        result = _run_winter(tmp_path, "space", "scores")
+        assert result.returncode == 0
+        assert result.stdout.strip().endswith("scores")
+
+
+# ── `winter env --resolve` gate, end to end ──────────────────────────────────
+#
+# `winter env` is pure and offline by default: a command entry masks to a
+# placeholder and is never run. `--resolve` runs it for real. These run the
+# real subprocess-backed CLI entry point (not a fake ICommandEntryRunner) so a
+# failing command's RepoError is proven to actually reach cli()'s boundary
+# arm rather than a test double's stand-in for it.
+
+
+class TestEnvResolveGate:
+    def test_without_resolve_masks_command_entry(self, tmp_path: Path) -> None:
+        """Without --resolve, a command entry prints the placeholder and never runs."""
+        config_toml = dedent(
+            """
+            main_branch = "master"
+            [env.workspace.vars]
+            SECRET = { command = "echo hunter2" }
+            """
+        ).strip()
+        result = _run_winter(tmp_path, "env", "workspace", config_toml=config_toml)
+        assert result.returncode == 0
+        assert "export SECRET='<unresolved:command>'" in result.stdout
+        assert "hunter2" not in result.stdout
+
+    def test_without_resolve_the_command_process_never_starts(self, tmp_path: Path) -> None:
+        """Masking is not just output-shaping: the command's process is genuinely never spawned.
+
+        The command writes a marker file as a side effect, so its absence after
+        the run proves non-execution — asserting only that the value is absent
+        from stdout would still pass if winter ran the command and discarded
+        its output.
+        """
+        marker = tmp_path / "ran.marker"
+        config_toml = dedent(
+            f"""
+            main_branch = "master"
+            [env.workspace.vars]
+            SECRET = {{ command = "sh -c 'touch {marker}; echo hunter2'" }}
+            """
+        ).strip()
+
+        masked = _run_winter(tmp_path, "env", "workspace", config_toml=config_toml)
+        assert masked.returncode == 0
+        assert "export SECRET='<unresolved:command>'" in masked.stdout
+        assert not marker.exists()
+
+        # The same command under --resolve does run it — so the assertion above
+        # is about the gate, not about an inert command.
+        resolved = _run_winter(tmp_path, "env", "workspace", "--resolve", config_toml=config_toml)
+        assert resolved.returncode == 0
+        assert "export SECRET=hunter2" in resolved.stdout
+        assert marker.exists()
+
+    def test_resolve_flag_runs_the_command_and_prints_its_value(self, tmp_path: Path) -> None:
+        """--resolve runs the command entry and prints its real output."""
+        config_toml = dedent(
+            """
+            main_branch = "master"
+            [env.workspace.vars]
+            SECRET = { command = "echo hunter2" }
+            """
+        ).strip()
+        result = _run_winter(tmp_path, "env", "workspace", "--resolve", config_toml=config_toml)
+        assert result.returncode == 0
+        assert "export SECRET=hunter2" in result.stdout
+
+    def test_resolve_flag_failing_command_exits_1_with_clean_error(self, tmp_path: Path) -> None:
+        """A command entry that exits non-zero under --resolve reaches the CLI boundary as 'error: ...' exit 1."""
+        config_toml = dedent(
+            """
+            main_branch = "master"
+            [env.workspace.vars]
+            SECRET = { command = "false" }
+            """
+        ).strip()
+        result = _run_winter(tmp_path, "env", "workspace", "--resolve", config_toml=config_toml)
+        assert result.returncode == 1
+        assert "error:" in result.stderr
+        assert "Traceback" not in result.stderr
+        assert not any(line.startswith("export ") for line in result.stdout.splitlines())

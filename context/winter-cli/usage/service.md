@@ -180,7 +180,8 @@ narrows both the scope and (with multiple providers) the provider axis.
 Each matched cell is dispatched once: the bare `<scope>` when the cell carries no service-segment filter, or the
 scope-qualified `<scope>/<svc-pattern>` when the user supplied a real filter for that scope (see the
 [uniform invocation rule](../contracts/service-orchestrator.md#uniform-invocation-rule)). With a single provider and no
-filter, this collapses to exactly the pre-#139 behavior: one bare `up <env>`/`down <env>` dispatch per matched env.
+filter, this collapses to exactly one bare `up <env>`/`down <env>` dispatch per matched env — the single-provider,
+no-filter case behaves exactly as if the matrix and fan-out machinery were not there.
 
 Cells are iterated in the matrix's deterministic order (env cells sorted by env name then provider order, followed by
 workspace cells):
@@ -253,14 +254,17 @@ stream. Non-follow `logs` works across all providers (the streams are merged int
 
 `status` is always built as a **two-dimensional call-matrix** (rows = scope instances, columns = owning providers),
 regardless of whether one or many providers are bound. Core enumerates the matrix, computes the full env map for each
-scope via `EnvProvisionerService` (the same computation `winter env <scope>` prints), injects the scope vars into each
-provider subprocess, runs cells in parallel, and merges the per-cell `StatusDocument` results into a single document
-before filtering and rendering. For a feature-env cell the injected set includes `WINTER_ENV`, `WINTER_ENV_INDEX`,
-`WINTER_PORT_BASE`, `WINTER_WORKSPACE_PORT_BASE`, `WINTER_SERVICE_PREFIX`, and the workspace-band plus feature-band
-entries from `.winter/config.toml`; for the `workspace` cell `WINTER_PORT_BASE` is NOT injected and only workspace-band
-entries are included — the workspace scope uses `WINTER_WORKSPACE_PORT_BASE` only, so the name carries one meaning
-everywhere. See [configuration/ports-and-environments.md](../configuration/ports-and-environments.md#env-var-bands) for
-the band semantics.
+scope via `EnvProvisionerService` with command resolution gated off — the same computation bare `winter env <scope>`
+prints, never `--resolve` — so a command entry's own declared key renders as the gate's placeholder rather than its real
+value (see [configuration/command-env-entries.md#the-gate](../configuration/command-env-entries.md#the-gate) for exactly
+which keys that covers and which are excluded). Core injects the scope vars into each provider subprocess, runs cells in
+parallel, and merges the per-cell `StatusDocument` results into a single document before filtering and rendering. For a
+feature-env cell the injected set includes `WINTER_ENV`, `WINTER_ENV_INDEX`, `WINTER_PORT_BASE`,
+`WINTER_WORKSPACE_PORT_BASE`, `WINTER_SERVICE_PREFIX`, and the workspace-band plus feature-band entries from
+`.winter/config.toml`; for the `workspace` cell `WINTER_PORT_BASE` is NOT injected and only workspace-band entries are
+included — the workspace scope uses `WINTER_WORKSPACE_PORT_BASE` only, so the name carries one meaning everywhere. See
+[configuration/ports-and-environments.md](../configuration/ports-and-environments.md#env-var-bands) for the band
+semantics.
 
 **Registry-driven enumeration:** scope rows are the **configured env names** from the workspace env-index registry (not
 a filesystem scan) plus the `workspace` scope. Core owns enumeration — the orchestrator is called once per

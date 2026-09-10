@@ -25,6 +25,11 @@ Each cell's provider subprocess environment is provisioned once per unique scope
 plus env-band vars), exactly as the status matrix injects env per cell, and cached
 so a scope shared by multiple cells (multi-provider) is only computed once.
 
+``up`` provisions with ``resolve_commands=True`` — services need real values,
+so a command entry runs (at most once per unique scope, per the cache above).
+``down`` provisions with ``resolve_commands=False`` — teardown needs ports and
+names only, so a command entry is never run.
+
 Extension-declared service manifests
 -------------------------------------
 ``manifest_collector`` is an optional factory (a ``ServiceManifestCollectorService``
@@ -101,13 +106,16 @@ class ServiceFanOutService:
     providers are stopped without manifest aggregation.
 
     ``env_provisioner`` is an optional env provisioner (the ``IEnvProvisioner``
-    protocol — any object with a ``compute(scope)`` method).  When present,
-    ``compute(cell.scope)`` is called (once per unique scope, cached) for ``up``
-    and ``down`` to inject ``WINTER_ENV``, ``WINTER_ENV_INDEX``,
-    ``WINTER_PORT_BASE``, ``WINTER_WORKSPACE_PORT_BASE``, and any env-band
-    variables into the provider subprocess environment. This is the
-    runtime-injection model: env vars flow via the provider subprocess
-    environment rather than through any on-disk file.
+    protocol — any object with a ``compute(scope, *, resolve_commands)``
+    method).  When present, ``compute(cell.scope, resolve_commands=...)`` is
+    called (once per unique scope, cached) for ``up`` and ``down`` to inject
+    ``WINTER_ENV``, ``WINTER_ENV_INDEX``, ``WINTER_PORT_BASE``,
+    ``WINTER_WORKSPACE_PORT_BASE``, and any env-band variables into the
+    provider subprocess environment. This is the runtime-injection model: env
+    vars flow via the provider subprocess environment rather than through any
+    on-disk file. ``up`` passes ``resolve_commands=True`` (services need real
+    values); ``down`` passes ``resolve_commands=False`` (teardown needs ports
+    and names only).
     """
 
     def __init__(
@@ -145,7 +153,7 @@ class ServiceFanOutService:
         provisioned_cache: dict[str, dict[str, str]] = {}
         extra_env = {**self._collect_manifest_env(), WINTER_SERVICE_TIMEOUT_ENV: str(timeout_s)}
         for cell in cells:
-            provisioned = self._provisioned_for(cell.scope, provisioned_cache)
+            provisioned = self._provisioned_for(cell.scope, provisioned_cache, resolve_commands=True)
             exit_code = self._run_action(cell, "up", provisioned, extra_env)
             if exit_code != 0:
                 return exit_code
@@ -166,7 +174,7 @@ class ServiceFanOutService:
         provisioned_cache: dict[str, dict[str, str]] = {}
         first_error: int = 0
         for cell in cells:
-            provisioned = self._provisioned_for(cell.scope, provisioned_cache)
+            provisioned = self._provisioned_for(cell.scope, provisioned_cache, resolve_commands=False)
             exit_code = self._run_action(cell, "down", provisioned, {})
             if exit_code != 0 and first_error == 0:
                 first_error = exit_code
@@ -174,10 +182,19 @@ class ServiceFanOutService:
 
     # ── internals ────────────────────────────────────────────────────────────
 
-    def _provisioned_for(self, scope: str, cache: dict[str, dict[str, str]]) -> dict[str, str]:
-        """Return the computed env map for *scope*, computing and caching it once."""
+    def _provisioned_for(
+        self, scope: str, cache: dict[str, dict[str, str]], *, resolve_commands: bool
+    ) -> dict[str, str]:
+        """Return the computed env map for *scope*, computing and caching it once.
+
+        *resolve_commands* is the caller's gate value (``True`` for ``up``,
+        ``False`` for ``down``) — a command entry therefore runs at most once
+        per unique scope per ``up()`` call, never once per cell.
+        """
         if scope not in cache:
-            cache[scope] = provision_scope_env(self._env_provisioner, scope, self._reporter)
+            cache[scope] = provision_scope_env(
+                self._env_provisioner, scope, self._reporter, resolve_commands=resolve_commands
+            )
         return cache[scope]
 
     def _collect_manifest_env(self) -> dict[str, str]:

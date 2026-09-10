@@ -176,6 +176,17 @@ def cli() -> None:
     structured fields (subcommand, args, cwd, exit code, stderr) before
     exiting non-zero — this is the CLI boundary the harness's
     error-handling rules call out.
+
+    Runs `_cli_group.main(standalone_mode=False)` rather than letting Click
+    exit on its own, precisely so a `RepoError`/`ConfigError` escaping a
+    handler lands here instead of dumping a traceback. Under
+    `standalone_mode=False`, an in-command `ctx.exit(n)` does not exit the
+    process — Click raises `Exit(n)` internally and `main()` returns `n` from
+    `invoke()` (see `click.core.BaseCommand.main`) instead of calling
+    `sys.exit`. Every command callback in this CLI implicitly returns `None`
+    on success (verified across the whole command surface), so the only two
+    shapes `main()` can hand back are `None` (success) and an `int` (an
+    in-command `ctx.exit(n)`) — propagate the latter to the shell.
     """
     # Pave SSH-side keepalives into GIT_SSH_COMMAND so a wedged TCP socket
     # surfaces as an SSH error in ~90s instead of relying solely on the
@@ -188,7 +199,9 @@ def cli() -> None:
 
     ensure_ssh_keepalives()
     try:
-        _cli_group.main(standalone_mode=False)
+        exit_code = _cli_group.main(standalone_mode=False)
+        if isinstance(exit_code, int):
+            sys.exit(exit_code)
     except click.exceptions.Abort:
         click.echo("Aborted!", err=True)
         sys.exit(1)

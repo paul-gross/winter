@@ -25,9 +25,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.conftest import FakeSubprocessRunner
+import pytest
+
+from tests.conftest import FakeCommandEntryRunner, FakeServiceReporter, FakeSubprocessRunner
+from winter_cli.config.models import (
+    EnvCommandEntry,
+    EnvVarBands,
+    ProjectRepositoryConfig,
+    SingletonRepository,
+    SingletonType,
+    WorkspaceConfig,
+)
 from winter_cli.modules.capability.models import CapabilitySlot, ResolvedCapability
 from winter_cli.modules.service.service_fan_out_service import FanOutCell, ServiceFanOutService
+from winter_cli.modules.workspace.env_band_resolver_service import COMMAND_PLACEHOLDER, EnvBandResolverService
+from winter_cli.modules.workspace.env_provisioner import EnvProvisionerService
+from winter_cli.modules.workspace.internal.repo_error_factory import RepoErrorFactory
+from winter_cli.modules.workspace.internal.subprocess_command_entry_runner import SubprocessCommandEntryRunner
+from winter_cli.modules.workspace.models.domain_model import RepoError
 
 WS = Path("/ws")
 EXT_A = WS / "provider-a"
@@ -295,7 +310,7 @@ def test_up_injects_provisioned_env_vars_when_provisioner_present() -> None:
     """When an env_provisioner is present, its computed vars are merged into the subprocess env."""
 
     class _FakeProvisioner:
-        def compute(self, scope: str) -> dict[str, str]:
+        def compute(self, scope: str, *, resolve_commands: bool) -> dict[str, str]:
             return {
                 "WINTER_ENV": scope,
                 "WINTER_PORT_BASE": "4060",
@@ -325,7 +340,7 @@ def test_down_injects_provisioned_env_vars_when_provisioner_present() -> None:
     """When an env_provisioner is present, its computed vars are merged into the down subprocess env."""
 
     class _FakeProvisioner:
-        def compute(self, scope: str) -> dict[str, str]:
+        def compute(self, scope: str, *, resolve_commands: bool) -> dict[str, str]:
             return {
                 "WINTER_ENV": scope,
                 "WINTER_PORT_BASE": "4060",
@@ -397,9 +412,11 @@ def test_up_provisions_each_unique_scope_once() -> None:
     class _CountingProvisioner:
         def __init__(self) -> None:
             self.calls: list[str] = []
+            self.resolve_commands_calls: list[bool] = []
 
-        def compute(self, scope: str) -> dict[str, str]:
+        def compute(self, scope: str, *, resolve_commands: bool) -> dict[str, str]:
             self.calls.append(scope)
+            self.resolve_commands_calls.append(resolve_commands)
             return {"WINTER_ENV": scope}
 
     provisioner = _CountingProvisioner()
@@ -414,6 +431,194 @@ def test_up_provisions_each_unique_scope_once() -> None:
     svc.up([_cell(_pa(), scope="alpha"), _cell(_pb(), scope="alpha"), _cell(_pa(), scope="beta")])
 
     assert provisioner.calls == ["alpha", "beta"]
+    # up() gates every scope's compute() with resolve_commands=True.
+    assert provisioner.resolve_commands_calls == [True, True]
+
+
+class _InMemoryEnvIndexRegistry:
+    """Minimal IEnvIndexRegistry fake for wiring a real EnvProvisionerService."""
+
+    def __init__(self, assignments: dict[str, int]) -> None:
+        self._data = dict(assignments)
+
+    def get_index(self, name: str) -> int | None:
+        return self._data.get(name)
+
+    def all_assignments(self) -> dict[str, int]:
+        return dict(self._data)
+
+    def assign(self, name: str, index: int) -> None:
+        self._data[name] = index
+
+    def remove(self, name: str) -> None:
+        self._data.pop(name, None)
+
+
+def _config_with_bands(env_bands: EnvVarBands) -> WorkspaceConfig:
+    """A minimal WorkspaceConfig carrying *env_bands*."""
+    return WorkspaceConfig(
+        workspace_root=WS,
+        main_branch="main",
+        base_port=4000,
+        ports_per_env=20,
+        singleton_repos=[SingletonRepository(name="ws", type=SingletonType.workspace)],
+        project_repos=[ProjectRepositoryConfig(name="demo", url="git@example.com:demo.git")],
+        env_bands=env_bands,
+    )
+
+
+def _real_provisioner(command_runner: FakeCommandEntryRunner) -> EnvProvisionerService:
+    """A real EnvProvisionerService whose feature band declares one command entry.
+
+    Used to pin the actual execution count a regression could silently break —
+    a fake provisioner recording resolve_commands values cannot detect a change
+    that re-resolves per cell instead of per unique scope.
+    """
+    config = _config_with_bands(EnvVarBands(feature={"SECRET": EnvCommandEntry(command="echo hi")}))
+    registry = _InMemoryEnvIndexRegistry({"alpha": 1, "beta": 2})
+    return EnvProvisionerService(
+        config=config, registry=registry, band_resolver=EnvBandResolverService(runner=command_runner)
+    )
+
+
+def test_up_runs_a_command_entry_exactly_once_per_unique_scope() -> None:
+    """A command entry declared in the feature band runs once per unique scope on up(), not once per cell.
+
+    Pins the real execution count against a real ICommandEntryRunner: two
+    cells sharing scope "alpha" must trigger exactly one command execution —
+    a regression that re-resolved per cell instead of per cached scope would
+    make this 2.
+    """
+    command_runner = FakeCommandEntryRunner({"echo hi": "hunter2"})
+    provisioner = _real_provisioner(command_runner)
+    runner = FakeSubprocessRunner()
+    svc = ServiceFanOutService(
+        subprocess_runner=runner,
+        workspace_root=WS,
+        service_prefix="winter",
+        env_provisioner=provisioner,
+    )
+
+    svc.up([_cell(_pa(), scope="alpha"), _cell(_pb(), scope="alpha")])
+
+    assert len(command_runner.calls) == 1
+    assert runner.call_envs[0]["SECRET"] == "hunter2"
+    assert runner.call_envs[1]["SECRET"] == "hunter2"
+
+
+def test_down_never_runs_a_command_entry() -> None:
+    """down() gates resolve_commands=False: a command entry never executes on teardown."""
+    command_runner = FakeCommandEntryRunner({"echo hi": "hunter2"})
+    provisioner = _real_provisioner(command_runner)
+    runner = FakeSubprocessRunner()
+    svc = ServiceFanOutService(
+        subprocess_runner=runner,
+        workspace_root=WS,
+        service_prefix="winter",
+        env_provisioner=provisioner,
+    )
+
+    svc.down([_cell(_pa(), scope="alpha"), _cell(_pb(), scope="alpha")])
+
+    assert command_runner.calls == []
+    assert runner.call_envs[0]["SECRET"] == COMMAND_PLACEHOLDER
+
+
+def test_up_propagates_a_command_failure_instead_of_degrading() -> None:
+    """A failed command entry under ``up`` surfaces as RepoError — it never degrades to no injection.
+
+    ``provision_scope_env`` catches ``ValueError`` only, so a template error
+    keeps its best-effort degradation while a command failure propagates: the
+    fail-loud contract command entries carry. Pins that the catch is not
+    broadened — a wider ``except`` would swallow this and silently start the
+    provider with the command's value missing.
+    """
+    failure = RepoError(
+        "env.feature.vars key 'SECRET': command `echo hi` failed",
+        subcommand="hi",
+        cwd=str(WS),
+        exit_code=3,
+        program="echo",
+    )
+    command_runner = FakeCommandEntryRunner({"echo hi": failure})
+    provisioner = _real_provisioner(command_runner)
+    runner = FakeSubprocessRunner()
+    reporter = FakeServiceReporter()
+    svc = ServiceFanOutService(
+        subprocess_runner=runner,
+        workspace_root=WS,
+        service_prefix="winter",
+        env_provisioner=provisioner,
+        reporter=reporter,
+    )
+
+    with pytest.raises(RepoError) as excinfo:
+        svc.up([_cell(_pa(), scope="alpha")])
+
+    assert "SECRET" in str(excinfo.value)
+    # Not degraded: no reporter diagnostic, and the provider never ran.
+    assert reporter.env_provision_error_calls == []
+    assert runner.call_calls == []
+
+
+def test_up_propagates_a_malformed_command_instead_of_degrading() -> None:
+    """M1: a `command` entry with a quoting error surfaces as `RepoError` under ``up``, not `{}`.
+
+    Uses the real `SubprocessCommandEntryRunner` — a fake never exercises
+    `shlex.split` at all, so this is the only level that can catch a
+    tokenizer failure escaping as a bare `ValueError`, which
+    `provision_scope_env` would silently degrade to no env injected (and
+    `up` would then start the provider with none of its env at all).
+    """
+    config = _config_with_bands(EnvVarBands(feature={"SECRET": EnvCommandEntry(command='vals get "unbalanced')}))
+    provisioner = EnvProvisionerService(
+        config=config,
+        registry=_InMemoryEnvIndexRegistry({"alpha": 1}),
+        band_resolver=EnvBandResolverService(
+            runner=SubprocessCommandEntryRunner(workspace_root=WS, error_factory=RepoErrorFactory())
+        ),
+    )
+    runner = FakeSubprocessRunner()
+    reporter = FakeServiceReporter()
+    svc = ServiceFanOutService(
+        subprocess_runner=runner,
+        workspace_root=WS,
+        service_prefix="winter",
+        env_provisioner=provisioner,
+        reporter=reporter,
+    )
+
+    with pytest.raises(RepoError) as excinfo:
+        svc.up([_cell(_pa(), scope="alpha")])
+
+    assert "SECRET" in str(excinfo.value)
+    # Not degraded: no reporter diagnostic, and the provider never ran.
+    assert reporter.env_provision_error_calls == []
+    assert runner.call_calls == []
+
+
+def test_status_style_template_error_still_degrades_on_up() -> None:
+    """A ValueError from a bad template keeps degrading to no injection, next to the RepoError case above."""
+    config = _config_with_bands(EnvVarBands(feature={"BAD": "${NOPE}"}))
+    provisioner = EnvProvisionerService(
+        config=config,
+        registry=_InMemoryEnvIndexRegistry({"alpha": 1}),
+        band_resolver=EnvBandResolverService(runner=FakeCommandEntryRunner()),
+    )
+    runner = FakeSubprocessRunner()
+    reporter = FakeServiceReporter()
+    svc = ServiceFanOutService(
+        subprocess_runner=runner,
+        workspace_root=WS,
+        service_prefix="winter",
+        env_provisioner=provisioner,
+        reporter=reporter,
+    )
+
+    svc.up([_cell(_pa(), scope="alpha")])
+
+    assert [scope for scope, _ in reporter.env_provision_error_calls] == ["alpha"]
+    assert "BAD" not in runner.call_envs[0]
 
 
 # ── env provision error resilience ───────────────────────────────────────────
@@ -432,7 +637,7 @@ def test_up_workspace_scope_injects_workspace_band_only() -> None:
     """
 
     class _BandProvisioner:
-        def compute(self, scope: str) -> dict[str, str]:
+        def compute(self, scope: str, *, resolve_commands: bool) -> dict[str, str]:
             if scope == "workspace":
                 return {"SHARED": "ws_val"}
             return {"SHARED": "feat_override", "FEAT_ONLY": "feat_val"}
@@ -463,7 +668,7 @@ def test_up_feature_scope_injects_both_bands_feature_wins_collision() -> None:
     """
 
     class _BandProvisioner:
-        def compute(self, scope: str) -> dict[str, str]:
+        def compute(self, scope: str, *, resolve_commands: bool) -> dict[str, str]:
             if scope == "workspace":
                 return {"SHARED": "ws_val"}
             return {"SHARED": "feat_override", "FEAT_ONLY": "feat_val"}
@@ -488,7 +693,7 @@ def test_provision_error_does_not_raise_on_up_or_down() -> None:
     """A ValueError from the provisioner degrades to no-injection; up/down do not raise."""
 
     class _ErrorProvisioner:
-        def compute(self, scope: str) -> dict[str, str]:
+        def compute(self, scope: str, *, resolve_commands: bool) -> dict[str, str]:
             raise ValueError(f"bad template for {scope}")
 
     class _FakeReporter:

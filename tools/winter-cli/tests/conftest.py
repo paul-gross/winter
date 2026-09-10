@@ -509,6 +509,38 @@ class FakeSubprocessRunner:
         yield FakeStreamingProcess(lines, rc)
 
 
+class FakeCommandEntryRunner:
+    """ICommandEntryRunner fake — records every invocation; canned responses per command string.
+
+    Tests register `(command → stdout)` for a run that should succeed, or
+    `(command → RepoError)` for one that should fail — `run` raises the
+    registered error instead of returning. A command with no canned response
+    raises `AssertionError` so an unexpectedly-executed command surfaces
+    immediately rather than resolving to nothing.
+    """
+
+    def __init__(self, responses: dict[str, str | RepoError] | None = None) -> None:
+        self._responses = dict(responses or {})
+        self.calls: list[tuple[str, bool, dict[str, str], str, str | None]] = []
+
+    def run(
+        self,
+        command: str,
+        *,
+        shell: bool,
+        env: Any,
+        description: str,
+        declared_command: str | None = None,
+    ) -> str:
+        self.calls.append((command, shell, dict(env), description, declared_command))
+        if command not in self._responses:
+            raise AssertionError(f"FakeCommandEntryRunner.run got unexpected command: {command!r}")
+        response = self._responses[command]
+        if isinstance(response, RepoError):
+            raise response
+        return response
+
+
 class FakeSpecLoader:
     """ISpecLoader fake — returns a configurable set of supported versions per slot.
 

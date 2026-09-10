@@ -230,8 +230,12 @@ class RepoError(Exception):
     type instead of depending on GitPython's exception hierarchy.
 
     Carries structured fields so the dashboard's Log tab can render a
-    `git <subcommand> <args>` line plus cwd / exit code / stderr alongside the
-    high-level message.
+    `<program> <subcommand> <args>` line plus cwd / exit code / stderr
+    alongside the high-level message. `program` defaults to `"git"` — every
+    wrap site that predates non-git adapters (i.e. every `from_git` call)
+    leaves it unset and renders exactly as before; a non-git adapter (e.g.
+    `RepoErrorFactory.from_subprocess`) passes the program it actually ran so
+    the rendered command line names it instead.
     """
 
     def __init__(
@@ -243,6 +247,7 @@ class RepoError(Exception):
         cwd: str | None = None,
         exit_code: int | None = None,
         stderr: str = "",
+        program: str = "git",
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -251,11 +256,12 @@ class RepoError(Exception):
         self.cwd = cwd
         self.exit_code = exit_code
         self.stderr = stderr
+        self.program = program
 
     def __str__(self) -> str:
         parts: list[str] = [self.message]
         if self.subcommand:
-            cmd = " ".join(("git", self.subcommand, *self.cmd_args))
+            cmd = " ".join((self.program, self.subcommand, *self.cmd_args))
             parts.append(f"  $ {cmd}")
         if self.cwd:
             parts.append(f"  cwd: {self.cwd}")

@@ -4,8 +4,9 @@ import enum
 from collections.abc import Mapping
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from winter_cli.core.config_file import ConfigError
 from winter_cli.modules.workspace.agent_transform.models import AgentFormat, AgentModelOverrideProfile
 
 
@@ -436,6 +437,55 @@ _DEFAULT_ENV_ALIASES = [
 ]
 
 
+class EnvCommandFormat(enum.Enum):
+    """How to interpret a command entry's captured stdout."""
+
+    raw = "raw"
+    """A single value: stdout, trimmed, becomes the entry's own key."""
+
+    dotenv = "dotenv"
+    """Stdout is ``KEY=VALUE`` lines; every key is merged into scope."""
+
+    json = "json"
+    """Stdout is a flat JSON object; every key is merged into scope."""
+
+
+class EnvCommandEntry(BaseModel):
+    """A command-valued env-var band entry.
+
+    Declared as an inline table in place of a string value inside
+    ``[env.workspace.vars]``, ``[env.feature.vars]``, or ``[env.<name>.vars]``::
+
+        DB_PASSWORD = { command = "vals get ref+vault://secret/data/db#/password" }
+
+    The field set is closed: ``command`` is the only required field.  Parsing
+    only validates shape here — nothing runs the command yet.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    command: str
+    """The command line to run.  ``${...}`` tokens are rendered before execution."""
+
+    format: EnvCommandFormat = EnvCommandFormat.raw
+    """How to interpret captured stdout — see ``EnvCommandFormat``."""
+
+    shell: bool = False
+    """When true, run *command* through a shell instead of ``shlex.split`` tokens."""
+
+    exports: tuple[str, ...] | None = None
+    """Optional allow-list of keys the command's output may contribute.
+
+    ``None`` means no restriction beyond the merge policy every command entry
+    is subject to.
+    """
+
+
+EnvBandValue = str | EnvCommandEntry
+"""One env-var band entry: a plain ``${...}`` template string, or an inline-table
+command entry (``EnvCommandEntry``)."""
+
+
 class EnvVarBands(BaseModel):
     """Scope-split env-var bands from ``[env.workspace.vars]``, ``[env.feature.vars]``,
     and any number of per-env ``[env.<name>.vars]`` tables.
@@ -446,17 +496,20 @@ class EnvVarBands(BaseModel):
     for the workspace scope.  ``named`` holds per-env override bands, each rendered on top
     of the feature band for its own env only.  Every band defaults to empty when the
     corresponding TOML sub-table is absent.
+
+    Each entry is either a plain string template or an ``EnvCommandEntry`` inline
+    table (see ``EnvBandValue``).
     """
 
     model_config = ConfigDict(frozen=True)
 
-    workspace: dict[str, str] = Field(default_factory=dict)
+    workspace: dict[str, EnvBandValue] = Field(default_factory=dict)
     """Vars from ``[env.workspace.vars]`` — workspace scope only."""
 
-    feature: dict[str, str] = Field(default_factory=dict)
+    feature: dict[str, EnvBandValue] = Field(default_factory=dict)
     """Vars from ``[env.feature.vars]`` — feature-env scope (overlaid on workspace band)."""
 
-    named: dict[str, dict[str, str]] = Field(default_factory=dict)
+    named: dict[str, dict[str, EnvBandValue]] = Field(default_factory=dict)
     """Per-env override bands from ``[env.<name>.vars]``, keyed by env name.
 
     Each band is rendered only for its own feature env, on top of the feature band.
@@ -466,6 +519,40 @@ class EnvVarBands(BaseModel):
     leaking into workspace output.  A band for an env that does not exist is inert
     too — nothing ever looks it up.
     """
+
+    @model_validator(mode="after")
+    def _no_command_entry_under_a_winter_prefixed_key(self) -> EnvVarBands:
+        """Refuse a ``WINTER_*``-keyed command entry at the type, not only at the file.
+
+        ``WorkspaceConfigService._parse_env_command_entry`` is the only guard in
+        front of this today, and it is the sole production path that ever builds
+        an ``EnvVarBands`` with real data — so this validator never fires against
+        a config loaded the normal way. It exists because ``EnvVarBands`` is a
+        public, frozen model with no constraint of its own: nothing stops some
+        other caller (present or future) from constructing one directly with a
+        command entry declared under a ``WINTER_*`` name, and the failure mode
+        past that seam is worse than a wrong value — ``EnvBandResolverService``
+        gives such an entry a provenance floor no write can ever beat (its
+        declared key can never be claimed; see the module docstring's "base-scope
+        seed" section) and ``_filtered_command_output`` drops every ``WINTER_*``
+        key its output would import, so the key is silently *absent* from the
+        resolved scope rather than merely wrong — a worse contract break for a
+        var `contracts/service-orchestrator.md` documents as always injected.
+
+        Message and wording match ``_parse_env_command_entry``'s ``ConfigError``
+        exactly, so an operator never sees two different diagnoses for the same
+        mistake — this only ever fires for a config the load-time seam did not
+        build, in which case it is the only diagnosis there is.
+        """
+        for band, entries in (("workspace", self.workspace), ("feature", self.feature), *self.named.items()):
+            for key, value in entries.items():
+                if isinstance(value, EnvCommandEntry) and key.startswith("WINTER_"):
+                    raise ConfigError(
+                        f"[env.{band}.vars] key {key!r} is a command entry declared under a `WINTER_*` name. "
+                        "winter's managed vars can never be written by a command entry's output or its own "
+                        f"declared key — declare {key!r} as a plain string instead, or use a different key."
+                    )
+        return self
 
 
 class SpaceConfig(BaseModel):

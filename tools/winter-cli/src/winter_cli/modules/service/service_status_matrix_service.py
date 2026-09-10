@@ -43,11 +43,15 @@ Per-cell env injection
 Each cell's provider subprocess environment is built as:
 
     build_provider_env(provider, ws_root, service_prefix)  # WINTER_WORKSPACE_DIR / EXT_* / SERVICE_PREFIX vars
-    | EnvProvisionerService.compute(scope)         # WINTER_ENV / INDEX / PORT_BASE /
-                                                   # WINTER_WORKSPACE_PORT_BASE + env-band vars
+    | EnvProvisionerService.compute(scope, resolve_commands=False)  # WINTER_ENV / INDEX / PORT_BASE /
+                                                                    # WINTER_WORKSPACE_PORT_BASE + env-band vars
 
 The provisioner is the single source of truth for all WINTER_* variables.  Each
-scope's env is computed at most once per matrix run (cache).
+scope's env is computed at most once per matrix run (cache).  Status always
+passes ``resolve_commands=False`` — health probing is provider-side and a
+command entry's real value is never needed here; masking to the placeholder
+also keeps a command from running once per readiness poll (see
+``ServiceReadinessService``).
 
 Env is computed via ``EnvProvisionerService.compute``.  A ``ValueError`` (e.g. a
 bad env-band template) does not crash ``service status``: it is caught by
@@ -329,7 +333,13 @@ class ServiceStatusMatrixService:
         unique_scopes = list(dict.fromkeys(cell.scope for cell in cells))
         provisioned: dict[str, dict[str, str]] = {}
         for scope in unique_scopes:
-            provisioned[scope] = provision_scope_env(self._env_provisioner, scope, reporter)
+            # resolve_commands=False: health probing is provider-side and never
+            # needs a command entry's real value. ServiceReadinessService calls
+            # run_matrix on every poll (up to DEFAULT_WAIT_TIMEOUT_S /
+            # DEFAULT_POLL_INTERVAL_S times per `--wait`), so gating status to
+            # False is what keeps a command entry running once per scope (via
+            # `up`) rather than once per poll.
+            provisioned[scope] = provision_scope_env(self._env_provisioner, scope, reporter, resolve_commands=False)
 
         if not cells:
             return [], 0
