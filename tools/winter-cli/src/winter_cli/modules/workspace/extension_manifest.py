@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -60,6 +61,72 @@ def _coerce_load(value: object) -> ExtensionLoad | None:
     # `none` is workspace authority (a repo entry's `load`), never a manifest value.
     accepted = ", ".join(f'"{member.value}"' for member in ExtensionLoad if member is not ExtensionLoad.none)
     raise ConfigError(f"`load` must be one of {accepted}; got {value!r}")
+
+
+# Mirrors the single-name grammar `winter space` accepts for a kind.
+_SPACE_KIND = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_FORBIDDEN_PATTERN_CHARS = ("\n", "\r", "\x00")
+
+
+def _coerce_exclude_path(entry: object) -> str:
+    """Validate one `[excludes] paths` entry and return it as an anchored Git pattern.
+
+    A single leading `/` is a Git root anchor, not a filesystem path; entries
+    without it are anchored when emitted. Anything that could escape the
+    workspace root or change a pattern's meaning (negation, `..`, home/drive/UNC
+    forms, newlines) raises rather than being silently dropped.
+    """
+    if not isinstance(entry, str) or not entry:
+        raise ConfigError(f"`[excludes] paths` entries must be non-empty strings; got {entry!r}")
+    if any(ch in entry for ch in _FORBIDDEN_PATTERN_CHARS):
+        raise ConfigError(f"`[excludes] paths` entry {entry!r} contains a newline, carriage return, or NUL")
+    if entry.startswith("!"):
+        raise ConfigError(f"`[excludes] paths` entry {entry!r} is a negated pattern; negation is not allowed")
+    if entry.startswith("#"):
+        raise ConfigError(f"`[excludes] paths` entry {entry!r} starts with '#', which Git reads as a comment")
+    if entry.startswith(("~", "\\")) or re.match(r"^[A-Za-z]:", entry) or entry.startswith("//"):
+        raise ConfigError(
+            f"`[excludes] paths` entry {entry!r} is a home, drive, or UNC path, not a workspace-root pattern"
+        )
+    body = entry[1:] if entry.startswith("/") else entry
+    segments = body.split("/")
+    if ".." in segments:
+        raise ConfigError(f"`[excludes] paths` entry {entry!r} contains a '..' segment")
+    if all(seg in ("", ".") for seg in segments):
+        raise ConfigError(f"`[excludes] paths` entry {entry!r} names only the workspace root")
+    return "/" + body
+
+
+def _coerce_excludes(value: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Coerce the manifest `[excludes]` table into `(paths, space_kinds)`.
+
+    Both fields are optional lists of non-empty strings. Any malformed table,
+    field type, or entry raises so a declaration is never partially accepted.
+    """
+    if value is None:
+        return (), ()
+    if not isinstance(value, dict):
+        raise ConfigError(f"`[excludes]` must be a table; got {type(value).__name__}")
+    unknown = sorted(set(value) - {"paths", "space_kinds"})
+    if unknown:
+        raise ConfigError(f"`[excludes]` has unknown field(s): {', '.join(unknown)}")
+    result: dict[str, list[object]] = {}
+    for key in ("paths", "space_kinds"):
+        raw = value.get(key, [])
+        if not isinstance(raw, list):
+            raise ConfigError(f"`[excludes] {key}` must be a list of strings; got {type(raw).__name__}")
+        result[key] = raw
+    paths = tuple(dict.fromkeys(_coerce_exclude_path(e) for e in result["paths"]))
+    kinds: list[str] = []
+    for kind in result["space_kinds"]:
+        if not isinstance(kind, str) or not _SPACE_KIND.match(kind):
+            raise ConfigError(
+                f"`[excludes] space_kinds` entry {kind!r} is invalid — a kind is a single name "
+                f"(letters, digits, '.', '_', '-'), not a path"
+            )
+        if kind not in kinds:
+            kinds.append(kind)
+    return paths, tuple(kinds)
 
 
 # Workspaces commit a stable `# Winter Extensions` section in AGENTS.md (or
@@ -165,6 +232,11 @@ class ExtensionManifest:
     row's subject is in scope. `None` when undeclared, which leaves the choice
     to `ExtensionAgentsMdService`'s per-repo-kind default (standalones eager,
     project repos lazy). Raises `RepoError` on an unrecognized value.
+
+    `exclude_paths` and `exclude_space_kinds` come from the `[excludes]` table:
+    workspace-root Git patterns (already normalized to a leading-`/` anchor) and
+    winter-space kind names whose directories the workspace exclude file should
+    cover. Empty by default; raises `RepoError` on a malformed table or entry.
     """
 
     prefix: str
@@ -181,6 +253,8 @@ class ExtensionManifest:
     description: str | None = None
     load: ExtensionLoad | None = None
     service_defs: tuple[ExtServiceDef, ...] = ()
+    exclude_paths: tuple[str, ...] = ()
+    exclude_space_kinds: tuple[str, ...] = ()
 
     def capability_entrypoint(self, slot: str) -> str | None:
         """Resolve the entrypoint for a capability slot.
@@ -297,6 +371,11 @@ class ExtensionManifestLoader:
         except ConfigError as exc:
             raise RepoError(f"reading {EXT_MANIFEST} — {exc}") from exc
 
+        try:
+            exclude_paths, exclude_space_kinds = _coerce_excludes(data.get("excludes"))
+        except ConfigError as exc:
+            raise RepoError(f"reading {EXT_MANIFEST} — {exc}") from exc
+
         return ExtensionManifest(
             prefix=prefix,
             skills_dirs=skills_dirs,
@@ -312,6 +391,8 @@ class ExtensionManifestLoader:
             service_defs=service_defs,
             description=description,
             load=load,
+            exclude_paths=exclude_paths,
+            exclude_space_kinds=exclude_space_kinds,
         )
 
 

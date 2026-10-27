@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+from pathlib import Path
 
 from winter_cli.config.models import AdoptExtensions, WorkspaceConfig
 from winter_cli.core.filesystem import IFilesystemWriter
 from winter_cli.modules.workspace.extension_manifest import (
     EXT_MANIFEST,
     EXTENSION_BLOCK_NAME,
+    ExtensionManifest,
     ExtensionManifestLoader,
 )
 from winter_cli.modules.workspace.init_reporter import IInitReporter
@@ -21,6 +24,15 @@ from winter_cli.modules.workspace.models import RepoError, StandaloneRepository
 from winter_cli.modules.workspace.workspace_exclude import IWorkspaceExcludeWriteLocator
 
 logger = logging.getLogger(__name__)
+
+
+_PATTERN_META = re.compile(r"([\\*?\[\]])")
+
+
+def _escape_pattern(segment: str) -> str:
+    """Escape Git ignore metacharacters so a directory name matches literally."""
+    escaped = _PATTERN_META.sub(r"\\\1", segment)
+    return escaped[:-1] + "\\ " if escaped.endswith(" ") else escaped
 
 
 class ExtensionExcludeService:
@@ -106,7 +118,7 @@ class ExtensionExcludeService:
             resolved = self._resolve_for_excludes(repo, reporter)
             if resolved is None:
                 continue
-            relative, prefix = resolved
+            relative, prefix, declared = resolved
             begin = GITIGNORE_BEGIN.format(name=repo.name)
             end = GITIGNORE_END.format(name=repo.name)
             lines = [begin, f"/{relative}/"]
@@ -124,6 +136,7 @@ class ExtensionExcludeService:
                         f".opencode/agent/{prefix}-*",
                     ]
                 )
+            lines.extend(declared)
             lines.append(end)
             eligible.append((repo.name, lines))
 
@@ -158,8 +171,8 @@ class ExtensionExcludeService:
         self,
         repo: StandaloneRepository,
         reporter: IInitReporter,
-    ) -> tuple[str, str | None] | None:
-        """Resolve (relative_path, prefix) for an extension's exclude block, or None if not eligible.
+    ) -> tuple[str, str | None, list[str]] | None:
+        """Resolve (relative_path, prefix, declared_rules) for an extension's exclude block, or None if not eligible.
 
         Every standalone repo cloned at a path under the workspace root gets its
         directory added to the workspace's exclude file so it doesn't appear as untracked
@@ -187,7 +200,7 @@ class ExtensionExcludeService:
             repo.extension and mode != AdoptExtensions.none and (manifest_present or mode == AdoptExtensions.all)
         )
         if not extension_eligible:
-            return relative, None
+            return relative, None, []
         try:
             manifest = self._manifest_loader.load(repo, manifest_path if manifest_present else None)
         except (RepoError, OSError) as exc:
@@ -195,8 +208,38 @@ class ExtensionExcludeService:
             # exclude so the workspace doesn't show it as untracked. Drop the
             # symlink globs because we couldn't resolve a reliable prefix.
             reporter.repo_error(repo.name, str(exc))
-            return relative, None
-        return relative, manifest.prefix
+            return relative, None, []
+        try:
+            declared = self._declared_rules(manifest)
+        except RepoError as exc:
+            # A declaration is all-or-nothing: report it and keep the plain block.
+            reporter.repo_error(repo.name, str(exc))
+            return relative, manifest.prefix, []
+        return relative, manifest.prefix, declared
+
+    def _declared_rules(self, manifest: ExtensionManifest) -> list[str]:
+        """Ignore rules for the manifest's `[excludes]` declarations, paths first."""
+        rules = list(manifest.exclude_paths)
+        for kind in manifest.exclude_space_kinds:
+            rule = self._space_kind_rule(manifest.prefix, kind)
+            if rule is not None:
+                rules.append(rule)
+        return list(dict.fromkeys(rules))
+
+    def _space_kind_rule(self, source: str, kind: str) -> str | None:
+        """Anchored literal directory rule for a space kind, or None when it lies outside the workspace."""
+        root = Path(os.path.normpath(self._config.workspace_root))
+        resolved = Path(os.path.normpath(self._config.space_dir(kind)))
+        if resolved == root:
+            raise RepoError(
+                f"reading {EXT_MANIFEST} — `[excludes] space_kinds` entry {kind!r} of {source} "
+                "resolves to the workspace root"
+            )
+        try:
+            relative = resolved.relative_to(root)
+        except ValueError:
+            return None
+        return "/" + "/".join(_escape_pattern(part) for part in relative.parts) + "/"
 
     @staticmethod
     def _strip_orphan_managed_blocks(content: str, eligible_names: set[str]) -> str:

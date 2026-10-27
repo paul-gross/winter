@@ -2252,3 +2252,18 @@ def test_reconcile_standalones_projects_nothing_for_a_nested_repo_with_agent_fil
     assert not fs.exists(WORKSPACE_ROOT / ".claude" / "skills" / "lab-do-thing")
     agents_winter = WORKSPACE_ROOT / "AGENTS.winter.md"
     assert agents_winter not in fs.files or "lab" not in fs.files[agents_winter]
+
+
+def test_reconcile_standalones_strips_extension_block_when_last_repo_removed(
+    workspace_config: WorkspaceConfig, init_reporter: FakeInitReporter
+) -> None:
+    """With no repositories left, init still runs the exclude reconcile so stale blocks go away."""
+    exclude_path = WORKSPACE_ROOT / ".git" / "info" / "exclude"
+    fs = FakeFilesystem(directories=[WORKSPACE_ROOT / ".git" / "info"])
+    fs.files[exclude_path] = "# >>> gone-ext (managed by winter)\n/gone-ext/\n# <<< gone-ext\n"
+    svc = _service(workspace_config, fs, FakeSubprocessRunner(), FakeGitRepository())
+
+    assert svc.reconcile_standalones(init_reporter) is True
+
+    assert "gone-ext" not in fs.files[exclude_path]
+    assert "winter-config" in fs.files[exclude_path]

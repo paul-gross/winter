@@ -147,7 +147,8 @@ class InitService:
             and not context_only_repos
             and not self._repo_factory.get_non_extension_repos()
         ):
-            return True
+            # Last repository removed: still reconcile so its managed block is stripped.
+            return self._extension_exclude_svc.finalize_excludes([], reporter)
 
         target = "standalone/"
         reporter.target_started(target)

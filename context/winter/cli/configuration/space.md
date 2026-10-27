@@ -62,4 +62,6 @@ overrides a committed one.
 `winter space <kind>` only **resolves and prints** a path — it creates no directory and writes nothing. Whoever writes
 artifacts into the space creates the directory (`mkdir -p "$(winter space <kind>)"`) and decides how it is tracked. The
 default in-workspace location (`.winter/<kind>/`) is a natural candidate for `.gitignore` if you don't want generated
-artifacts committed; add the entry yourself.
+artifacts committed; an extension can declare its kinds under `[excludes] space_kinds` in `winter-ext.toml`
+(see [Declaring excludes](./extensions.md#declaring-excludes)) and `winter ws init` writes the rule into the workspace
+exclude file (not the tracked `.gitignore`); otherwise add the entry yourself.

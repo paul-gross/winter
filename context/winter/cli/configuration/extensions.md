@@ -32,6 +32,11 @@ link-anchors = ["fixtures/**"] # optional; silence one check, keep the rest of t
 [provides]
 service = "workflow/service"   # this extension provides the `service` capability; entrypoint relative to repo root
 
+# Workspace-root excludes — appended to this extension's managed block in the workspace exclude file
+[excludes]
+paths = ["/.winter/process-compose/"]       # optional; Git ignore patterns anchored at the workspace root
+space_kinds = ["scores", "manifests"]       # optional; winter-space kinds whose directories to exclude
+
 # Provision handlers — same shape as [[provision.*]] in .winter/config.toml (paths relative to extension directory)
 [[provision.dependency]]
 scope = "feature-worktree"
@@ -126,6 +131,26 @@ The workspace `.gitignore` is updated with a marker-bracketed block per extensio
 .claude/agents/wsb-*
 # <<< winter-backlog
 ```
+
+### Declaring excludes
+
+An extension that writes machine-local files or generated artifacts at the workspace root declares them in
+`[excludes]`; both fields are optional lists of non-empty strings. The rules land in the workspace's Git **exclude file**
+(`.git/info/exclude`), inside the extension's own managed block after the repository and projection rules — never in the
+tracked `.gitignore`, which winter does not touch.
+
+- `paths` — workspace-root-relative Git ignore patterns. A single leading `/` is a Git root anchor, not a filesystem
+  path; a pattern without it is anchored when emitted. Negated (`!`) patterns, `..` segments, home (`~`), drive, and UNC
+  forms, root-only entries, comment-looking (`#`) entries, and newline, carriage-return, or NUL characters are rejected.
+- `space_kinds` — names accepted by `winter space`. Each resolves through the effective `[space]` configuration
+  ([Artifact space](./space.md)) without creating the directory, and contributes an anchored directory rule with Git
+  metacharacters escaped so the name matches literally. A kind that resolves outside the workspace contributes no rule;
+  one that resolves to the workspace root is an error.
+
+A malformed `[excludes]` table, field type, or entry is a manifest error naming the extension and offending value; init
+exits non-zero, the declaration is not partially applied, and the block keeps only its repository-path rules. Removing a
+declaration, relocating a space kind, or removing the extension updates or removes the block on the next
+`winter ws init`. Repositories with `extension = false` or `adopt_extensions = "none"` contribute no declaration rules.
 
 ## Workspace skills
 
