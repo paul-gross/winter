@@ -514,6 +514,9 @@ class Container(containers.DeclarativeContainer):
         service_prefix=workspace_config.provided.service_prefix,
         ports_per_env=workspace_config.provided.ports_per_env,
         overlay_repo=local_overlay_repo,
+        nested_repo_names=providers.Callable(
+            lambda cfg: [repo.name for repo in cfg.project_repos if repo.nested], workspace_config
+        ),
     )
 
     # `DashboardSnapshotService._build` rebuilds this same graph (workspace,

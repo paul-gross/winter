@@ -264,6 +264,7 @@ def make_nested_service(
     overlay: FakeLocalOverlayRepository | None = None,
     fs: IFilesystemReader | None = None,
     environ: Mapping[str, str] | None = None,
+    nested: Sequence[str] = ("lab",),
 ) -> NestedWorkspaceService:
     """A `NestedWorkspaceService` over fakes.
 
@@ -272,7 +273,7 @@ def make_nested_service(
     unless *fs* says otherwise, and the process environment is empty unless
     *environ* is given.
     """
-    outer = config or make_workspace_config(ports_per_env=1000)
+    outer = config or make_workspace_config(ports_per_env=2000)
     return NestedWorkspaceService(
         runner,
         fs=fs or EveryRootHasConfigFilesystem(),
@@ -282,4 +283,5 @@ def make_nested_service(
         service_prefix=outer.service_prefix,
         ports_per_env=outer.ports_per_env,
         overlay_repo=overlay or FakeLocalOverlayRepository(),
+        nested_repo_names=nested,
     )

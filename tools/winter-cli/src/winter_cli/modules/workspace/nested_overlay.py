@@ -29,6 +29,16 @@ def delegated_keys(port_base: int, service_prefix: str, envs: int | None) -> dic
     return keys
 
 
+def slice_size(band: int, nested_count: int) -> int:
+    """Ports each of the `nested_count + 1` equal slices of an outer env's *band* holds; the remainder is unused."""
+    return band // (nested_count + 1)
+
+
+def slice_base(env_port_base: int, size: int, position: int) -> int:
+    """First port of the slice at *position* (1-based, in configuration order); slice 0 is the parent's own."""
+    return env_port_base + position * size
+
+
 REPOSITORY_ARRAYS = ("project_repository", "standalone_repository")
 """Overlay keys that declare repositories; never inherited, even when named."""
 

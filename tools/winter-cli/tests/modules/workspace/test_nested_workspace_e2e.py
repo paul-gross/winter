@@ -71,7 +71,7 @@ def outer_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         main_branch = "main"
         service_prefix = "outer"
         base_port = 5000
-        ports_per_env = 100
+        ports_per_env = 200
 
         [[project_repository]]
         name = "lab"
@@ -119,8 +119,8 @@ def test_nested_workspace_is_initialized_reported_and_destroyed_with_its_env(out
     # ...and so was the `[git]` identity the entry inherits by default, but not the outer `secret`.
     assert delegated == {
         "git": {"user": {"name": "Ada", "email": "ada@example.com"}},
-        "base_port": 5100,
-        "service_prefix": "outer-alpha",
+        "base_port": 5300,
+        "service_prefix": "outer-alpha-lab",
         "env_aliases": [],
         "envs_per_workspace": 4,
     }
@@ -234,7 +234,7 @@ def test_destroy_stops_the_nested_workspace_services_of_a_bound_provider(
     outer_config = f"""\
         main_branch = "main"
         service_prefix = "outer"
-        ports_per_env = 1000
+        ports_per_env = 2000
 
         [[project_repository]]
         name = "lab"

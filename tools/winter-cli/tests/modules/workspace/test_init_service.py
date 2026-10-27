@@ -2174,7 +2174,7 @@ def test_reconcile_env_fails_and_skips_nested_init_when_the_footprint_exceeds_th
     assert ok is False
     assert runner.calls == []
     assert overlay.upserts == []
-    assert any(repo == "lab" and "980 ports" in msg and "holds only 20" in msg for repo, msg in init_reporter.errors)
+    assert any(repo == "lab" and "980 ports" in msg and "holds only 10" in msg for repo, msg in init_reporter.errors)
 
 
 def test_reconcile_env_reports_a_malformed_nested_config_as_the_repos_error(init_reporter: FakeInitReporter) -> None:

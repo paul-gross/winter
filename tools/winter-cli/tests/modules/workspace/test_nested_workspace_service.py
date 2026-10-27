@@ -40,7 +40,7 @@ def test_reconcile_runs_nested_init_and_streams_its_output_as_the_repo(init_repo
 def _delegating(
     *,
     envs: int | None = None,
-    outer_ppe: int = 100,
+    outer_ppe: int = 200,
     committed: dict | None = None,
     local: dict | None = None,
     outer_local: dict | None = None,
@@ -63,7 +63,7 @@ def _delegating(
     return repo, overlay, events, FakeNestedWorkspaceRunner(events=events)
 
 
-def _service(runner: FakeNestedWorkspaceRunner, overlay: FakeLocalOverlayRepository, *, outer_ppe: int = 100):
+def _service(runner: FakeNestedWorkspaceRunner, overlay: FakeLocalOverlayRepository, *, outer_ppe: int = 200):
     return make_nested_service(
         runner,
         config=make_workspace_config(service_prefix="outer", ports_per_env=outer_ppe, base_port=4000),
@@ -79,8 +79,8 @@ def test_reconcile_delegates_the_outer_port_base_and_prefix_before_the_nested_in
 
     _service(runner, overlay).reconcile(repo, ROOT, "alpha", init_reporter)
 
-    # Index 1 of an outer band of 100 starts at 4000 + 1 * 100.
-    assert overlay.local[ROOT] == {"base_port": 4100, "service_prefix": "outer-alpha"}
+    # Index 1 of an outer band of 200 starts at 4200; the parent owns slice 0, so the only child starts 100 later.
+    assert overlay.local[ROOT] == {"base_port": 4300, "service_prefix": "outer-alpha-lab"}
     assert events == [f"overlay_write:{ROOT}", f"nested_init:{ROOT}"]
     assert [a[2] for a in init_reporter.actions] == ["nested_overlay_written"]
 
@@ -93,8 +93,8 @@ def test_reconcile_with_envs_clears_the_aliases_and_sets_the_envs_per_workspace(
     _service(runner, overlay).reconcile(repo, ROOT, "alpha", init_reporter)
 
     assert overlay.local[ROOT] == {
-        "base_port": 4100,
-        "service_prefix": "outer-alpha",
+        "base_port": 4300,
+        "service_prefix": "outer-alpha-lab",
         "env_aliases": [],
         "envs_per_workspace": 4,
     }
@@ -106,14 +106,14 @@ def test_reconcile_resolves_the_outer_port_base_from_the_registry_before_the_for
     repo, overlay, _, runner = _delegating()
     service = make_nested_service(
         runner,
-        config=make_workspace_config(service_prefix="outer", ports_per_env=100, base_port=4000),
+        config=make_workspace_config(service_prefix="outer", ports_per_env=200, base_port=4000),
         registry=FakeEnvIndexRegistry({"alpha": 7}),
         overlay=overlay,
     )
 
     service.reconcile(repo, ROOT, "alpha", init_reporter)
 
-    assert overlay.local[ROOT]["base_port"] == 4700
+    assert overlay.local[ROOT]["base_port"] == 5500
 
 
 def test_reconcile_rewrites_the_delegated_keys_on_every_init(init_reporter: FakeInitReporter) -> None:
@@ -123,7 +123,7 @@ def test_reconcile_rewrites_the_delegated_keys_on_every_init(init_reporter: Fake
     service.reconcile(repo, ROOT, "alpha", init_reporter)
     service.reconcile(repo, ROOT, "alpha", init_reporter)
 
-    assert overlay.local[ROOT] == {"base_port": 4100, "service_prefix": "outer-alpha", "keep": "me"}
+    assert overlay.local[ROOT] == {"base_port": 4300, "service_prefix": "outer-alpha-lab", "keep": "me"}
     assert len(overlay.upserts) == 2
     assert [a[2] for a in init_reporter.actions] == ["nested_overlay_written"]
 
@@ -153,7 +153,7 @@ def test_reconcile_refuses_a_footprint_larger_than_the_outer_band_and_writes_and
     assert "120 ports" in message
     assert "holds only 100" in message
     assert "`envs = 3`" in message
-    assert "`ports_per_env` to at least 120" in message
+    assert "`ports_per_env` to at least 240" in message
     assert overlay.upserts == []
     assert runner.calls == []
     assert init_reporter.cmds_started == []
@@ -190,7 +190,7 @@ def test_reconcile_suggests_lowering_the_nested_ports_when_no_envs_count_can_fit
     repo, overlay, _, runner = _delegating(envs=1, committed={"ports_per_env": 50})
 
     with pytest.raises(RepoError, match="lower the nested workspace's `ports_per_env`") as refused:
-        _service(runner, overlay, outer_ppe=100).reconcile(repo, ROOT, "alpha", init_reporter)
+        _service(runner, overlay, outer_ppe=200).reconcile(repo, ROOT, "alpha", init_reporter)
 
     assert "150 ports" in str(refused.value)
 
@@ -198,7 +198,7 @@ def test_reconcile_suggests_lowering_the_nested_ports_when_no_envs_count_can_fit
 def test_reconcile_accepts_a_footprint_that_exactly_fills_the_outer_band(init_reporter: FakeInitReporter) -> None:
     repo, overlay, _, runner = _delegating(envs=3)
 
-    _service(runner, overlay, outer_ppe=100).reconcile(repo, ROOT, "alpha", init_reporter)
+    _service(runner, overlay, outer_ppe=200).reconcile(repo, ROOT, "alpha", init_reporter)
 
     assert runner.calls == [("init", ROOT)]
 
@@ -210,7 +210,7 @@ OUTER_LOCAL = {
     "project_repository": [{"name": "private", "url": "git@example.com:me/private.git"}],
     "standalone_repository": [{"name": "shared", "url": "git@example.com:me/shared.git"}],
 }
-DELEGATED = {"base_port": 4100, "service_prefix": "outer-alpha"}
+DELEGATED = {"base_port": 4300, "service_prefix": "outer-alpha-lab"}
 
 
 def test_reconcile_inherits_only_the_git_table_by_default(init_reporter: FakeInitReporter) -> None:
@@ -221,7 +221,7 @@ def test_reconcile_inherits_only_the_git_table_by_default(init_reporter: FakeIni
     assert overlay.local[ROOT] == {"git": OUTER_LOCAL["git"], **DELEGATED}
     assert events == [f"overlay_write:{ROOT}", f"nested_init:{ROOT}"]
     (written,) = [a for a in init_reporter.actions if a[2] == "nested_overlay_written"]
-    assert written[3] == "base_port = 4100, service_prefix = 'outer-alpha'; inherited git"
+    assert written[3] == "base_port = 4300, service_prefix = 'outer-alpha-lab'; inherited git"
     assert "ada@example.com" not in written[3]
 
 
@@ -283,7 +283,7 @@ def test_reconcile_lets_a_delegated_key_win_over_an_inherited_one(init_reporter:
 
     _service(runner, overlay).reconcile(repo, ROOT, "alpha", init_reporter)
 
-    assert overlay.local[ROOT]["base_port"] == 4100
+    assert overlay.local[ROOT]["base_port"] == 4300
 
 
 def test_reconcile_judges_the_footprint_with_the_inherited_keys_applied(init_reporter: FakeInitReporter) -> None:
@@ -544,3 +544,89 @@ def test_a_mis_resolved_child_stops_at_once_instead_of_fanning_out_to_every_sibl
     # the chain and refuses its own nested reads. Chaining target roots only,
     # the children would spawn 3 + 3x2 + 3x2x1 = 15 times.
     assert runner.status_calls == list(SIBLINGS)
+
+
+CHILDREN = ("blizzard-workspace", "winter-workspace", "winter-harness-engineering")
+
+
+def _child(name: str, *, envs: int | None = 1) -> ProjectRepository:
+    return ProjectRepository(
+        name=name, main_path=Path(f"/ws/projects/{name}"), main_branch="main", nested=True, envs=envs, inherit_local=()
+    )
+
+
+def _siblings(
+    env: str,
+    index: int,
+    *,
+    band: int = 240,
+    order: tuple[str, ...] = CHILDREN,
+    committed: dict[str, dict] | None = None,
+) -> tuple[dict[str, dict], dict[str, FakeNestedWorkspaceRunner]]:
+    """Reconcile every child of *env* at registry *index* and return each child's written overlay and its runner."""
+    roots = {name: OUTER / env / name for name in order}
+    overlay = FakeLocalOverlayRepository(
+        committed={root: (committed or {}).get(name, {"ports_per_env": 20}) for name, root in roots.items()},
+        local={root: {} for root in roots.values()},
+    )
+    runners = {name: FakeNestedWorkspaceRunner() for name in order}
+    for name in order:
+        service = make_nested_service(
+            runners[name],
+            config=make_workspace_config(service_prefix="outer", ports_per_env=band, base_port=6000),
+            registry=FakeEnvIndexRegistry({env: index}),
+            overlay=overlay,
+            nested=order,
+        )
+        service.reconcile(_child(name), roots[name], env, FakeInitReporter())
+    return {name: overlay.local[root] for name, root in roots.items()}, runners
+
+
+def test_three_children_get_distinct_slices_and_prefixes_in_the_alpha_and_beta_example() -> None:
+    expected = {
+        "alpha": (1, (6300, 6360, 6420)),
+        "beta": (2, (6540, 6600, 6660)),
+    }
+    for env, (index, bases) in expected.items():
+        written, _ = _siblings(env, index)
+        assert [written[name]["base_port"] for name in CHILDREN] == list(bases)
+        assert [written[name]["service_prefix"] for name in CHILDREN] == [f"outer-{env}-{name}" for name in CHILDREN]
+
+
+def test_the_slice_assignment_is_deterministic_across_repeated_init() -> None:
+    first, _ = _siblings("alpha", 1)
+    second, _ = _siblings("alpha", 1)
+
+    assert first == second
+
+
+def test_reordering_the_nested_repos_reassigns_the_slices() -> None:
+    reordered = tuple(reversed(CHILDREN))
+
+    written, _ = _siblings("alpha", 1, order=reordered)
+
+    assert [written[name]["base_port"] for name in reordered] == [6300, 6360, 6420]
+
+
+def test_a_band_that_does_not_divide_evenly_leaves_the_remainder_unused() -> None:
+    written, _ = _siblings("alpha", 1, band=250)
+
+    # 250 // 4 = 62; alpha's band starts at 6000 + 250.
+    assert [written[name]["base_port"] for name in CHILDREN] == [6312, 6374, 6436]
+
+
+def test_each_child_is_checked_against_its_own_footprint() -> None:
+    committed = {"winter-workspace": {"ports_per_env": 30}}
+
+    with pytest.raises(RepoError, match=r"90 ports.*holds only 60.*at least 360"):
+        _siblings("alpha", 1, committed=committed)
+
+
+def test_a_zero_sized_slice_is_refused_before_any_write_or_nested_init(init_reporter: FakeInitReporter) -> None:
+    repo, overlay, _, runner = _delegating(envs=1)
+
+    with pytest.raises(RepoError, match=r"holds only 0"):
+        _service(runner, overlay, outer_ppe=1).reconcile(repo, ROOT, "alpha", init_reporter)
+
+    assert overlay.upserts == []
+    assert runner.calls == []

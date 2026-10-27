@@ -13,6 +13,8 @@ from winter_cli.modules.workspace.nested_overlay import (
     effective_ports_per_env,
     footprint,
     inherited_keys,
+    slice_base,
+    slice_size,
 )
 from winter_cli.modules.workspace.nested_status import NestedStatusShapeError, parse_state, reported_root
 from winter_cli.util import deep_merge
@@ -70,6 +72,7 @@ class NestedWorkspaceService:
         service_prefix: str,
         ports_per_env: int,
         overlay_repo: ILocalOverlayRepository,
+        nested_repo_names: Sequence[str],
     ) -> None:
         self._runner = runner
         self._fs = fs
@@ -79,6 +82,7 @@ class NestedWorkspaceService:
         self._service_prefix = service_prefix
         self._ports_per_env = ports_per_env
         self._overlay_repo = overlay_repo
+        self._nested_repo_names = tuple(nested_repo_names)
         self._verified: set[Path] = set()
 
     def reconcile(self, repo: ProjectRepository, root: Path, env: str, reporter: IInitReporter) -> None:
@@ -100,7 +104,10 @@ class NestedWorkspaceService:
         """Write the outer env's port base and prefix, plus the inherited keys, into the nested `config.local.toml`.
 
         The outer env's band is its `WINTER_PORT_BASE`, resolved registry-first
-        as every other consumer does, and the prefix is `<service_prefix>-<env>`.
+        as every other consumer does. It splits into `K + 1` equal slices for
+        the `K` nested repos: slice 0 is the parent's own, and the repo at
+        position `i` in configuration order gets slice `i`, whose start is its
+        `base_port`. Its prefix is `<service_prefix>-<env>-<repo name>`.
         The keys the repo's `inherit_local` names are copied from the outer
         workspace's raw `config.local.toml`; a delegated key wins over an
         inherited one of the same name. Rewritten on every init so the nested
@@ -113,15 +120,19 @@ class NestedWorkspaceService:
             raise RepoError(f"cannot delegate to the nested workspace at {root}: {exc}", cwd=str(root)) from exc
 
     def _write_delegation(self, repo: ProjectRepository, root: Path, env: str, reporter: IInitReporter) -> None:
-        delegated = delegated_keys(self._port_bases.port_base(env), f"{self._service_prefix}-{env}", repo.envs)
+        count = len(self._nested_repo_names)
+        size = slice_size(self._ports_per_env, count)
+        position = self._nested_repo_names.index(repo.name) + 1
+        base = slice_base(self._port_bases.port_base(env), size, position)
+        delegated = delegated_keys(base, f"{self._service_prefix}-{env}-{repo.name}", repo.envs)
         inherited = inherited_keys(self._outer_local(repo), repo.inherit_local)
         values = {**inherited, **delegated}
         committed, local = self._overlay_repo.read_layers(root)
         local_after = {**local, **values}
         used = footprint(committed, local_after)
-        available = self._ports_per_env
+        available = size
         if used > available:
-            raise RepoError(self._refusal(repo, env, committed, local_after, used, available), cwd=str(root))
+            raise RepoError(self._refusal(repo, env, committed, local_after, used, available, count), cwd=str(root))
         if self._overlay_repo.upsert_local(root, values):
             summary = ", ".join(f"{key} = {value!r}" for key, value in delegated.items())
             if inherited:
@@ -142,14 +153,17 @@ class NestedWorkspaceService:
         local_after: dict,
         used: int,
         available: int,
+        count: int,
     ) -> str:
-        """The refusal naming the footprint, the band, and a fitting change, all from the layers the check used."""
+        """The refusal naming the footprint, the slice, and a fitting change, all from the layers the check used."""
         per_env = effective_ports_per_env(committed, local_after)
         usable_that_fit = available // per_env - 2
         message = (
             f"nested workspace {repo.name!r} needs {used} ports for env {env!r} "
-            f"((envs_per_workspace + 1) x ports_per_env of {per_env}), but the outer env band holds only "
-            f"{available} (ports_per_env). Raise the outer `ports_per_env` to at least {used}"
+            f"((envs_per_workspace + 1) x ports_per_env of {per_env}), but its slice of the outer env band holds only "
+            f"{available} (outer ports_per_env of {self._ports_per_env} split into {count + 1} equal slices, "
+            f"the first for the parent's own services). Raise the outer `ports_per_env` to at least "
+            f"{used * (count + 1)}"
         )
         if usable_that_fit >= 1:
             return f"{message}, or set `envs = {usable_that_fit}` or fewer on its [[project_repository]] entry."

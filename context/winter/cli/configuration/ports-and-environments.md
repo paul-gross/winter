@@ -151,8 +151,8 @@ Before the nested `winter ws init` runs, winter writes these keys into the neste
 
 | Key                  | Value                                              | Written                    |
 | -------------------- | -------------------------------------------------- | -------------------------- |
-| `base_port`          | the outer env's `WINTER_PORT_BASE`                 | always                     |
-| `service_prefix`     | `<outer service_prefix>-<env>`, e.g. `outer-alpha` | always                     |
+| `base_port`          | the start of the repo's slice of the outer env band | always                     |
+| `service_prefix`     | `<outer service_prefix>-<env>-<repo name>`          | always                     |
 | `env_aliases`        | `[]`                                               | when the entry sets `envs` |
 | `envs_per_workspace` | `envs + 1`                                         | when the entry sets `envs` |
 
@@ -174,10 +174,43 @@ delete them by hand to restore the nested workspace's own values. Changing `envs
 can leave a recorded index outside the new range; `winter doctor` warns about an out-of-range index in the nested
 workspace.
 
-**The footprint must fit the outer band.** A workspace uses indices `0..envs_per_workspace`, so a nested workspace can
-use `(envs_per_workspace + 1) x ports_per_env` ports, with its own `ports_per_env` (default 20) and the
+**The outer band is subdivided among the nested repos.** With `K` `nested = true` repos in the effective configuration
+and an outer `ports_per_env` of `B`, each outer env's band splits into `K + 1` equal slices of `S = B // (K + 1)`
+ports; the remainder is unused. Slice 0 is the parent's own services. The nested repo at position `i` (1-based, in configuration
+order) gets the slice starting at `P + i * S` as its `base_port` (`P` is the outer env's port base) and the
+`service_prefix` `<outer service_prefix>-<env>-<repo name>`, so siblings never share ports or a service namespace. No
+nested repos leaves allocation unchanged. There is no allocation registry: assignments follow configuration order.
+
+**The footprint must fit the slice.** A workspace uses indices `0..envs_per_workspace`, so a nested workspace can use
+`(envs_per_workspace + 1) x ports_per_env` ports, with its own `ports_per_env` (default 20) and the
 `envs_per_workspace` after the delegation (default 48). With `envs = N` that is `(N + 2) x ports_per_env`. When the
-footprint exceeds the outer `ports_per_env`, `winter ws init <env>` refuses that env: it names both numbers, writes
-nothing, and does not run the nested init. The error names a fitting change — a smaller `envs`, or a larger outer
-`ports_per_env`. For example, an outer `ports_per_env = 100` and a nested `ports_per_env = 20` fit `envs = 3`
-(`(3 + 2) x 20 = 100`) and refuse `envs = 4` (`120`).
+footprint exceeds `S` (or `S` is zero), `winter ws init <env>` refuses that repo: it names the required and available
+sizes, writes nothing, and does not run the nested init. The error names a fitting change — a smaller `envs`, or a
+larger outer `ports_per_env`. An exact fit succeeds.
+
+Example: `base_port = 6000`, `ports_per_env = 240`, outer envs `alpha` and `beta` at indices 1 and 2, and three nested
+repos. Each slice is 60 ports, which exactly fits a child with `envs = 1` and `ports_per_env = 20` (`(1 + 2) x 20`).
+
+```text
+workspace/
+|-- workspace scope                   6000-6239
+|   |-- parent services               6000-6059
+|   `-- unused child slices           6060-6239
+|-- alpha/                            6240-6479
+|   |-- parent services               6240-6299
+|   |-- blizzard-workspace/           6300-6359
+|   |-- winter-workspace/             6360-6419
+|   `-- winter-harness-engineering/   6420-6479
+`-- beta/                             6480-6719
+    |-- parent services               6480-6539
+    |-- blizzard-workspace/           6540-6599
+    |-- winter-workspace/             6600-6659
+    `-- winter-harness-engineering/   6660-6719
+```
+
+These bands reserve 720 ports in total. The workspace scope is not a `base/` directory: children are initialized inside
+feature envs, so its child slices stay unused.
+
+**Changing assignments.** Adding, removing, or reordering nested repos changes the assignments, and changing the outer
+`ports_per_env` moves every outer env base. Old assignments are not preserved and the band is never enlarged for you.
+Stop the affected services, rerun `winter ws init <env>`, reprovision the affected envs, and restart.
