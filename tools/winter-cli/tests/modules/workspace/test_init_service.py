@@ -2267,3 +2267,16 @@ def test_reconcile_standalones_strips_extension_block_when_last_repo_removed(
 
     assert "gone-ext" not in fs.files[exclude_path]
     assert "winter-config" in fs.files[exclude_path]
+
+
+def test_reconcile_standalones_fails_on_malformed_excludes_declaration(init_reporter: FakeInitReporter) -> None:
+    """A malformed `[excludes]` table makes the standalone reconcile fail, naming the extension."""
+    ext_path = WORKSPACE_ROOT / "my-ext"
+    manifest_path = ext_path / "winter-ext.toml"
+    fs = FakeFilesystem(directories=[ext_path, WORKSPACE_ROOT / ".git" / "info"])
+    fs.files[manifest_path] = ""
+    config_files = {manifest_path: {"name": "my-ext", "excludes": {"paths": ["!/x"]}}}
+    svc = _service_with_ext(_standalone_config(), fs, config_files, FakeSubprocessRunner(), FakeGitRepository())
+
+    assert svc.reconcile_standalones(init_reporter) is False
+    assert any(repo == "my-ext" and "excludes" in msg for repo, msg in init_reporter.errors)

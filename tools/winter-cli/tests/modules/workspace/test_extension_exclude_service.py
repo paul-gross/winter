@@ -325,7 +325,7 @@ def test_excludes_space_kind_resolving_to_workspace_root_is_error(init_reporter:
         adopt_extensions=AdoptExtensions.winter,
         space={"root": ".", "kinds": {"scores": "."}},
     )
-    _service(config, fs, files).finalize_excludes([repo], init_reporter)
+    assert _service(config, fs, files).finalize_excludes([repo], init_reporter) is False
     assert [r for r, _ in init_reporter.errors] == ["ext-a"]
     assert "workspace root" in init_reporter.errors[0][1]
     assert "/x/" not in fs.files[EXCLUDE_PATH]
@@ -359,7 +359,7 @@ def test_excludes_malformed_declaration_reports_and_falls_back(
     fs = FakeFilesystem(directories=[WORKSPACE_ROOT / ".git" / "info"])
     files: dict[Path, dict] = {}
     repo = _declaring(fs, files, "ext-a", excludes)
-    _service(workspace_config, fs, files).finalize_excludes([repo], init_reporter)
+    assert _service(workspace_config, fs, files).finalize_excludes([repo], init_reporter) is False
     assert [r for r, _ in init_reporter.errors] == ["ext-a"]
     assert "excludes" in init_reporter.errors[0][1]
     assert _block(fs.files[EXCLUDE_PATH], "ext-a") == ["# >>> ext-a (managed by winter)", "/ext-a/", "# <<< ext-a"]

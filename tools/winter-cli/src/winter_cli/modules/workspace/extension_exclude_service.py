@@ -10,6 +10,7 @@ from winter_cli.core.filesystem import IFilesystemWriter
 from winter_cli.modules.workspace.extension_manifest import (
     EXT_MANIFEST,
     EXTENSION_BLOCK_NAME,
+    ExcludesDeclarationError,
     ExtensionManifest,
     ExtensionManifestLoader,
 )
@@ -114,11 +115,13 @@ class ExtensionExcludeService:
             return True
 
         eligible: list[tuple[str, list[str]]] = []
+        declarations_ok = True
         for repo in repos:
             resolved = self._resolve_for_excludes(repo, reporter)
             if resolved is None:
                 continue
-            relative, prefix, declared = resolved
+            relative, prefix, declared, declaration_ok = resolved
+            declarations_ok &= declaration_ok
             begin = GITIGNORE_BEGIN.format(name=repo.name)
             end = GITIGNORE_END.format(name=repo.name)
             lines = [begin, f"/{relative}/"]
@@ -150,7 +153,7 @@ class ExtensionExcludeService:
                 end = GITIGNORE_END.format(name=block_name)
                 new_content = replace_or_append_block(new_content, begin, end, desired_lines)
             if new_content == existing:
-                return True
+                return declarations_ok
             self._fs.mkdir(exclude_path.parent, parents=True, exist_ok=True)
             self._fs.write_text(exclude_path, new_content)
         except OSError as exc:
@@ -165,13 +168,13 @@ class ExtensionExcludeService:
             "workspace_excludes_updated",
             detail,
         )
-        return True
+        return declarations_ok
 
     def _resolve_for_excludes(
         self,
         repo: StandaloneRepository,
         reporter: IInitReporter,
-    ) -> tuple[str, str | None, list[str]] | None:
+    ) -> tuple[str, str | None, list[str], bool] | None:
         """Resolve (relative_path, prefix, declared_rules) for an extension's exclude block, or None if not eligible.
 
         Every standalone repo cloned at a path under the workspace root gets its
@@ -200,22 +203,26 @@ class ExtensionExcludeService:
             repo.extension and mode != AdoptExtensions.none and (manifest_present or mode == AdoptExtensions.all)
         )
         if not extension_eligible:
-            return relative, None, []
+            return relative, None, [], True
         try:
             manifest = self._manifest_loader.load(repo, manifest_path if manifest_present else None)
+        except ExcludesDeclarationError as exc:
+            # A bad declaration fails the run, but the repo path and projection rules stay.
+            reporter.repo_error(repo.name, str(exc))
+            return relative, None, [], False
         except (RepoError, OSError) as exc:
             # Broken manifest — report it but still keep the repo's directory
             # exclude so the workspace doesn't show it as untracked. Drop the
             # symlink globs because we couldn't resolve a reliable prefix.
             reporter.repo_error(repo.name, str(exc))
-            return relative, None, []
+            return relative, None, [], True
         try:
             declared = self._declared_rules(manifest)
         except RepoError as exc:
             # A declaration is all-or-nothing: report it and keep the plain block.
             reporter.repo_error(repo.name, str(exc))
-            return relative, manifest.prefix, []
-        return relative, manifest.prefix, declared
+            return relative, manifest.prefix, [], False
+        return relative, manifest.prefix, declared, True
 
     def _declared_rules(self, manifest: ExtensionManifest) -> list[str]:
         """Ignore rules for the manifest's `[excludes]` declarations, paths first."""

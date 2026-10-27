@@ -31,6 +31,10 @@ EXTENSION_BLOCK_NAME = "winter-extensions"
 EXTENSION_INDEX_FILENAME = "index.md"
 
 
+class ExcludesDeclarationError(RepoError):
+    """A malformed `[excludes]` declaration; unlike other manifest errors it fails the init run."""
+
+
 def prefixes_overlap(a: str, b: str) -> bool:
     """Whether two extension prefixes can name the same projected `<prefix>-*` artifact.
 
@@ -374,7 +378,7 @@ class ExtensionManifestLoader:
         try:
             exclude_paths, exclude_space_kinds = _coerce_excludes(data.get("excludes"))
         except ConfigError as exc:
-            raise RepoError(f"reading {EXT_MANIFEST} — {exc}") from exc
+            raise ExcludesDeclarationError(f"reading {EXT_MANIFEST} — {exc}") from exc
 
         return ExtensionManifest(
             prefix=prefix,
