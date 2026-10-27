@@ -175,18 +175,18 @@ can leave a recorded index outside the new range; `winter doctor` warns about an
 workspace.
 
 **The outer band is subdivided among the nested repos.** With `K` `nested = true` repos in the effective configuration
-and an outer `ports_per_env` of `B`, each outer env's band splits into `K + 1` equal slices of `S = B // (K + 1)`
-ports; the remainder is unused. Slice 0 is the parent's own services. The nested repo at position `i` (1-based, in
+and an outer `ports_per_env` of `B`, each outer env's band splits into `K + 1` equal slices of `S = B // (K + 1)` ports;
+the remainder is unused. Slice 0 is the parent's own services. The nested repo at position `i` (1-based, in
 configuration order) gets the slice starting at `P + i * S` as its `base_port` (`P` is the outer env's port base) and
 the `service_prefix` `<outer service_prefix>-<env>-<repo name>`, so siblings never share ports or a service namespace.
 No nested repos leaves allocation unchanged. There is no allocation registry: assignments follow configuration order.
 
 **The footprint must fit the slice.** A workspace uses indices `0..envs_per_workspace`, so a nested workspace can use
-`(envs_per_workspace + 1) x ports_per_env` ports, with its own `ports_per_env` (default 20) and the
-`envs_per_workspace` after the delegation (default 48). With `envs = N` that is `(N + 2) x ports_per_env`. When the
-footprint exceeds `S` (or `S` is zero), `winter ws init <env>` refuses that repo: it names the required and available
-sizes, writes nothing, and does not run the nested init. The error names a fitting change — a smaller `envs`, or a
-larger outer `ports_per_env`. An exact fit succeeds.
+`(envs_per_workspace + 1) x ports_per_env` ports, with its own `ports_per_env` (default 20) and the `envs_per_workspace`
+after the delegation (default 48). With `envs = N` that is `(N + 2) x ports_per_env`. When the footprint exceeds `S` (or
+`S` is zero), `winter ws init <env>` refuses that repo: it names the required and available sizes, writes nothing, and
+does not run the nested init. The error names a fitting change — a smaller `envs`, or a larger outer `ports_per_env`. An
+exact fit succeeds.
 
 Example: `base_port = 6000`, `ports_per_env = 240`, outer envs `alpha` and `beta` at indices 1 and 2, and three nested
 repos. Each slice is 60 ports, which exactly fits a child with `envs = 1` and `ports_per_env = 20` (`(1 + 2) x 20`).
