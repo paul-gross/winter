@@ -149,17 +149,17 @@ that workspace on the host. So `winter ws init <env>` delegates the outer env's 
 Before the nested `winter ws init` runs, winter writes these keys into the nested workspace's
 `.winter/config.local.toml`:
 
-| Key                  | Value                                              | Written                    |
-| -------------------- | -------------------------------------------------- | -------------------------- |
+| Key                  | Value                                               | Written                    |
+| -------------------- | --------------------------------------------------- | -------------------------- |
 | `base_port`          | the start of the repo's slice of the outer env band | always                     |
 | `service_prefix`     | `<outer service_prefix>-<env>-<repo name>`          | always                     |
-| `env_aliases`        | `[]`                                               | when the entry sets `envs` |
-| `envs_per_workspace` | `envs + 1`                                         | when the entry sets `envs` |
+| `env_aliases`        | `[]`                                                | when the entry sets `envs` |
+| `envs_per_workspace` | `envs + 1`                                          | when the entry sets `envs` |
 
-The outer env's `WINTER_PORT_BASE` is its recorded index's band, resolved the same way `winter env <env>` resolves it.
-The nested workspace's index 0 band therefore starts at that port, so its `winter env workspace` reports a
-`WINTER_WORKSPACE_PORT_BASE` equal to the outer env's `WINTER_PORT_BASE`, and every nested env reports a
-`WINTER_SERVICE_PREFIX` of `<outer service_prefix>-<env>`.
+The outer env's `WINTER_PORT_BASE` is its recorded index's band, resolved the same way `winter env <env>` resolves it;
+the repo's slice starts `i * S` ports above it. The nested workspace's index 0 band therefore starts at the slice base,
+so its `winter env workspace` reports a `WINTER_WORKSPACE_PORT_BASE` equal to the delegated `base_port`, and every
+nested env reports a `WINTER_SERVICE_PREFIX` of `<outer service_prefix>-<env>-<repo name>`.
 
 Winter sets only these keys. Every other key, comment, and table already in the nested `config.local.toml` is preserved,
 and the file is rewritten only when a value changed. The keys are rewritten on every `winter ws init <env>`, so they
@@ -176,10 +176,10 @@ workspace.
 
 **The outer band is subdivided among the nested repos.** With `K` `nested = true` repos in the effective configuration
 and an outer `ports_per_env` of `B`, each outer env's band splits into `K + 1` equal slices of `S = B // (K + 1)`
-ports; the remainder is unused. Slice 0 is the parent's own services. The nested repo at position `i` (1-based, in configuration
-order) gets the slice starting at `P + i * S` as its `base_port` (`P` is the outer env's port base) and the
-`service_prefix` `<outer service_prefix>-<env>-<repo name>`, so siblings never share ports or a service namespace. No
-nested repos leaves allocation unchanged. There is no allocation registry: assignments follow configuration order.
+ports; the remainder is unused. Slice 0 is the parent's own services. The nested repo at position `i` (1-based, in
+configuration order) gets the slice starting at `P + i * S` as its `base_port` (`P` is the outer env's port base) and
+the `service_prefix` `<outer service_prefix>-<env>-<repo name>`, so siblings never share ports or a service namespace.
+No nested repos leaves allocation unchanged. There is no allocation registry: assignments follow configuration order.
 
 **The footprint must fit the slice.** A workspace uses indices `0..envs_per_workspace`, so a nested workspace can use
 `(envs_per_workspace + 1) x ports_per_env` ports, with its own `ports_per_env` (default 20) and the
