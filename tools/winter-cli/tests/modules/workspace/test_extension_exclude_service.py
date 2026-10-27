@@ -10,7 +10,7 @@ from tests.conftest import (
     FakeInitReporter,
     FakeWorkspaceExcludeLocator,
 )
-from winter_cli.config.models import AdoptExtensions, WorkspaceConfig
+from winter_cli.config.models import AdoptExtensions, SpaceConfig, WorkspaceConfig
 from winter_cli.modules.workspace.extension_exclude_service import ExtensionExcludeService
 from winter_cli.modules.workspace.extension_manifest import ExtensionManifestLoader
 from winter_cli.modules.workspace.models import StandaloneRepository
@@ -251,18 +251,18 @@ def test_excludes_removal_and_relocation_update_block(init_reporter: FakeInitRep
     files: dict[Path, dict] = {}
     repo = _declaring(fs, files, "ext-a", {"paths": ["/x/"], "space_kinds": ["scores"]})
 
-    def config(**space: object) -> WorkspaceConfig:
+    def config(kinds: dict[str, str] | None = None) -> WorkspaceConfig:
         return WorkspaceConfig(
             workspace_root=WORKSPACE_ROOT,
             service_prefix="t",
             main_branch="main",
             adopt_extensions=AdoptExtensions.winter,
-            space=space,
+            space=SpaceConfig(kinds=kinds or {}),
         )
 
     _service(config(), fs, files).finalize_excludes([repo], init_reporter)
     assert "/.winter/scores/" in fs.files[EXCLUDE_PATH]
-    _service(config(kinds={"scores": "out/scores"}), fs, files).finalize_excludes([repo], init_reporter)
+    _service(config({"scores": "out/scores"}), fs, files).finalize_excludes([repo], init_reporter)
     assert "/.winter/scores/" not in fs.files[EXCLUDE_PATH]
     assert "/.winter/out/scores/" in fs.files[EXCLUDE_PATH]
     files[WORKSPACE_ROOT / "ext-a" / "winter-ext.toml"] = {"name": "ext-a"}
@@ -306,7 +306,7 @@ def test_excludes_space_kind_containment_and_escaping(
         service_prefix="t",
         main_branch="main",
         adopt_extensions=AdoptExtensions.winter,
-        space={"kinds": kinds},
+        space=SpaceConfig(kinds=kinds),
     )
     _service(config, fs, files).finalize_excludes([repo], init_reporter)
     block = _block(fs.files[EXCLUDE_PATH], "ext-a")
@@ -323,7 +323,7 @@ def test_excludes_space_kind_resolving_to_workspace_root_is_error(init_reporter:
         service_prefix="t",
         main_branch="main",
         adopt_extensions=AdoptExtensions.winter,
-        space={"root": ".", "kinds": {"scores": "."}},
+        space=SpaceConfig(root=".", kinds={"scores": "."}),
     )
     assert _service(config, fs, files).finalize_excludes([repo], init_reporter) is False
     assert [r for r, _ in init_reporter.errors] == ["ext-a"]

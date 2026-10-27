@@ -134,8 +134,8 @@ The workspace `.gitignore` is updated with a marker-bracketed block per extensio
 
 ### Declaring excludes
 
-An extension that writes machine-local files or generated artifacts at the workspace root declares them in
-`[excludes]`; both fields are optional lists of non-empty strings. The rules land in the workspace's Git **exclude file**
+An extension that writes machine-local files or generated artifacts at the workspace root declares them in `[excludes]`;
+both fields are optional lists of non-empty strings. The rules land in the workspace's Git **exclude file**
 (`.git/info/exclude`), inside the extension's own managed block after the repository and projection rules — never in the
 tracked `.gitignore`, which winter does not touch.
 
