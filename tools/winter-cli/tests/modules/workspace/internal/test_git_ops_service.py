@@ -13,16 +13,14 @@ from unittest.mock import MagicMock
 import git
 import pytest
 
+from winter_cli.core.ssh_keepalives import SSH_ENV_VAR, SSH_KEEPALIVE_OPTIONS, ensure_ssh_keepalives
 from winter_cli.modules.workspace.internal.git_ops_service import (
     BASE_DELAY_S,
     DELAY_CAP_S,
     JITTER_RATIO,
     OPERATION_TIMEOUT_S,
-    SSH_ENV_VAR,
-    SSH_KEEPALIVE_OPTIONS,
     TIMEOUT_ENV_VAR,
     GitOpsService,
-    ensure_ssh_keepalives,
     is_transient_git_error,
 )
 from winter_cli.modules.workspace.internal.repo_error_factory import RepoErrorFactory

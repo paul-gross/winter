@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +10,7 @@ from dependency_injector import providers
 
 from tests.conftest import FakeOperationTracer, FakeSessionTracer
 from tests.modules.workspace.conftest import add_env_worktree, init_project
-from winter_cli.container import Container, FreshInitServiceFactory
+from winter_cli.container import Container, FreshInitServiceFactory, LazyTarget
 from winter_cli.modules.workspace import dashboard_snapshot_service
 from winter_cli.modules.workspace.agent_install import ExtensionAgentService
 from winter_cli.modules.workspace.drift import DriftWarningService
@@ -261,3 +263,31 @@ def test_container_binds_the_command_tracer_into_every_screen_that_runs_thread_w
     ]
 
     assert [screen._session_tracer for screen in screens] == [tracer] * 4  # type: ignore[attr-defined]
+
+
+# ── Provider resolution ──────────────────────────────────────────────────────
+
+
+def test_every_provider_resolves_or_its_lazy_target_imports(container: Container) -> None:
+    """Every provider on `Container` is covered: it resolves against the fixture workspace, or, when it
+    needs call-time arguments, its `_lazy` target imports. A wrong `module:attr` path fails here."""
+    unresolved: list[str] = []
+    for name, provider in Container.providers.items():
+        try:
+            getattr(container, name)()
+        except TypeError:
+            provides = getattr(provider, "provides", None)
+            if not isinstance(provides, LazyTarget):
+                unresolved.append(name)
+                continue
+            provides.resolve()
+    assert unresolved == []
+
+
+def test_importing_the_container_imports_no_service_module() -> None:
+    code = (
+        "import sys, winter_cli.container\n"
+        "print('\\n'.join(m for m in sorted(sys.modules) if m.startswith('winter_cli.modules')))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out.stdout.split() == []

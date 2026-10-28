@@ -7,6 +7,10 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING, NamedTuple
+
+if TYPE_CHECKING:
+    from winter_cli.container import Container
 
 
 def _bytecode_cache_prefix() -> str:
@@ -34,11 +38,11 @@ if sys.pycache_prefix is None:
     sys.pycache_prefix = _bytecode_cache_prefix()
 
 import click
-from dependency_injector import providers
 
-from winter_cli.cli_context import CliContext
+from winter_cli.cli_context import CliContext, LazyContainer
 from winter_cli.core.config_file import ConfigError
 from winter_cli.core.internal.noop_command_tracer import NoopCommandTracer
+from winter_cli.core.ssh_keepalives import ensure_ssh_keepalives
 from winter_cli.core.tracing import (
     ICommandTracer,
     TracingSettings,
@@ -46,27 +50,88 @@ from winter_cli.core.tracing import (
     parse_launch_time_ns,
     parse_sdk_disabled,
 )
-from winter_cli.modules.workspace.models import RepoError
+
+
+class LazySubcommand(NamedTuple):
+    """One top-level command: where it lives, and the text its listed short help derives from.
+
+    `help` is the command's first help paragraph. `--help` renders the listing from it with click's
+    own truncation, so the command's module is not imported just to describe it. A new top-level
+    command adds its entry here.
+    """
+
+    target: str
+    help: str
+
 
 # Map each top-level command name to the "module:attribute" of its click
 # command object. Imported lazily on dispatch by LazyGroup so the hot
 # `winter ws worktrees` path never pays for the `doctor` or `tui` (textual)
 # command trees it doesn't touch. Keep this in sync with the command modules.
-_LAZY_SUBCOMMANDS: dict[str, str] = {
-    "agents": "winter_cli.modules.agents.command:agents_command",
-    "capabilities": "winter_cli.modules.capability.command:capabilities_command",
-    "clean": "winter_cli.modules.provision.clean_command:clean_command",
-    "dashboard": "winter_cli.modules.tui.command:dashboard",
-    "doctor": "winter_cli.modules.doctor.command:doctor_command",
-    "env": "winter_cli.modules.workspace.env_command:env_cmd",
-    "ext": "winter_cli.modules.ext.command:ext_group",
-    "graph": "winter_cli.modules.graph.command:graph_command",
-    "lint": "winter_cli.modules.lint.command:lint_command",
-    "provision": "winter_cli.modules.provision.command:provision_command",
-    "service": "winter_cli.modules.service.command:service_group",
-    "space": "winter_cli.modules.space.command:space_command",
-    "ws": "winter_cli.modules.workspace.command:ws_group",
-    "repo": "winter_cli.modules.workspace.command:repo_group",
+_LAZY_SUBCOMMANDS: dict[str, LazySubcommand] = {
+    "agents": LazySubcommand(
+        "winter_cli.modules.agents.command:agents_command",
+        (
+            "Show the resolved model and effort for every installed agent x harness, plus the tables each one"
+            " was resolved from — the same resolution path `winter ws init` bakes into the rendered agent "
+            "files."
+        ),
+    ),
+    "capabilities": LazySubcommand(
+        "winter_cli.modules.capability.command:capabilities_command",
+        (
+            "List every known capability slot — its bound provider, other installed candidates, and whether "
+            "each candidate's entrypoint resolves."
+        ),
+    ),
+    "clean": LazySubcommand(
+        "winter_cli.modules.provision.clean_command:clean_command",
+        ("Run each matched provision handler's declared `clean` command across feature envs matched by PATTERNS."),
+    ),
+    "dashboard": LazySubcommand(
+        "winter_cli.modules.tui.command:dashboard",
+        "Launch the TUI dashboard.",
+    ),
+    "doctor": LazySubcommand(
+        "winter_cli.modules.doctor.command:doctor_command",
+        "Run preflight checks for the workspace and every installed extension.",
+    ),
+    "env": LazySubcommand(
+        "winter_cli.modules.workspace.env_command:env_cmd",
+        "Print the runtime environment variables for SCOPE as sourceable export lines.",
+    ),
+    "ext": LazySubcommand(
+        "winter_cli.modules.ext.command:ext_group",
+        "Extension management commands.",
+    ),
+    "graph": LazySubcommand(
+        "winter_cli.modules.graph.command:graph_command",
+        "Print the module dependency graph declared in `winter-ext.toml` `requires`.",
+    ),
+    "lint": LazySubcommand(
+        "winter_cli.modules.lint.command:lint_command",
+        "Run convention lint checks over the project repos in a feature environment.",
+    ),
+    "provision": LazySubcommand(
+        "winter_cli.modules.provision.command:provision_command",
+        ("Provision one or more feature envs matched by PATTERNS: install dependencies, create resources, load data."),
+    ),
+    "service": LazySubcommand(
+        "winter_cli.modules.service.command:service_group",
+        "Control workspace services via the registered orchestrator extension.",
+    ),
+    "space": LazySubcommand(
+        "winter_cli.modules.space.command:space_command",
+        "Print the winter-space directory for artifact KIND (read-only resolution).",
+    ),
+    "ws": LazySubcommand(
+        "winter_cli.modules.workspace.command:ws_group",
+        "Manage feature environments.",
+    ),
+    "repo": LazySubcommand(
+        "winter_cli.modules.workspace.command:repo_group",
+        "Manage repositories.",
+    ),
 }
 
 
@@ -113,13 +178,30 @@ class LazyGroup(click.Group):
     traces nothing.
     """
 
-    def __init__(self, *args: object, lazy_subcommands: dict[str, str], **kwargs: object) -> None:
+    def __init__(self, *args: object, lazy_subcommands: dict[str, LazySubcommand], **kwargs: object) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
         self._lazy_subcommands = lazy_subcommands
 
     def list_commands(self, ctx: click.Context) -> list[str]:
         eager = super().list_commands(ctx)
         return sorted([*eager, *self._lazy_subcommands])
+
+    def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        """Click's listing, with each lazy command's short help derived from its declared text."""
+        names = self.list_commands(ctx)
+        if not names:
+            return
+        limit = formatter.width - 6 - max(len(name) for name in names)
+        rows: list[tuple[str, str]] = []
+        for name in names:
+            if name in self._lazy_subcommands:
+                rows.append(
+                    (name, click.Command(name, help=self._lazy_subcommands[name].help).get_short_help_str(limit))
+                )
+            elif (cmd := super().get_command(ctx, name)) is not None and not cmd.hidden:
+                rows.append((name, cmd.get_short_help_str(limit)))
+        with formatter.section("Commands"):
+            formatter.write_dl(rows)
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
         if cmd_name in self._lazy_subcommands:
@@ -172,7 +254,7 @@ class LazyGroup(click.Group):
             tracer.end_command(error_type)
 
     def _load(self, cmd_name: str) -> click.Command:
-        module_name, _, attr = self._lazy_subcommands[cmd_name].partition(":")
+        module_name, _, attr = self._lazy_subcommands[cmd_name].target.partition(":")
         command = getattr(importlib.import_module(module_name), attr)
         if not isinstance(command, click.Command):
             raise TypeError(f"lazy subcommand {cmd_name!r} did not resolve to a click.Command")
@@ -253,20 +335,32 @@ def _cli_group(
     # handled by the resolver itself; we only surface the boundary-level override here).
     effective_orchestrator_override = service_orchestrator or os.environ.get("WINTER_SERVICE_ORCHESTRATOR")
 
-    # The CLI boundary hands in a `CliContext` carrying the Container it already built
-    # (the command span opened before this callback). Adopt it rather than building a
-    # second one; a click tree entered without one builds its own.
-    if isinstance(ctx.obj, CliContext):
-        base = ctx.obj
-    else:
-        from winter_cli.container import Container
-
-        base = CliContext(container=Container())
+    # The CLI boundary hands in a `CliContext` whose container is built on first need (the
+    # command span usually already built it). Adopt it rather than building a second one; a
+    # click tree entered without one builds its own, still on first need.
+    base = ctx.obj if isinstance(ctx.obj, CliContext) else CliContext(LazyContainer(_default_container))
     ctx.obj = replace(
         base,
         source_override=source_override,
         service_orchestrator_override=effective_orchestrator_override or None,
     )
+
+
+def _default_container() -> Container:
+    from winter_cli.container import Container
+
+    return Container()
+
+
+def _container_with_tracing(settings: TracingSettings) -> Container:
+    """The process's one `Container`, carrying the boundary's tracing settings."""
+    from dependency_injector import providers
+
+    from winter_cli.container import Container
+
+    container = Container()
+    container.tracing_settings.override(providers.Object(settings))
+    return container
 
 
 def _tracing_settings_from_environment() -> TracingSettings:
@@ -317,8 +411,6 @@ def cli() -> None:
     shapes `main()` can hand back are `None` (success) and an `int` (an
     in-command `ctx.exit(n)`) — propagate the latter to the shell.
     """
-    from winter_cli.container import Container
-
     tracing_settings = _tracing_settings_from_environment()
 
     # Pave SSH-side keepalives into GIT_SSH_COMMAND so a wedged TCP socket
@@ -328,18 +420,15 @@ def cli() -> None:
     # future `winter doctor` probe will see the paved default. If a probe
     # ever wants to report on the raw user-set GIT_SSH_COMMAND, it must
     # snapshot the env before this call rather than reading at probe time.
-    from winter_cli.modules.workspace.internal.git_ops_service import ensure_ssh_keepalives
-
     ensure_ssh_keepalives()
 
-    # Built here, before dispatch, so the tracer is resolvable when `LazyGroup` opens the
-    # command span; the group callback adopts this Container into `CliContext`.
+    # The container is built on first need — normally the tracer lookup in `LazyGroup` as it
+    # opens the command span — so `--version` and `--help` never import it. The group callback
+    # adopts this same instance into `CliContext`.
     _silence_opentelemetry_diagnostics()
-    container = Container()
-    container.tracing_settings.override(providers.Object(tracing_settings))
-    tracer: ICommandTracer = container.command_tracer()
+    container_source = LazyContainer(lambda: _container_with_tracing(tracing_settings))
     try:
-        exit_code = _cli_group.main(standalone_mode=False, obj=CliContext(container=container))
+        exit_code = _cli_group.main(standalone_mode=False, obj=CliContext(container_source))
         if isinstance(exit_code, int):
             sys.exit(exit_code)
     except click.exceptions.Abort:
@@ -351,13 +440,19 @@ def cli() -> None:
     except ConfigError as exc:
         click.echo(f"error: {exc}", err=True)
         sys.exit(1)
-    except RepoError as exc:
+    except Exception as exc:
+        # Imported here: the models module pulls in pydantic, which only a failing run needs.
+        from winter_cli.modules.workspace.models import RepoError
+
+        if not isinstance(exc, RepoError):
+            raise
         click.echo(f"error: {exc}", err=True)
         sys.exit(1)
     finally:
         # The single exit choke point: every `sys.exit` above and in handlers, every
         # `ctx.exit`, and an uncaught exception all pass through here exactly once.
-        tracer.export()
+        if container_source.built:
+            container_source.get().command_tracer().export()
 
 
 if __name__ == "__main__":

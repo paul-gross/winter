@@ -11,7 +11,9 @@ import pytest
 
 from winter_cli import cli as cli_module
 from winter_cli.cli import (
+    _LAZY_SUBCOMMANDS,
     LazyGroup,
+    LazySubcommand,
     _bytecode_cache_prefix,
     _cli_group,
     _configure_logging,
@@ -26,7 +28,7 @@ def test_lazy_group_lists_all_commands_without_importing() -> None:
     never triggers the import (an import would happen in get_command, not here)."""
     group = LazyGroup(
         name="root",
-        lazy_subcommands={"does-not-exist": "winter_cli.no.such.module:thing"},
+        lazy_subcommands={"does-not-exist": LazySubcommand("winter_cli.no.such.module:thing", "Bogus.")},
     )
     ctx = click.Context(group)
     # No import error despite the bogus path — list_commands must not import.
@@ -36,7 +38,7 @@ def test_lazy_group_lists_all_commands_without_importing() -> None:
 def test_lazy_group_get_command_imports_on_dispatch() -> None:
     group = LazyGroup(
         name="root",
-        lazy_subcommands={"ws": "winter_cli.modules.workspace.command:ws_group"},
+        lazy_subcommands={"ws": LazySubcommand("winter_cli.modules.workspace.command:ws_group", "Manage.")},
     )
     ctx = click.Context(group)
     cmd = group.get_command(ctx, "ws")
@@ -70,7 +72,6 @@ def test_cli_group_advertises_every_top_level_command() -> None:
 def test_cli_lazy_map_targets_resolve() -> None:
     """Every entry in the lazy map points at a real click.Command — guards the
     map against drift if a command is renamed or moved."""
-    from winter_cli.cli import _LAZY_SUBCOMMANDS
 
     group = LazyGroup(name="root", lazy_subcommands=_LAZY_SUBCOMMANDS)
     ctx = click.Context(group)
@@ -457,3 +458,50 @@ class TestEnvResolveGate:
         assert "error:" in result.stderr
         assert "Traceback" not in result.stderr
         assert not any(line.startswith("export ") for line in result.stdout.splitlines())
+
+
+# ── Startup import absence ───────────────────────────────────────────────────
+#
+# Paths that exit during root-context parsing must not import the container, gitpython,
+# dependency_injector, pydantic, or any command module.
+
+_FORBIDDEN_AT_STARTUP = ("winter_cli.container", "git", "dependency_injector", "pydantic")
+
+
+def _modules_loaded_by_running(*argv: str) -> list[str]:
+    code = (
+        "import sys\n"
+        f"sys.argv = ['winter', *{list(argv)!r}]\n"
+        "from winter_cli import cli\n"
+        "try:\n"
+        "    cli.cli()\n"
+        "except SystemExit:\n"
+        "    pass\n"
+        "sys.stdout.flush()\n"
+        "sys.stderr.write('\\n'.join(sorted(sys.modules)))\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    return proc.stderr.splitlines()
+
+
+@pytest.mark.parametrize("argv", [("--version",), ("--help",), ()])
+def test_root_paths_import_no_container_or_command_modules(argv: tuple[str, ...]) -> None:
+    loaded = _modules_loaded_by_running(*argv)
+    command_modules = {spec.target.partition(":")[0] for spec in _LAZY_SUBCOMMANDS.values()}
+    offenders = [m for m in loaded if m in command_modules or m.split(".")[0] in _FORBIDDEN_AT_STARTUP]
+    offenders += [m for m in loaded if m == "winter_cli.container"]
+    assert offenders == []
+
+
+@pytest.mark.parametrize("width", [60, 100])
+def test_lazy_root_help_matches_the_help_of_a_group_holding_the_loaded_commands(width: int) -> None:
+    eager = click.Group("winter", help=_cli_group.help)
+    for name in _LAZY_SUBCOMMANDS:
+        eager.add_command(_cli_group.get_command(click.Context(_cli_group), name), name)  # type: ignore[arg-type]
+
+    def render(group: click.Group) -> str:
+        return group.get_help(click.Context(group, info_name="winter", terminal_width=width, max_content_width=width))
+
+    lazy_commands = render(_cli_group).split("Commands:")[1]
+    eager_commands = render(eager).split("Commands:")[1]
+    assert lazy_commands == eager_commands
