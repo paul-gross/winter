@@ -108,7 +108,7 @@ def _container(
 
 
 def _invoke(container: Container, *args: str) -> Result:
-    return CliRunner().invoke(_cli_group, list(args), obj=CliContext(container=container))
+    return CliRunner().invoke(_cli_group, list(args), obj=CliContext.of(container))
 
 
 def _envs_for(*args: str, discovery: _Discovery | None = None) -> list[str]:

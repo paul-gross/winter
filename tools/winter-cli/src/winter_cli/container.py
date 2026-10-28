@@ -3,108 +3,118 @@ from __future__ import annotations
 import importlib
 import os
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 from dependency_injector import containers, providers
 
-from winter_cli.config.internal.cwd_workspace_locator import CwdWorkspaceLocator
-from winter_cli.config.internal.tomlkit_local_overlay_repository import TomlkitLocalOverlayRepository
-from winter_cli.config.internal.write_winter_configuration_repository import (
-    WriteWinterConfigurationRepository,
-)
-from winter_cli.config.workspace import WorkspaceConfigService
-from winter_cli.core.internal.click_cli_input_validation_service import (
-    ClickCliInputValidationService,
-)
-from winter_cli.core.internal.click_cli_output_service import ClickCliOutputService
-from winter_cli.core.internal.local_filesystem import LocalFilesystem
-from winter_cli.core.internal.local_subprocess_runner import NON_INTERACTIVE_ENV, LocalSubprocessRunner
 from winter_cli.core.internal.noop_command_tracer import NoopCommandTracer
-from winter_cli.core.internal.tomllib_config_file_reader import TomllibConfigFileReader
 from winter_cli.core.internal.unavailable_command_tracer import UnavailableCommandTracer
 from winter_cli.core.tracing import ICommandTracer, TracingSettings
-from winter_cli.modules.workspace.agent_install import ExtensionAgentService
-from winter_cli.modules.workspace.agent_transform.agent_copy_inspector import AgentCopyInspector
-from winter_cli.modules.workspace.agent_transform.agent_enumerator import CanonicalAgentEnumerator
-from winter_cli.modules.workspace.dashboard_snapshot_service import DashboardSnapshotService
 
 # NB: the doctor, lint, graph, and tui (textual) command trees are deliberately
 # NOT imported at module top — see `_lazy` below. They are pulled in on first
 # provider resolution so the hot `winter ws` path (which instantiates this
 # container on every invocation) never pays for the textual / probe trees it
 # doesn't touch.
-from winter_cli.modules.workspace.destroy_service import DestroyService
-from winter_cli.modules.workspace.drift import DriftWarningService
-from winter_cli.modules.workspace.env_checkout_service import EnvCheckoutService
-from winter_cli.modules.workspace.env_clean_service import EnvCleanService
-from winter_cli.modules.workspace.env_index import EnvPortBaseResolver
-from winter_cli.modules.workspace.env_reset_service import EnvResetService
-from winter_cli.modules.workspace.env_restack_plan_service import EnvRestackPlanService
-from winter_cli.modules.workspace.env_restack_service import EnvRestackService
-from winter_cli.modules.workspace.env_status_service import EnvStatusService
-from winter_cli.modules.workspace.env_target import EnvNameDiscovery, EnvTargetService
-from winter_cli.modules.workspace.extension_agentsmd_service import ExtensionAgentsMdService
-from winter_cli.modules.workspace.extension_exclude_service import ExtensionExcludeService
-from winter_cli.modules.workspace.extension_hook_service import ExtensionHookService
-from winter_cli.modules.workspace.extension_manifest import ExtensionManifestLoader
-from winter_cli.modules.workspace.extension_symlink_service import ExtensionSymlinkService
-from winter_cli.modules.workspace.fetch_reporter import JsonFetchReporter, StreamFetchReporter
-from winter_cli.modules.workspace.handlers.destroy_handler import DestroyHandler
-from winter_cli.modules.workspace.handlers.fingerprint_handler import FingerprintHandler
-from winter_cli.modules.workspace.handlers.init_handler import InitHandler
-from winter_cli.modules.workspace.handlers.repo_handler import RepoHandler
-from winter_cli.modules.workspace.handlers.restack_handler import RestackHandler
-from winter_cli.modules.workspace.handlers.workspace_handler import WorkspaceHandler
-from winter_cli.modules.workspace.init_reporter import JsonReporter, StreamReporter
-from winter_cli.modules.workspace.init_service import InitService
-from winter_cli.modules.workspace.internal.config_lock_repository import WriteConfigLockRepository
-from winter_cli.modules.workspace.internal.git_ops_service import GitOpsService
-from winter_cli.modules.workspace.internal.gitpython_repository import GitPythonRepository
-from winter_cli.modules.workspace.internal.gitpython_workspace_exclude_locator import GitPythonWorkspaceExcludeLocator
-from winter_cli.modules.workspace.internal.read_workspace_repository import ReadWorkspaceRepository
-from winter_cli.modules.workspace.internal.repo_error_factory import RepoErrorFactory
-from winter_cli.modules.workspace.internal.subprocess_command_entry_runner import SubprocessCommandEntryRunner
-from winter_cli.modules.workspace.internal.subprocess_nested_workspace_runner import SubprocessNestedWorkspaceRunner
-from winter_cli.modules.workspace.internal.toml_env_index_registry import TomlEnvIndexRegistry
-from winter_cli.modules.workspace.internal.write_repo_repository import WriteRepoRepository
-from winter_cli.modules.workspace.merge_reporter import JsonMergeReporter, StreamMergeReporter
-from winter_cli.modules.workspace.nested_workspace_service import NestedWorkspaceService
-from winter_cli.modules.workspace.prune_service import PruneService
-from winter_cli.modules.workspace.pull_reporter import JsonPullReporter, StreamPullReporter
-from winter_cli.modules.workspace.reporter_factory import ReporterFactory
-from winter_cli.modules.workspace.repository_factory import RepositoryFactory
-from winter_cli.modules.workspace.workspace_fingerprint_service import WorkspaceFingerprintService
-from winter_cli.modules.workspace.workspace_merge_service import WorkspaceMergeService
-from winter_cli.modules.workspace.workspace_push_service import WorkspacePushService
-from winter_cli.modules.workspace.workspace_skill_service import WorkspaceSkillService
-from winter_cli.modules.workspace.workspace_snapshot_service import WorkspaceSnapshotService
-from winter_cli.modules.workspace.workspace_sync_service import WorkspaceSyncService
-from winter_cli.modules.workspace.worktree_safety import WorktreeSafetyService
-from winter_cli.plugins.internal.importlib_plugin_loader import ImportlibPluginLoader
-from winter_cli.plugins.loader import PluginRegistry
 
 
-def _lazy(target: str) -> Callable[..., Any]:
-    """Build a provider `provides` callable that imports its class on first use.
+if TYPE_CHECKING:
+    from winter_cli.config.internal.cwd_workspace_locator import CwdWorkspaceLocator
+    from winter_cli.config.internal.tomlkit_local_overlay_repository import TomlkitLocalOverlayRepository
+    from winter_cli.config.internal.write_winter_configuration_repository import WriteWinterConfigurationRepository
+    from winter_cli.config.workspace import WorkspaceConfigService
+    from winter_cli.core.internal.click_cli_input_validation_service import ClickCliInputValidationService
+    from winter_cli.core.internal.click_cli_output_service import ClickCliOutputService
+    from winter_cli.core.internal.local_filesystem import LocalFilesystem
+    from winter_cli.core.internal.local_subprocess_runner import LocalSubprocessRunner
+    from winter_cli.core.internal.tomllib_config_file_reader import TomllibConfigFileReader
+    from winter_cli.modules.workspace.agent_install import ExtensionAgentService
+    from winter_cli.modules.workspace.agent_transform.agent_copy_inspector import AgentCopyInspector
+    from winter_cli.modules.workspace.agent_transform.agent_enumerator import CanonicalAgentEnumerator
+    from winter_cli.modules.workspace.dashboard_snapshot_service import DashboardSnapshotService
+    from winter_cli.modules.workspace.destroy_service import DestroyService
+    from winter_cli.modules.workspace.drift import DriftWarningService
+    from winter_cli.modules.workspace.env_checkout_service import EnvCheckoutService
+    from winter_cli.modules.workspace.env_clean_service import EnvCleanService
+    from winter_cli.modules.workspace.env_index import EnvPortBaseResolver
+    from winter_cli.modules.workspace.env_reset_service import EnvResetService
+    from winter_cli.modules.workspace.env_restack_plan_service import EnvRestackPlanService
+    from winter_cli.modules.workspace.env_restack_service import EnvRestackService
+    from winter_cli.modules.workspace.env_status_service import EnvStatusService
+    from winter_cli.modules.workspace.env_target import EnvNameDiscovery, EnvTargetService
+    from winter_cli.modules.workspace.extension_agentsmd_service import ExtensionAgentsMdService
+    from winter_cli.modules.workspace.extension_exclude_service import ExtensionExcludeService
+    from winter_cli.modules.workspace.extension_hook_service import ExtensionHookService
+    from winter_cli.modules.workspace.extension_manifest import ExtensionManifestLoader
+    from winter_cli.modules.workspace.extension_symlink_service import ExtensionSymlinkService
+    from winter_cli.modules.workspace.fetch_reporter import JsonFetchReporter, StreamFetchReporter
+    from winter_cli.modules.workspace.handlers.destroy_handler import DestroyHandler
+    from winter_cli.modules.workspace.handlers.fingerprint_handler import FingerprintHandler
+    from winter_cli.modules.workspace.handlers.init_handler import InitHandler
+    from winter_cli.modules.workspace.handlers.repo_handler import RepoHandler
+    from winter_cli.modules.workspace.handlers.restack_handler import RestackHandler
+    from winter_cli.modules.workspace.handlers.workspace_handler import WorkspaceHandler
+    from winter_cli.modules.workspace.init_reporter import JsonReporter, StreamReporter
+    from winter_cli.modules.workspace.init_service import InitService
+    from winter_cli.modules.workspace.internal.config_lock_repository import WriteConfigLockRepository
+    from winter_cli.modules.workspace.internal.git_ops_service import GitOpsService
+    from winter_cli.modules.workspace.internal.gitpython_repository import GitPythonRepository
+    from winter_cli.modules.workspace.internal.gitpython_workspace_exclude_locator import (
+        GitPythonWorkspaceExcludeLocator,
+    )
+    from winter_cli.modules.workspace.internal.read_workspace_repository import ReadWorkspaceRepository
+    from winter_cli.modules.workspace.internal.repo_error_factory import RepoErrorFactory
+    from winter_cli.modules.workspace.internal.subprocess_command_entry_runner import SubprocessCommandEntryRunner
+    from winter_cli.modules.workspace.internal.subprocess_nested_workspace_runner import SubprocessNestedWorkspaceRunner
+    from winter_cli.modules.workspace.internal.toml_env_index_registry import TomlEnvIndexRegistry
+    from winter_cli.modules.workspace.internal.write_repo_repository import WriteRepoRepository
+    from winter_cli.modules.workspace.merge_reporter import JsonMergeReporter, StreamMergeReporter
+    from winter_cli.modules.workspace.nested_workspace_service import NestedWorkspaceService
+    from winter_cli.modules.workspace.prune_service import PruneService
+    from winter_cli.modules.workspace.pull_reporter import JsonPullReporter, StreamPullReporter
+    from winter_cli.modules.workspace.reporter_factory import ReporterFactory
+    from winter_cli.modules.workspace.repository_factory import RepositoryFactory
+    from winter_cli.modules.workspace.workspace_fingerprint_service import WorkspaceFingerprintService
+    from winter_cli.modules.workspace.workspace_merge_service import WorkspaceMergeService
+    from winter_cli.modules.workspace.workspace_push_service import WorkspacePushService
+    from winter_cli.modules.workspace.workspace_skill_service import WorkspaceSkillService
+    from winter_cli.modules.workspace.workspace_snapshot_service import WorkspaceSnapshotService
+    from winter_cli.modules.workspace.workspace_sync_service import WorkspaceSyncService
+    from winter_cli.modules.workspace.worktree_safety import WorktreeSafetyService
+    from winter_cli.plugins.internal.importlib_plugin_loader import ImportlibPluginLoader
 
-    `target` is a `"module:attr"` reference. The returned callable forwards
-    `*args, **kwargs` (the provider's injected dependencies) to the resolved
-    class, importing the module only the first time the provider is resolved.
-    This keeps the doctor / lint / tui (textual) trees out of the module-load
-    import graph, so building `Container()` on the hot `winter ws` path doesn't
-    drag them in — they load only when their command (doctor / lint / dashboard)
-    actually resolves a provider that needs them.
+
+class LazyTarget:
+    """A provider `provides` callable that imports its class on first use.
+
+    `target` is a `"module:attr"` reference; `attr` may be dotted (`"Class.method"`). Calling it
+    forwards `*args, **kwargs` (the provider's injected dependencies) to the resolved object,
+    importing the module only the first time the provider is resolved. That keeps every service
+    tree out of the module-load import graph, so building `Container()` — and everything before
+    the first provider resolves — never pays for a command's services.
     """
-    resolved: list[Callable[..., Any]] = []
 
-    def make(*args: Any, **kwargs: Any) -> Any:
-        if not resolved:
-            module_name, attr = target.split(":", 1)
-            resolved.append(getattr(importlib.import_module(module_name), attr))
-        return resolved[0](*args, **kwargs)
+    def __init__(self, target: str) -> None:
+        self.target = target
+        self._resolved: Callable[..., Any] | None = None
 
-    return make
+    def resolve(self) -> Callable[..., Any]:
+        if self._resolved is not None:
+            return self._resolved
+        module_name, attr = self.target.split(":", 1)
+        resolved: Any = importlib.import_module(module_name)
+        for part in attr.split("."):
+            resolved = getattr(resolved, part)
+        self._resolved = resolved
+        return resolved
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return self.resolve()(*args, **kwargs)
+
+
+def _lazy(target: str) -> LazyTarget:
+    return LazyTarget(target)
 
 
 def _select_command_tracer(settings: TracingSettings) -> ICommandTracer:
@@ -148,6 +158,9 @@ class FreshInitServiceFactory:
         self._command_tracer = command_tracer
 
     def build_container(self) -> Container:
+        from winter_cli.core.internal.local_subprocess_runner import NON_INTERACTIVE_ENV, LocalSubprocessRunner
+        from winter_cli.modules.workspace.internal.gitpython_repository import GitPythonRepository
+
         container = Container()
         container.command_tracer.override(providers.Object(self._command_tracer))
         container.subprocess_runner.override(
@@ -170,14 +183,22 @@ class FreshInitServiceFactory:
 class Container(containers.DeclarativeContainer):
     """DI container for the winter CLI."""
 
-    cli_output_svc = providers.Singleton(ClickCliOutputService)
-    cli_input_validation_svc = providers.Singleton(ClickCliInputValidationService)
+    cli_output_svc: providers.Singleton[ClickCliOutputService] = providers.Singleton(
+        _lazy("winter_cli.core.internal.click_cli_output_service:ClickCliOutputService")
+    )
+    cli_input_validation_svc: providers.Singleton[ClickCliInputValidationService] = providers.Singleton(
+        _lazy("winter_cli.core.internal.click_cli_input_validation_service:ClickCliInputValidationService")
+    )
 
     # Cross-cutting I/O seams. Adapters confine `pathlib`/`shutil`/`os`,
     # `tomllib`, and `subprocess` so service code depends on Protocols, not
     # the standard library. See core/{filesystem,config_file,subprocess_runner}.py.
-    fs = providers.Singleton(LocalFilesystem)
-    config_file_reader = providers.Singleton(TomllibConfigFileReader)
+    fs: providers.Singleton[LocalFilesystem] = providers.Singleton(
+        _lazy("winter_cli.core.internal.local_filesystem:LocalFilesystem")
+    )
+    config_file_reader: providers.Singleton[TomllibConfigFileReader] = providers.Singleton(
+        _lazy("winter_cli.core.internal.tomllib_config_file_reader:TomllibConfigFileReader")
+    )
 
     # Tracing seam. `tracing_settings` is a value slot: the CLI boundary overwrites it
     # with `container.tracing_settings.override()` once it has read the launch-time
@@ -189,29 +210,33 @@ class Container(containers.DeclarativeContainer):
 
     # Every child process the runner starts gets the active trace context through
     # the tracer (`ITracePropagator`).
-    subprocess_runner = providers.Singleton(LocalSubprocessRunner, trace_propagator=command_tracer)
+    subprocess_runner: providers.Singleton[LocalSubprocessRunner] = providers.Singleton(
+        _lazy("winter_cli.core.internal.local_subprocess_runner:LocalSubprocessRunner"), trace_propagator=command_tracer
+    )
 
     # Workspace-root discovery seam — lets WorkspaceConfigService accept a
     # locator instead of reaching `Path.cwd()` directly. Tests substitute a
     # fake that returns a fixed path.
-    workspace_locator = providers.Singleton(CwdWorkspaceLocator)
+    workspace_locator: providers.Singleton[CwdWorkspaceLocator] = providers.Singleton(
+        _lazy("winter_cli.config.internal.cwd_workspace_locator:CwdWorkspaceLocator")
+    )
 
-    workspace_config_svc = providers.Singleton(
-        WorkspaceConfigService,
+    workspace_config_svc: providers.Singleton[WorkspaceConfigService] = providers.Singleton(
+        _lazy("winter_cli.config.workspace:WorkspaceConfigService"),
         workspace_locator=workspace_locator,
         fs=fs,
         config_file_reader=config_file_reader,
     )
     workspace_config = providers.Singleton(workspace_config_svc.provided.load.call())
 
-    write_winter_config_repo = providers.Factory(
-        WriteWinterConfigurationRepository,
+    write_winter_config_repo: providers.Factory[WriteWinterConfigurationRepository] = providers.Factory(
+        _lazy("winter_cli.config.internal.write_winter_configuration_repository:WriteWinterConfigurationRepository"),
         workspace_config=workspace_config,
         fs=fs,
     )
 
-    config_lock_repo = providers.Factory(
-        WriteConfigLockRepository,
+    config_lock_repo: providers.Factory[WriteConfigLockRepository] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.internal.config_lock_repository:WriteConfigLockRepository"),
         workspace_root=workspace_config.provided.workspace_root,
         fs=fs,
     )
@@ -221,26 +246,34 @@ class Container(containers.DeclarativeContainer):
         workspace_config,
     )
 
-    env_index_registry = providers.Singleton(
-        TomlEnvIndexRegistry,
+    env_index_registry: providers.Singleton[TomlEnvIndexRegistry] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.internal.toml_env_index_registry:TomlEnvIndexRegistry"),
         state_path=_env_index_registry_path,
         fs=fs,
     )
 
     # Factory for structured RepoError instances — injected into every class
     # that translates GitPython exceptions into winter's error type.
-    repo_error_factory = providers.Singleton(RepoErrorFactory)
+    repo_error_factory: providers.Singleton[RepoErrorFactory] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.internal.repo_error_factory:RepoErrorFactory")
+    )
 
     # Service-level git seam used by InitService / DestroyService / PruneService
     # (not by IRead/IWriteRepoRepository, which already own domain-level git).
     # The adapter wraps `git.GitCommandError` into `RepoError` via repo_error_factory.
-    git_repo = providers.Singleton(GitPythonRepository, error_factory=repo_error_factory, tracer=command_tracer)
+    git_repo: providers.Singleton[GitPythonRepository] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.internal.gitpython_repository:GitPythonRepository"),
+        error_factory=repo_error_factory,
+        tracer=command_tracer,
+    )
 
     # The one resolver for the git exclude file holding the workspace root's managed
     # blocks (`.git/info/exclude`, or the worktree's own git-dir file for a linked
     # worktree root). Every workspace-exclude reader and writer takes it.
-    workspace_exclude_locator = providers.Singleton(
-        GitPythonWorkspaceExcludeLocator,
+    workspace_exclude_locator: providers.Singleton[GitPythonWorkspaceExcludeLocator] = providers.Singleton(
+        _lazy(
+            "winter_cli.modules.workspace.internal.gitpython_workspace_exclude_locator:GitPythonWorkspaceExcludeLocator"
+        ),
         workspace_root=workspace_config.provided.workspace_root,
         error_factory=repo_error_factory,
         tracer=command_tracer,
@@ -248,14 +281,18 @@ class Container(containers.DeclarativeContainer):
 
     # Importlib-based plugin module loader. Confines `importlib.util` and
     # `sys.modules` mutation so the registry depends on a Protocol.
-    plugin_loader = providers.Singleton(ImportlibPluginLoader)
+    plugin_loader: providers.Singleton[ImportlibPluginLoader] = providers.Singleton(
+        _lazy("winter_cli.plugins.internal.importlib_plugin_loader:ImportlibPluginLoader")
+    )
 
     # Central git-ops chokepoint: owns the parallelism cap and retry policy
     # for network-touching git operations.
-    git_ops_svc = providers.Singleton(GitOpsService, error_factory=repo_error_factory)
+    git_ops_svc: providers.Singleton[GitOpsService] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.internal.git_ops_service:GitOpsService"), error_factory=repo_error_factory
+    )
 
-    repo_repo = providers.Factory(
-        WriteRepoRepository,
+    repo_repo: providers.Factory[WriteRepoRepository] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.internal.write_repo_repository:WriteRepoRepository"),
         error_factory=repo_error_factory,
         git_ops=git_ops_svc,
         tracer=command_tracer,
@@ -277,14 +314,14 @@ class Container(containers.DeclarativeContainer):
     # RepositoryFactory from its reloaded config — a constructor change here
     # must be mirrored there. `AgentMatrixService` gets `repo_factory_for`
     # below instead, so its wiring lives only here.
-    repo_factory = providers.Singleton(
-        RepositoryFactory,
+    repo_factory: providers.Singleton[RepositoryFactory] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.repository_factory:RepositoryFactory"),
         config=workspace_config,
         fs=fs,
     )
 
     plugin_registry = providers.Singleton(
-        PluginRegistry.load,
+        _lazy("winter_cli.plugins.loader:PluginRegistry.load"),
         workspace=workspace,
         fs=fs,
         config_file_reader=config_file_reader,
@@ -300,8 +337,8 @@ class Container(containers.DeclarativeContainer):
     # `DashboardSnapshotService._build` rebuilds its own ReadWorkspaceRepository
     # per poll from its own reloaded config — a constructor change here must be
     # mirrored there too.
-    worktree_repo = providers.Factory(
-        ReadWorkspaceRepository,
+    worktree_repo: providers.Factory[ReadWorkspaceRepository] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.internal.read_workspace_repository:ReadWorkspaceRepository"),
         error_factory=repo_error_factory,
         tracer=command_tracer,
         env_aliases=workspace_config.provided.env_aliases,
@@ -313,22 +350,22 @@ class Container(containers.DeclarativeContainer):
     # parses the invoked command. Discovery is handed over as a provider, so nothing about the
     # workspace is resolved until tracing is on and a target needs discovery: a glob, or any
     # name under `discovered_only` (lint), which runs discovery for literal names too.
-    env_name_discovery = providers.Factory(
-        EnvNameDiscovery,
+    env_name_discovery: providers.Factory[EnvNameDiscovery] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.env_target:EnvNameDiscovery"),
         workspace_repo=worktree_repo,
         repo_factory=repo_factory,
         workspace=workspace,
     )
 
-    env_target_service = providers.Factory(
-        EnvTargetService,
+    env_target_service: providers.Factory[EnvTargetService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.env_target:EnvTargetService"),
         annotator=command_tracer,
         tracing_enabled=tracing_settings.provided.enabled,
         discovery_factory=env_name_discovery.provider,
     )
 
-    drift_warning_svc = providers.Factory(
-        DriftWarningService,
+    drift_warning_svc: providers.Factory[DriftWarningService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.drift:DriftWarningService"),
         workspace=workspace,
         repo_factory=repo_factory,
         fs=fs,
@@ -338,14 +375,14 @@ class Container(containers.DeclarativeContainer):
     # `DashboardSnapshotService._build` rebuilds its own EnvStatusService per
     # poll from its own reloaded config — a constructor change here must be
     # mirrored there too.
-    env_status_svc = providers.Factory(
-        EnvStatusService,
+    env_status_svc: providers.Factory[EnvStatusService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.env_status_service:EnvStatusService"),
         worktree_repo=worktree_repo,
         repo_repo=repo_repo,
     )
 
-    workspace_sync_svc = providers.Factory(
-        WorkspaceSyncService,
+    workspace_sync_svc: providers.Factory[WorkspaceSyncService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.workspace_sync_service:WorkspaceSyncService"),
         env_status_svc=env_status_svc,
         worktree_repo=worktree_repo,
         repo_repo=repo_repo,
@@ -357,8 +394,8 @@ class Container(containers.DeclarativeContainer):
         write_config_repo=write_winter_config_repo,
     )
 
-    workspace_push_svc = providers.Factory(
-        WorkspacePushService,
+    workspace_push_svc: providers.Factory[WorkspacePushService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.workspace_push_service:WorkspacePushService"),
         env_status_svc=env_status_svc,
         worktree_repo=worktree_repo,
         repo_repo=repo_repo,
@@ -366,8 +403,8 @@ class Container(containers.DeclarativeContainer):
         workspace=workspace,
     )
 
-    workspace_merge_svc = providers.Factory(
-        WorkspaceMergeService,
+    workspace_merge_svc: providers.Factory[WorkspaceMergeService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.workspace_merge_service:WorkspaceMergeService"),
         env_status_svc=env_status_svc,
         worktree_repo=worktree_repo,
         repo_repo=repo_repo,
@@ -376,73 +413,73 @@ class Container(containers.DeclarativeContainer):
         git_ops=git_ops_svc,
     )
 
-    worktree_safety_svc = providers.Factory(
-        WorktreeSafetyService,
+    worktree_safety_svc: providers.Factory[WorktreeSafetyService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.worktree_safety:WorktreeSafetyService"),
         repo_repo=repo_repo,
     )
 
-    env_checkout_svc = providers.Factory(
-        EnvCheckoutService,
-        repo_repo=repo_repo,
-        worktree_safety_svc=worktree_safety_svc,
-    )
-
-    env_reset_svc = providers.Factory(
-        EnvResetService,
+    env_checkout_svc: providers.Factory[EnvCheckoutService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.env_checkout_service:EnvCheckoutService"),
         repo_repo=repo_repo,
         worktree_safety_svc=worktree_safety_svc,
     )
 
-    env_clean_svc = providers.Factory(
-        EnvCleanService,
+    env_reset_svc: providers.Factory[EnvResetService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.env_reset_service:EnvResetService"),
+        repo_repo=repo_repo,
+        worktree_safety_svc=worktree_safety_svc,
+    )
+
+    env_clean_svc: providers.Factory[EnvCleanService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.env_clean_service:EnvCleanService"),
         repo_repo=repo_repo,
     )
 
-    env_restack_plan_svc = providers.Factory(
-        EnvRestackPlanService,
+    env_restack_plan_svc: providers.Factory[EnvRestackPlanService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.env_restack_plan_service:EnvRestackPlanService"),
         repo_repo=repo_repo,
     )
 
-    env_restack_svc = providers.Factory(
-        EnvRestackService,
+    env_restack_svc: providers.Factory[EnvRestackService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.env_restack_service:EnvRestackService"),
         repo_repo=repo_repo,
     )
 
-    extension_manifest_loader = providers.Singleton(
-        ExtensionManifestLoader,
+    extension_manifest_loader: providers.Singleton[ExtensionManifestLoader] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.extension_manifest:ExtensionManifestLoader"),
         config_file_reader=config_file_reader,
     )
 
-    canonical_agent_enumerator = providers.Singleton(
-        CanonicalAgentEnumerator,
+    canonical_agent_enumerator: providers.Singleton[CanonicalAgentEnumerator] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.agent_transform.agent_enumerator:CanonicalAgentEnumerator"),
         fs=fs,
         manifest_loader=extension_manifest_loader,
     )
 
-    agent_copy_inspector = providers.Singleton(
-        AgentCopyInspector,
-        fs=fs,
-        manifest_loader=extension_manifest_loader,
-        agent_enumerator=canonical_agent_enumerator,
-    )
-
-    extension_symlink_svc = providers.Singleton(
-        ExtensionSymlinkService,
-        config=workspace_config,
-        fs=fs,
-        manifest_loader=extension_manifest_loader,
-    )
-
-    extension_agent_svc = providers.Singleton(
-        ExtensionAgentService,
-        config=workspace_config,
+    agent_copy_inspector: providers.Singleton[AgentCopyInspector] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.agent_transform.agent_copy_inspector:AgentCopyInspector"),
         fs=fs,
         manifest_loader=extension_manifest_loader,
         agent_enumerator=canonical_agent_enumerator,
     )
 
-    extension_hook_svc = providers.Singleton(
-        ExtensionHookService,
+    extension_symlink_svc: providers.Singleton[ExtensionSymlinkService] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.extension_symlink_service:ExtensionSymlinkService"),
+        config=workspace_config,
+        fs=fs,
+        manifest_loader=extension_manifest_loader,
+    )
+
+    extension_agent_svc: providers.Singleton[ExtensionAgentService] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.agent_install:ExtensionAgentService"),
+        config=workspace_config,
+        fs=fs,
+        manifest_loader=extension_manifest_loader,
+        agent_enumerator=canonical_agent_enumerator,
+    )
+
+    extension_hook_svc: providers.Singleton[ExtensionHookService] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.extension_hook_service:ExtensionHookService"),
         config=workspace_config,
         fs=fs,
         subprocess_runner=subprocess_runner,
@@ -450,30 +487,30 @@ class Container(containers.DeclarativeContainer):
         registry=env_index_registry,
     )
 
-    extension_exclude_svc = providers.Singleton(
-        ExtensionExcludeService,
+    extension_exclude_svc: providers.Singleton[ExtensionExcludeService] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.extension_exclude_service:ExtensionExcludeService"),
         config=workspace_config,
         fs=fs,
         manifest_loader=extension_manifest_loader,
         exclude_locator=workspace_exclude_locator,
     )
 
-    extension_agentsmd_svc = providers.Singleton(
-        ExtensionAgentsMdService,
+    extension_agentsmd_svc: providers.Singleton[ExtensionAgentsMdService] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.extension_agentsmd_service:ExtensionAgentsMdService"),
         config=workspace_config,
         fs=fs,
         manifest_loader=extension_manifest_loader,
     )
 
-    workspace_skill_svc = providers.Singleton(
-        WorkspaceSkillService,
+    workspace_skill_svc: providers.Singleton[WorkspaceSkillService] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.workspace_skill_service:WorkspaceSkillService"),
         config=workspace_config,
         fs=fs,
         exclude_locator=workspace_exclude_locator,
     )
 
-    prune_svc = providers.Factory(
-        PruneService,
+    prune_svc: providers.Factory[PruneService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.prune_service:PruneService"),
         config=workspace_config,
         repo_factory=repo_factory,
         extension_exclude_svc=extension_exclude_svc,
@@ -484,28 +521,30 @@ class Container(containers.DeclarativeContainer):
 
     # Reads and writes another workspace root's config files — how a nested
     # workspace receives the port band and prefix its outer env delegates.
-    local_overlay_repo = providers.Singleton(
-        TomlkitLocalOverlayRepository,
+    local_overlay_repo: providers.Singleton[TomlkitLocalOverlayRepository] = providers.Singleton(
+        _lazy("winter_cli.config.internal.tomlkit_local_overlay_repository:TomlkitLocalOverlayRepository"),
         fs=fs,
         config_file_reader=config_file_reader,
     )
 
     # Runs a `nested = true` repo's own winter CLI inside each env's worktree of
     # it — `winter` from PATH, so the shim resolves the nested root's CLI.
-    nested_workspace_runner = providers.Singleton(
-        SubprocessNestedWorkspaceRunner,
+    nested_workspace_runner: providers.Singleton[SubprocessNestedWorkspaceRunner] = providers.Singleton(
+        _lazy(
+            "winter_cli.modules.workspace.internal.subprocess_nested_workspace_runner:SubprocessNestedWorkspaceRunner"
+        ),
         subprocess_runner=subprocess_runner,
         error_factory=repo_error_factory,
     )
-    outer_env_port_bases = providers.Factory(
-        EnvPortBaseResolver,
+    outer_env_port_bases: providers.Factory[EnvPortBaseResolver] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.env_index:EnvPortBaseResolver"),
         config=workspace_config,
         registry=env_index_registry,
     )
     # One per process: it verifies each nested root once and reuses that for
     # every later call into it, across init, status, and destroy.
-    nested_workspace_svc = providers.Singleton(
-        NestedWorkspaceService,
+    nested_workspace_svc: providers.Singleton[NestedWorkspaceService] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.nested_workspace_service:NestedWorkspaceService"),
         runner=nested_workspace_runner,
         fs=fs,
         workspace_root=workspace_config.provided.workspace_root,
@@ -523,8 +562,8 @@ class Container(containers.DeclarativeContainer):
     # env_status_svc, worktree_repo, repo_factory, plus the non-config-derived
     # collaborators below) per poll from its own reloaded config — a
     # constructor change here must be mirrored there too.
-    workspace_snapshot_svc = providers.Factory(
-        WorkspaceSnapshotService,
+    workspace_snapshot_svc: providers.Factory[WorkspaceSnapshotService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.workspace_snapshot_service:WorkspaceSnapshotService"),
         workspace=workspace,
         env_status_svc=env_status_svc,
         workspace_repo=worktree_repo,
@@ -543,8 +582,8 @@ class Container(containers.DeclarativeContainer):
     # resolves the container only once, at launch) surfaces repos/envs/
     # standalones added after launch. Singleton so it accumulates the
     # last-good config across polls (see DashboardSnapshotService).
-    dashboard_snapshot_svc = providers.Singleton(
-        DashboardSnapshotService,
+    dashboard_snapshot_svc: providers.Singleton[DashboardSnapshotService] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.dashboard_snapshot_service:DashboardSnapshotService"),
         workspace_config_svc=workspace_config_svc,
         repo_error_factory=repo_error_factory,
         repo_repo=repo_repo,
@@ -556,8 +595,8 @@ class Container(containers.DeclarativeContainer):
         tracer=command_tracer,
     )
 
-    init_svc = providers.Factory(
-        InitService,
+    init_svc: providers.Factory[InitService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.init_service:InitService"),
         config=workspace_config,
         repo_factory=repo_factory,
         extension_symlink_svc=extension_symlink_svc,
@@ -578,8 +617,8 @@ class Container(containers.DeclarativeContainer):
 
     # Command-band execution seam — the only new `subprocess` import site for
     # command-valued env-band entries. Fixed cwd at the workspace root.
-    command_entry_runner = providers.Singleton(
-        SubprocessCommandEntryRunner,
+    command_entry_runner: providers.Singleton[SubprocessCommandEntryRunner] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.internal.subprocess_command_entry_runner:SubprocessCommandEntryRunner"),
         workspace_root=workspace_config.provided.workspace_root,
         error_factory=repo_error_factory,
     )
@@ -596,48 +635,48 @@ class Container(containers.DeclarativeContainer):
         band_resolver=env_band_resolver,
     )
 
-    stream_reporter = providers.Factory(
-        StreamReporter,
+    stream_reporter: providers.Factory[StreamReporter] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.init_reporter:StreamReporter"),
         click=providers.Object(click),
     )
 
-    json_reporter = providers.Factory(
-        JsonReporter,
+    json_reporter: providers.Factory[JsonReporter] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.init_reporter:JsonReporter"),
         click=providers.Object(click),
     )
 
-    stream_fetch_reporter = providers.Factory(
-        StreamFetchReporter,
+    stream_fetch_reporter: providers.Factory[StreamFetchReporter] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.fetch_reporter:StreamFetchReporter"),
         click=providers.Object(click),
     )
 
-    json_fetch_reporter = providers.Factory(
-        JsonFetchReporter,
+    json_fetch_reporter: providers.Factory[JsonFetchReporter] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.fetch_reporter:JsonFetchReporter"),
         click=providers.Object(click),
     )
 
-    stream_pull_reporter = providers.Factory(
-        StreamPullReporter,
+    stream_pull_reporter: providers.Factory[StreamPullReporter] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.pull_reporter:StreamPullReporter"),
         click=providers.Object(click),
     )
 
-    json_pull_reporter = providers.Factory(
-        JsonPullReporter,
+    json_pull_reporter: providers.Factory[JsonPullReporter] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.pull_reporter:JsonPullReporter"),
         click=providers.Object(click),
     )
 
-    stream_merge_reporter = providers.Factory(
-        StreamMergeReporter,
+    stream_merge_reporter: providers.Factory[StreamMergeReporter] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.merge_reporter:StreamMergeReporter"),
         click=providers.Object(click),
     )
 
-    json_merge_reporter = providers.Factory(
-        JsonMergeReporter,
+    json_merge_reporter: providers.Factory[JsonMergeReporter] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.merge_reporter:JsonMergeReporter"),
         click=providers.Object(click),
     )
 
-    reporter_factory = providers.Singleton(
-        ReporterFactory,
+    reporter_factory: providers.Singleton[ReporterFactory] = providers.Singleton(
+        _lazy("winter_cli.modules.workspace.reporter_factory:ReporterFactory"),
         stream_init_reporter=stream_reporter.provider,
         json_init_reporter=json_reporter.provider,
         stream_fetch_reporter=stream_fetch_reporter.provider,
@@ -648,8 +687,8 @@ class Container(containers.DeclarativeContainer):
         json_merge_reporter=json_merge_reporter.provider,
     )
 
-    workspace_handler = providers.Factory(
-        WorkspaceHandler,
+    workspace_handler: providers.Factory[WorkspaceHandler] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.handlers.workspace_handler:WorkspaceHandler"),
         env_status_svc=env_status_svc,
         workspace_sync_svc=workspace_sync_svc,
         workspace_push_svc=workspace_push_svc,
@@ -672,8 +711,8 @@ class Container(containers.DeclarativeContainer):
         plugin_registry=plugin_registry,
     )
 
-    repo_handler = providers.Factory(
-        RepoHandler,
+    repo_handler: providers.Factory[RepoHandler] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.handlers.repo_handler:RepoHandler"),
         repo_factory=repo_factory,
         drift_warning_svc=drift_warning_svc,
         cli_output_svc=cli_output_svc,
@@ -682,25 +721,25 @@ class Container(containers.DeclarativeContainer):
         workspace=workspace,
     )
 
-    init_handler = providers.Factory(
-        InitHandler,
+    init_handler: providers.Factory[InitHandler] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.handlers.init_handler:InitHandler"),
         init_service=init_svc,
         reporter_factory=reporter_factory,
     )
 
-    workspace_fingerprint_svc = providers.Factory(
-        WorkspaceFingerprintService,
+    workspace_fingerprint_svc: providers.Factory[WorkspaceFingerprintService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.workspace_fingerprint_service:WorkspaceFingerprintService"),
         repo_factory=repo_factory,
         git_repo=git_repo,
     )
 
-    fingerprint_handler = providers.Factory(
-        FingerprintHandler,
+    fingerprint_handler: providers.Factory[FingerprintHandler] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.handlers.fingerprint_handler:FingerprintHandler"),
         fingerprint_svc=workspace_fingerprint_svc,
     )
 
-    restack_handler = providers.Factory(
-        RestackHandler,
+    restack_handler: providers.Factory[RestackHandler] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.handlers.restack_handler:RestackHandler"),
         plan_svc=env_restack_plan_svc,
         execute_svc=env_restack_svc,
         repo_factory=repo_factory,
@@ -892,7 +931,9 @@ class Container(containers.DeclarativeContainer):
         agent_copy_inspector=agent_copy_inspector,
         # Built per `build()` from that call's reloaded config, with the same
         # `fs` the `repo_factory` singleton binding uses.
-        repo_factory_for=providers.Factory(RepositoryFactory, fs=fs).provider,
+        repo_factory_for=providers.Factory(
+            _lazy("winter_cli.modules.workspace.repository_factory:RepositoryFactory"), fs=fs
+        ).provider,
     )
 
     stream_agent_matrix_reporter = providers.Factory(
@@ -1080,8 +1121,8 @@ class Container(containers.DeclarativeContainer):
         workspace=workspace,
     )
 
-    destroy_svc = providers.Factory(
-        DestroyService,
+    destroy_svc: providers.Factory[DestroyService] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.destroy_service:DestroyService"),
         config=workspace_config,
         repo_factory=repo_factory,
         extension_hook_svc=extension_hook_svc,
@@ -1093,8 +1134,8 @@ class Container(containers.DeclarativeContainer):
         nested_svc=nested_workspace_svc,
     )
 
-    destroy_handler = providers.Factory(
-        DestroyHandler,
+    destroy_handler: providers.Factory[DestroyHandler] = providers.Factory(
+        _lazy("winter_cli.modules.workspace.handlers.destroy_handler:DestroyHandler"),
         destroy_service=destroy_svc,
         reporter_factory=reporter_factory,
         workspace_repo=worktree_repo,

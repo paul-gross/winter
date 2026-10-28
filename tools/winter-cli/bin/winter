@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Resolve which winter-cli source tree to run, then exec it via uv.
+# Resolve which winter-cli source tree to run, then exec its venv's entrypoint.
 #
 # Default: walks up from $PWD, finds the workspace root (the dir containing
 # both .winter/config.toml and tools/winter-cli/), and runs the winter-cli
@@ -16,6 +16,14 @@
 # worktree `.git` files against `process.cwd()` (not the worktree's
 # location), so we anchor cwd at the well-known two-deep location the
 # workspace's git layout was built around.
+#
+# Launcher cost: when the venv is current the shim execs the venv's `winter`
+# directly, skipping `uv run`'s own project resolution on every launch. The venv
+# counts as current when its entrypoint and the shim's sync stamp exist and none
+# of uv.lock, pyproject.toml, or .python-version is newer than the stamp;
+# otherwise the shim runs `uv sync` first (its output goes to stderr, so --json
+# stdout stays clean) and re-stamps. The project is installed editable, so source
+# edits never need a sync.
 #
 # Launch time: the first statement exports WINTER_LAUNCH_TIME (the instant this
 # shim started) so the CLI's tracing span covers the launcher gap — the uv
@@ -35,7 +43,7 @@ set -euo pipefail
 # propagate. install.sh reads this (via grep, not by sourcing) to compare
 # against the currently-installed shim and refuses to downgrade it — see
 # install.sh. Not tied to the Python CLI's own package version.
-WINTER_SHIM_VERSION=3
+WINTER_SHIM_VERSION=4
 
 # Bootstrap: `winter init` breaks the chicken-and-egg on a fresh clone, where
 # `.winter/config.toml` doesn't exist yet so the root-detection below has
@@ -94,4 +102,32 @@ fi
 export WINTER_INVOCATION_CWD="$PWD"
 
 cd "$ws/tools/winter-cli"
-exec uv run --project "$cli" winter "$@"
+# The venv uv would use: UV_PROJECT_ENVIRONMENT (relative to the project) or .venv.
+venv="${UV_PROJECT_ENVIRONMENT:-.venv}"
+if [[ "$venv" != /* ]]; then
+  venv="$cli/$venv"
+fi
+stamp="$venv/.winter-sync-stamp"
+
+stale=0
+if [[ ! -x "$venv/bin/winter" || ! -f "$stamp" ]]; then
+  stale=1
+else
+  for input in "$cli/uv.lock" "$cli/pyproject.toml" "$cli/.python-version"; do
+    if [[ -e "$input" && "$input" -nt "$stamp" ]]; then
+      stale=1
+      break
+    fi
+  done
+fi
+if [[ "$stale" -eq 1 ]]; then
+  uv sync --project "$cli" >&2
+  touch "$stamp"
+fi
+
+# Reproduce `uv run`'s environment contract: children (extension entrypoints exec
+# `python3`) resolve the venv's interpreter, and nested_env scrubs exactly this pair.
+unset PYTHONHOME
+export VIRTUAL_ENV="$venv"
+export PATH="$venv/bin:$PATH"
+exec "$venv/bin/winter" "$@"

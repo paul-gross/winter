@@ -9,8 +9,10 @@ Installing the `winter` CLI requires `uv` 0.13 (it provisions Python 3.14 for th
 ```
 
 This copies the `winter` wrapper to `~/.local/bin/`. The wrapper auto-discovers the workspace root by searching upward
-for `.winter/config.toml` + `tools/winter-cli/`, then runs `uv run` against `tools/winter-cli/` — no manual virtualenv
-setup needed.
+for `.winter/config.toml` + `tools/winter-cli/`, then execs the `tools/winter-cli/` virtualenv's `winter` entrypoint
+directly. It runs `uv sync` first, with its output on stderr, when the venv is missing or `uv.lock`, `pyproject.toml`,
+or `.python-version` is newer than the shim's sync stamp (`.winter-sync-stamp` inside the venv) — no manual virtualenv
+setup needed. `UV_PROJECT_ENVIRONMENT` relocates the venv, as it does for uv.
 
 ## Upgrading from a mise-era install
 

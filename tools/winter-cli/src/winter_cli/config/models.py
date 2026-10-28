@@ -179,6 +179,8 @@ class DashboardLayout(enum.Enum):
 class GitIdentity(BaseModel):
     """Git author identity applied to every repo winter-cli manages."""
 
+    model_config = ConfigDict(defer_build=True)
+
     name: str
     email: str
 
@@ -190,6 +192,8 @@ class SingletonRepository(BaseModel):
     when the corresponding directory exists. They carry only an identifier and the
     role they play.
     """
+
+    model_config = ConfigDict(defer_build=True)
 
     name: str
     """Directory name and user-facing label."""
@@ -204,6 +208,8 @@ class ProjectRepositoryConfig(BaseModel):
     Project repos are cloned to `projects/` and worktreed into Greek-letter feature
     directories. They participate in feature branching unless `pinned = true`.
     """
+
+    model_config = ConfigDict(defer_build=True)
 
     name: str | None = None
     """Directory name and user-facing label.
@@ -301,6 +307,8 @@ class StandaloneRepositoryConfig(BaseModel):
     skipped during feature branching, and may opt into extension behavior via
     a `winter-ext.toml` file.
     """
+
+    model_config = ConfigDict(defer_build=True)
 
     name: str | None = None
     """Directory name and user-facing label.
@@ -426,7 +434,7 @@ class ModelTiersConfig(BaseModel):
     See ``context/winter/cli/configuration/agents.md`` for the full reference.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, defer_build=True)
 
     tiers: dict[str, dict[str, str]] = Field(default_factory=dict)
     """Per-tier-label entries.  Each value is a dict of vendor label → concrete model id."""
@@ -473,7 +481,7 @@ class AgentModelOverridesConfig(BaseModel):
     See ``context/winter/cli/configuration/agents.md`` for the full reference.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, defer_build=True)
 
     overrides: Mapping[str, str | Mapping[str, str | AgentModelOverrideProfile]] = Field(default_factory=dict)
     """Per-agent entries: a tier string for all vendors, or per-vendor model ids/profiles."""
@@ -516,6 +524,8 @@ class FileSizeLintConfig(BaseModel):
         reference_bytes = 12000
     """
 
+    model_config = ConfigDict(defer_build=True)
+
     injected_bytes: int = 6000
     """Maximum effective byte size for files in the auto-injected @import graph (default 6 000)."""
 
@@ -535,6 +545,8 @@ class DashboardConfig(BaseModel):
       while remote is per-repo (each worktree's own upstream) and shows on every row.
     """
 
+    model_config = ConfigDict(defer_build=True)
+
     layout: DashboardLayout = DashboardLayout.auto
     """Grid layout mode for the dashboard."""
 
@@ -548,6 +560,8 @@ class KeybindingsConfig(BaseModel):
     token `<leader>` expands to, and `timeoutlen` is the inter-key deadline (ms)
     for multi-key chord sequences, mirroring Neovim's option of the same name.
     """
+
+    model_config = ConfigDict(defer_build=True)
 
     leader: str = "\\"
     """Key spec that `<leader>` expands to (default backslash, Neovim's default)."""
@@ -598,7 +612,7 @@ class EnvCommandEntry(BaseModel):
     only validates shape here — nothing runs the command yet.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, defer_build=True)
 
     command: str
     """The command line to run.  ``${...}`` tokens are rendered before execution."""
@@ -637,7 +651,7 @@ class EnvVarBands(BaseModel):
     table (see ``EnvBandValue``).
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, defer_build=True)
 
     workspace: dict[str, EnvBandValue] = Field(default_factory=dict)
     """Vars from ``[env.workspace.vars]`` — workspace scope only."""
@@ -722,7 +736,7 @@ class SpaceConfig(BaseModel):
         logs = "/var/log/winter"    # -> absolute, outside the space root
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, defer_build=True)
 
     root: str = ".winter"
     """Space root. Workspace-relative (default ``.winter``), home-relative (``~``), or absolute."""
@@ -734,6 +748,8 @@ class SpaceConfig(BaseModel):
 
 class WorkspaceConfig(BaseModel):
     """Immutable configuration snapshot for the current workspace."""
+
+    model_config = ConfigDict(defer_build=True)
 
     workspace_root: Path
     """Absolute path to the workspace root, identified by the presence of a .winter/ directory."""

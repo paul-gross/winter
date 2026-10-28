@@ -46,7 +46,7 @@ def _invoke(args: list[str]) -> tuple[_CapturingHandler, Result]:
     handler = _CapturingHandler()
     container = MagicMock()
     container.restack_handler.return_value = handler
-    ctx = CliContext(container=container)
+    ctx = CliContext.of(container)
     result = CliRunner().invoke(ws_restack, args, obj=ctx, catch_exceptions=False)
     return handler, result
 

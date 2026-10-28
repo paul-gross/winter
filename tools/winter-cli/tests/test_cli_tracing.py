@@ -18,7 +18,7 @@ from click.testing import CliRunner
 from dependency_injector import providers
 
 from winter_cli import cli as cli_module
-from winter_cli.cli import _cli_group, _exit_error_type, _tracing_settings_from_environment
+from winter_cli.cli import LazySubcommand, _cli_group, _exit_error_type, _tracing_settings_from_environment
 from winter_cli.cli_context import CliContext, cli_ctx
 from winter_cli.container import Container
 from winter_cli.core.internal.noop_command_tracer import NoopCommandTracer
@@ -132,14 +132,17 @@ def nested_leaf_cmd(flag: bool) -> None:
 
 
 _TEST_COMMANDS = {
-    "ok": "tests.test_cli_tracing:ok_cmd",
-    "sys-exit": "tests.test_cli_tracing:sys_exit_cmd",
-    "sys-exit-none": "tests.test_cli_tracing:sys_exit_none_cmd",
-    "ctx-exit": "tests.test_cli_tracing:ctx_exit_cmd",
-    "repo-error": "tests.test_cli_tracing:repo_error_cmd",
-    "boom": "tests.test_cli_tracing:boom_cmd",
-    "usage-error": "tests.test_cli_tracing:usage_error_cmd",
-    "nested": "tests.test_cli_tracing:nested_group",
+    k: LazySubcommand(v, "")
+    for k, v in {
+        "ok": "tests.test_cli_tracing:ok_cmd",
+        "sys-exit": "tests.test_cli_tracing:sys_exit_cmd",
+        "sys-exit-none": "tests.test_cli_tracing:sys_exit_none_cmd",
+        "ctx-exit": "tests.test_cli_tracing:ctx_exit_cmd",
+        "repo-error": "tests.test_cli_tracing:repo_error_cmd",
+        "boom": "tests.test_cli_tracing:boom_cmd",
+        "usage-error": "tests.test_cli_tracing:usage_error_cmd",
+        "nested": "tests.test_cli_tracing:nested_group",
+    }.items()
 }
 
 
@@ -169,7 +172,7 @@ def tracer(monkeypatch: pytest.MonkeyPatch) -> FakeCommandTracer:
 
     monkeypatch.setattr("winter_cli.container.Container", build_container)
     monkeypatch.setattr(
-        "winter_cli.modules.workspace.internal.git_ops_service.ensure_ssh_keepalives",
+        "winter_cli.cli.ensure_ssh_keepalives",
         lambda: None,
     )
     monkeypatch.setattr(_cli_group, "_lazy_subcommands", _TEST_COMMANDS)
@@ -211,7 +214,7 @@ def _run_cli(monkeypatch: pytest.MonkeyPatch, *argv: str) -> int | BaseException
 def test_span_is_named_by_the_full_click_path(
     args: list[str], expected: str, real_tree_tracer: FakeCommandTracer
 ) -> None:
-    ctx = click.Context(_cli_group, obj=CliContext(container=_container_with(real_tree_tracer)))
+    ctx = click.Context(_cli_group, obj=CliContext.of(_container_with(real_tree_tracer)))
 
     _cli_group.resolve_command(ctx, args)
 
@@ -219,7 +222,7 @@ def test_span_is_named_by_the_full_click_path(
 
 
 def test_unknown_command_opens_no_span(real_tree_tracer: FakeCommandTracer) -> None:
-    ctx = click.Context(_cli_group, obj=CliContext(container=_container_with(real_tree_tracer)))
+    ctx = click.Context(_cli_group, obj=CliContext.of(_container_with(real_tree_tracer)))
 
     with pytest.raises(click.UsageError):
         _cli_group.resolve_command(ctx, ["no-such-command"])
@@ -229,7 +232,7 @@ def test_unknown_command_opens_no_span(real_tree_tracer: FakeCommandTracer) -> N
 
 def test_resilient_resolution_opens_no_span(real_tree_tracer: FakeCommandTracer) -> None:
     """Shell completion resolves commands with `resilient_parsing`; that is not a command run."""
-    ctx = click.Context(_cli_group, obj=CliContext(container=_container_with(real_tree_tracer)), resilient_parsing=True)
+    ctx = click.Context(_cli_group, obj=CliContext.of(_container_with(real_tree_tracer)), resilient_parsing=True)
 
     _cli_group.resolve_command(ctx, ["ws", "init"])
 
@@ -237,7 +240,7 @@ def test_resilient_resolution_opens_no_span(real_tree_tracer: FakeCommandTracer)
 
 
 def test_nested_path_stops_at_options_and_unknown_names(tracer: FakeCommandTracer) -> None:
-    ctx = click.Context(_cli_group, obj=CliContext(container=_container_with(tracer)))
+    ctx = click.Context(_cli_group, obj=CliContext.of(_container_with(tracer)))
 
     _cli_group.resolve_command(ctx, ["nested", "leaf", "--flag"])
     ctx.meta.clear()
@@ -280,10 +283,12 @@ def test_export_runs_once_for_an_uncaught_exception(tracer: FakeCommandTracer, m
     assert tracer.events == [("start", "winter boom"), ("end", "RuntimeError"), ("export", None)]
 
 
-def test_export_runs_once_when_no_command_runs(tracer: FakeCommandTracer, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_container_is_built_when_no_command_runs(tracer: FakeCommandTracer, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The container is built on first need; a run that never reaches a command has no tracer to export."""
     assert _run_cli(monkeypatch, "no-such-command") == 2
 
-    assert tracer.events == [("export", None)]
+    assert tracer.events == []
+    assert seen["built"] == []
 
 
 # ── Background export belongs to the dashboard alone ─────────────────────────
@@ -312,7 +317,7 @@ def test_the_dashboard_starts_background_export_before_the_app_runs_and_exports_
             tracer.events.append(("app_run", None))
 
     monkeypatch.setattr("winter_cli.modules.tui.app.WinterDashboardApp", _App)
-    monkeypatch.setitem(_TEST_COMMANDS, "dashboard", "winter_cli.modules.tui.command:dashboard")
+    monkeypatch.setitem(_TEST_COMMANDS, "dashboard", LazySubcommand("winter_cli.modules.tui.command:dashboard", ""))
 
     assert _run_cli(monkeypatch, "dashboard") == 0
 

@@ -36,7 +36,7 @@ def _make_ctx() -> tuple[CliContext, _RecordingProvisionCommandHandler]:
     fake_handler = _RecordingProvisionCommandHandler()
     container = MagicMock()
     container.provision_command_handler.return_value = fake_handler
-    return CliContext(container=container), fake_handler
+    return CliContext.of(container), fake_handler
 
 
 class TestProvisionCommandActionMapping:

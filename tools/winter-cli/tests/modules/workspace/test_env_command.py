@@ -78,7 +78,7 @@ def _make_ctx(
     container = MagicMock()
     container.env_provisioner.return_value = provisioner or _FakeProvisioner(provisioner_responses, error_scope)
     container.env_index_registry.return_value = registry_mock
-    return CliContext(container=container)
+    return CliContext.of(container)
 
 
 def _invoke(scope: str, ctx: CliContext | None = None, *extra_args: str) -> Result:
