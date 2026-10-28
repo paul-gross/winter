@@ -45,8 +45,8 @@ either way.
 - Creating per-repo `git worktree`s on a branch matching the worktree name
 - Stamping git identity from `.winter/config.local.toml`
 - Writing `git_excludes` (workspace-wide and per-repo) into each repo's `.git/info/exclude`
-- Running each repo's `cmd` list — a lightweight trust/bootstrap step (e.g. `mise trust`, `direnv allow`), **not** full
-  dependency installation
+- Running each repo's `cmd` list — a lightweight trust/bootstrap step (e.g. `direnv allow`), **not** full dependency
+  installation
 - Running every installed extension's `on_env_init` hook
 
 `winter provision <letter>` handles **readiness** via `[[provision.*]]` handlers declared in `.winter/config.toml` and
@@ -70,7 +70,7 @@ Rule of thumb:
 - **Goes in `[[provision.*]]` handler:** a single script that can be run idempotently with no branching logic; install,
   create, or seed steps.
 - **Goes in config (`cmd` list):** a one-line trust/bootstrap step that must run before anything else (e.g.
-  `mise trust`).
+  `direnv allow`).
 - **Stays in project-setup.md:** anything conditional, multi-step, or that references dynamic `<letter>`/`<index>`
   values in ways a handler script can't easily parameterise.
 
@@ -123,13 +123,13 @@ step themselves to enable winter functionality for it. A fabricated, untested se
 surface the gap and let the user wire it up.
 
 The repo's `cmd` list in `.winter/config.toml` is reserved for lightweight trust/bootstrap steps that must run before
-anything else (e.g. `mise trust`, `direnv allow`):
+anything else (e.g. `direnv allow`):
 
 ```toml
 [[project_repository]]
 name = "my-app"
 url = "..."
-cmd = ["mise trust"]
+cmd = ["direnv allow"]
 ```
 
 If the install needs branching, env-dependent decisions, or post-install steps that read environment state, document it

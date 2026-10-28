@@ -227,7 +227,7 @@ class ProjectRepositoryConfig(BaseModel):
     cmd: list[str] = Field(default_factory=list)
     """Shell commands run idempotently after clone and in every worktree.
 
-    This is a lightweight trust/bootstrap step (e.g. the `mise trust` equivalent),
+    This is a lightweight trust/bootstrap step (e.g. the `direnv allow` equivalent),
     NOT dependency installation. `winter ws init` stays purely structural; declare
     dependency installs, resource creation, and data loading as `[[provision.*]]`
     handlers run by `winter provision <env>` instead."""
@@ -367,7 +367,7 @@ class StandaloneRepositoryConfig(BaseModel):
     cmd: list[str] = Field(default_factory=list)
     """Shell commands run idempotently after clone.
 
-    A lightweight trust/bootstrap step (e.g. the `mise trust` equivalent), NOT
+    A lightweight trust/bootstrap step (e.g. the `direnv allow` equivalent), NOT
     dependency installation — declare those as `[[provision.*]]` handlers run by
     `winter provision` instead."""
 

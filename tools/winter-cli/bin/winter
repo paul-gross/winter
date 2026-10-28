@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Resolve which winter-cli source tree to run, then exec it via mise+uv.
+# Resolve which winter-cli source tree to run, then exec it via uv.
 #
 # Default: walks up from $PWD, finds the workspace root (the dir containing
 # both .winter/config.toml and tools/winter-cli/), and runs the winter-cli
@@ -18,8 +18,8 @@
 # workspace's git layout was built around.
 #
 # Launch time: the first statement exports WINTER_LAUNCH_TIME (the instant this
-# shim started) so the CLI's tracing span covers the launcher gap — the mise
-# and uv startup before Python runs. Bash < 5 has no EPOCHREALTIME; there the
+# shim started) so the CLI's tracing span covers the launcher gap — the uv
+# startup before Python runs. Bash < 5 has no EPOCHREALTIME; there the
 # variable is simply not exported and the span starts at command dispatch.
 
 # Must stay the first statement so the instant is as early as the shim can
@@ -35,7 +35,7 @@ set -euo pipefail
 # propagate. install.sh reads this (via grep, not by sourcing) to compare
 # against the currently-installed shim and refuses to downgrade it — see
 # install.sh. Not tied to the Python CLI's own package version.
-WINTER_SHIM_VERSION=2
+WINTER_SHIM_VERSION=3
 
 # Bootstrap: `winter init` breaks the chicken-and-egg on a fresh clone, where
 # `.winter/config.toml` doesn't exist yet so the root-detection below has
@@ -94,4 +94,4 @@ fi
 export WINTER_INVOCATION_CWD="$PWD"
 
 cd "$ws/tools/winter-cli"
-exec mise -C "$cli" exec -- uv run --project "$cli" winter "$@"
+exec uv run --project "$cli" winter "$@"

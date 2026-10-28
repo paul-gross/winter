@@ -44,7 +44,7 @@ sampled flag.
 ## Launcher-gap coverage
 
 The `winter` launcher shim exports `WINTER_LAUNCH_TIME` as its first statement, so the span starts when the shim does
-and covers the `mise` and `uv` startup before Python runs, a gap of a few hundred milliseconds. Re-run
+and covers the `uv` startup before Python runs, a gap of a few hundred milliseconds. Re-run
 `./tools/winter-cli/install.sh` to enable it: the shim in `~/.local/bin` is a copy, and the installer replaces it only
 when the source shim's version is newer. Until then the span starts at command dispatch. The same holds on a bash
 without `$EPOCHREALTIME` (bash older than 5), where the shim exports nothing.

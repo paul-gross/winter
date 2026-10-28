@@ -178,7 +178,7 @@ reachable from one `winter` command.
 winter dashboard
 ```
 
-Requires `mise` (dependencies are managed automatically). See `context/winter/cli/index.md` for the full command
+Requires `uv` 0.13 (dependencies are managed automatically). See `context/winter/cli/index.md` for the full command
 reference, including [configurable dashboard keybindings](context/winter/cli/usage/dashboard.md#keybindings) (remap any
 action, with Neovim-style chord sequences).
 

@@ -16,7 +16,7 @@ installed extension's `winter-ext.toml` — as an array-of-tables under one of t
 [[provision.dependency]]
 scope = "feature-worktree"
 # Single inline command (string form):
-apply = "uv sync && mise trust"
+apply = "uv sync"
 
 [[provision.resource]]
 scope            = "workspace"

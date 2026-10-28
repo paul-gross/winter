@@ -50,7 +50,6 @@ TUI_SUPPRESS_ENV = {
     "PIP_PROGRESS_BAR": "off",
     "DOTNET_NOLOGO": "1",
     "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
-    "MISE_QUIET": "true",
 }
 
 
@@ -619,7 +618,7 @@ class InitService:
         """Wire pinned + inferred tracking, isolated from the repo's cmd bootstrap.
 
         Tracking config is independent of the repo's `cmd` list (trust/bootstrap
-        steps like `mise trust`, `direnv allow`). A failure wiring tracking must
+        steps like `direnv allow`). A failure wiring tracking must
         not short-circuit `_run_cmds`, so a `RepoError` here is caught rather than
         left to propagate to the reconcile `try` (which would skip the cmd list
         entirely). It is still a real per-repo failure — e.g. a worktree with a

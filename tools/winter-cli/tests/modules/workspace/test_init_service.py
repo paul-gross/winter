@@ -1605,7 +1605,7 @@ def _connected_env_config_with_cmd() -> WorkspaceConfig:
         git_identity=GitIdentity(name="Bot", email="bot@example.com"),
         project_repos=[
             ProjectRepositoryConfig(name="alpha-repo", url="git@example.com:org/alpha-repo.git"),
-            ProjectRepositoryConfig(name="beta-repo", url="git@example.com:org/beta-repo.git", cmd=["mise trust"]),
+            ProjectRepositoryConfig(name="beta-repo", url="git@example.com:org/beta-repo.git", cmd=["direnv allow"]),
         ],
     )
 
@@ -1645,7 +1645,7 @@ def test_reconcile_env_wires_unpushed_inferred_upstream_and_runs_cmd(
     # The env is connected to a feature branch that was never pushed.
     git.tracking_branches[alpha_worktree] = "origin/feature/foo"
 
-    subprocess = FakeSubprocessRunner(popen_responses={"mise trust": (["trusted"], 0)})
+    subprocess = FakeSubprocessRunner(popen_responses={"direnv allow": (["trusted"], 0)})
     svc = _service(cfg, fs, subprocess, git)
     ok = svc.reconcile_env("myenv", init_reporter)
 
@@ -1657,7 +1657,7 @@ def test_reconcile_env_wires_unpushed_inferred_upstream_and_runs_cmd(
     inferred = [a for a in init_reporter.actions if a[2] == "upstream_inferred"]
     assert inferred and inferred[0][0] == "beta-repo" and inferred[0][3] == "origin/feature/foo"
     # The repo's cmd list executed.
-    assert ("beta-repo", "mise trust", 0) in init_reporter.cmds_completed
+    assert ("beta-repo", "direnv allow", 0) in init_reporter.cmds_completed
 
 
 class _UpstreamRefusingGitRepository(FakeGitRepository):
@@ -1705,7 +1705,7 @@ def test_reconcile_env_upstream_failure_does_not_skip_cmd(
     git.local_branches[beta_main] = ["main"]
     git.tracking_branches[alpha_worktree] = "origin/feature/foo"
 
-    subprocess = FakeSubprocessRunner(popen_responses={"mise trust": (["trusted"], 0)})
+    subprocess = FakeSubprocessRunner(popen_responses={"direnv allow": (["trusted"], 0)})
     svc = _service(cfg, fs, subprocess, git)
     ok = svc.reconcile_env("myenv", init_reporter)
 
@@ -1714,7 +1714,7 @@ def test_reconcile_env_upstream_failure_does_not_skip_cmd(
     beta_errors = [msg for repo, msg in init_reporter.errors if repo == "beta-repo"]
     assert beta_errors and "set-upstream-to" in beta_errors[0]
     # The cmd list ran regardless of the upstream failure.
-    assert ("beta-repo", "mise trust", 0) in init_reporter.cmds_completed
+    assert ("beta-repo", "direnv allow", 0) in init_reporter.cmds_completed
 
 
 # ── _run_per_repo: unexpected-exception backstop ───────────────────────────

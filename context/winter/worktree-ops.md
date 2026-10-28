@@ -87,8 +87,7 @@ Greek letters (`alpha`, `beta`, …) are the convention. The first 10 (`alpha`�
 receive fixed port-offset indices; other names hash into a higher band. Any valid directory name is accepted.
 
 After this runs, `winter ws init` is structural — it creates the worktrees, allocates the env index, and runs each
-repo's `cmd` list as a lightweight trust/bootstrap step (e.g. `mise trust`, `direnv allow`), not full dependency
-installation.
+repo's `cmd` list as a lightweight trust/bootstrap step (e.g. `direnv allow`), not full dependency installation.
 
 To bring the environment to a working state, run:
 

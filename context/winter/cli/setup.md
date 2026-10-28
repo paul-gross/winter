@@ -1,6 +1,6 @@
 # Winter CLI — Install
 
-Installing the `winter` CLI requires Python 3.13 or newer, `mise`, and `uv`.
+Installing the `winter` CLI requires `uv` 0.13 (it provisions Python 3.14 for the CLI).
 
 ## Installation
 
@@ -9,7 +9,13 @@ Installing the `winter` CLI requires Python 3.13 or newer, `mise`, and `uv`.
 ```
 
 This copies the `winter` wrapper to `~/.local/bin/`. The wrapper auto-discovers the workspace root by searching upward
-for `.winter/config.toml` + `tools/winter-cli/`, then runs via `mise` and `uv` — no manual virtualenv setup needed.
+for `.winter/config.toml` + `tools/winter-cli/`, then runs `uv run` against `tools/winter-cli/` — no manual virtualenv
+setup needed.
+
+## Upgrading from a mise-era install
+
+Earlier installs ran the CLI through `mise`. Upgrade `uv` to 0.13 (`uv self update`), then re-run
+`./tools/winter-cli/install.sh` to replace the old shim; `mise` is no longer used.
 
 ## Bootstrap order
 

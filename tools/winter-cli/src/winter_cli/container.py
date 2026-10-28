@@ -136,7 +136,7 @@ class FreshInitServiceFactory:
     every child process non-interactively: the subprocess runner gives children
     `/dev/null` stdin and `GIT_TERMINAL_PROMPT=0`, and a clone gets the same git
     switch. git's own HTTPS credential prompt is then disabled, and a child that
-    reads stdin (`mise trust`, a hook) sees EOF. A prompt that opens the terminal
+    reads stdin (`direnv allow`, a hook) sees EOF. A prompt that opens the terminal
     directly — an ssh passphrase or host-key prompt — is not covered and can still
     stall the run.
 
