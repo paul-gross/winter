@@ -126,6 +126,12 @@ implementations you can study and adapt each ship as their own repos, and compos
   service orchestration: one headless daemon per scope, with the tmux manifest schema and real readiness probes
 - **[winter-product](https://github.com/paul-gross/winter-product)** — a basic git-backed product backlog for refining
   ideas, product plans, technical plans, and phase documents; forkable, so you can keep your own product history
+- **[winter-product-requirements](https://github.com/paul-gross/winter-product-requirements)** — rules for the product
+  side of a requirements repo (charter, personas and jobs, initiatives, epics and milestones, product requirements,
+  decisions, and mockups), so product intent stays findable and citable by anyone who opens the repo
+- **[winter-engineering-requirements](https://github.com/paul-gross/winter-engineering-requirements)** — rules for the
+  engineering side of a requirements repo (requirements derived from product intent, assumptions, specs, and the slices
+  that build an epic); stands alone or pairs with winter-product-requirements
 - **[winter-github](https://github.com/paul-gross/winter-github)** — product planning and an agentic feedback mechanism
   using GitHub's issue tracking
 - **[winter-codeberg](https://github.com/paul-gross/winter-codeberg)** — product planning and an agentic feedback
