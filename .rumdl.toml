@@ -1,20 +1,9 @@
 [global]
-# MD076 off: rule lists carry multi-block items (paragraphs, fences, nested lists), so the blank lines between them are what CommonMark requires, not stray spacing
-# MD018 off: the 120-column wrap can land an issue reference (`#N`) at line start; CommonMark does not parse it as a heading, but MD018's autofix would turn it into one
-# MD033 off: these docs write placeholders as `<env>` / `<repo>` in prose; CommonMark reads them as inline HTML, but they are notation for the reader, not markup
-# MD028 off: two standalone callouts separated by a blank line are separate blockquotes; the rule reads the gap as one quote's interior
-# MD036 off: a skill quotes the line an agent says to the user as its own emphasized line — a spoken prompt, not a heading substitute
-# MD041 off: not every file here is a document — a SKILL.md opens with YAML frontmatter, and CLAUDE.md is a one-line `@import` shim
-# MD057 off: template docs link `.winter/ext/…` paths that exist only once deployed
-disable = ["MD076", "MD018", "MD033", "MD028", "MD036", "MD041", "MD057"]
+# MD018 off: the 120-column wrap can land a `#`-prefixed word at line start; CommonMark does not parse it as a heading, but MD018's autofix would turn it into one
+disable = ["MD018"]
 
 [MD004]
 style = "dash"
-
-[MD046]
-# Fenced everywhere, so every block can declare its language (MD040) — an
-# indented block cannot, and "consistent" would let a file drift either way.
-style = "fenced"
 
 [MD013]
 # 120 matches dprint's lineWidth; tables and code fences keep their own formatting, so only prose is held to the ceiling

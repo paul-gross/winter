@@ -1,11 +1,1 @@
-# Local-only winter config (git identity, machine-specific overrides)
-/.winter/config.local.toml
-
-# Machine-local env-index registry — never committed (tracks index assignments per machine)
-/.winter/state.toml
-
-# Auto-managed by `winter ws init` — extension list imported from AGENTS.md
-/AGENTS.winter.md
-
-# User/machine-specific overrides imported from AGENTS.md
-/AGENTS.local.md
+target/
