@@ -1,5 +1,6 @@
 //! The development driver of the repository. Its one entry is [`main_with`]; the binary target only calls it.
 
+pub mod architecture;
 mod fmt;
 mod gate;
 mod step;
