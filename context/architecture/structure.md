@@ -86,10 +86,13 @@ under a lock, which replaces the file through a temporary file beside it.
 | `commands/`                     | One file per command; see [changes.md](./changes.md#a-command)                                                    |
 | `files.rs`                      | The file port `ReadFiles` and `WriteFiles`, and its adapter `OsFiles`; the only source that names the file system |
 | `config_edit.rs`                | The removal of one repository block from the text of a configuration file, and `CatalogError`                     |
+| `workspace_files.rs`            | The names of the configuration files and the state file, each relative to a workspace root                        |
 | `workspace_root.rs`             | The workspace root of a directory                                                                                 |
 | `config_raw.rs`                 | `env_aliases` and `envs_per_workspace`, layered from the two configuration files                                  |
 | `state_registry.rs`             | The env index registry of the state file, read only                                                               |
 | `env_index.rs`                  | The index layout, the hash slot of a name, and `lookup`                                                           |
+| `repository_catalog.rs`         | The removal of one repository from a configuration file: the order of its checks and the replacement of the file  |
+| `index_lookup.rs`               | The lookup of an env name in a workspace: its root, its configuration, its registry, and `lookup`                 |
 | `build.rs`, `build/discover.rs` | Command discovery at build time; see [changes.md](./changes.md#a-command)                                         |
 
 A module `x` is the file `x.rs`, with its children in `x/`. No module is spelled `mod.rs`.

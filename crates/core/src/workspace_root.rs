@@ -5,9 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::files::ReadFiles;
 use crate::termination::ConfigError;
-
-/// The shared configuration file, relative to a workspace root.
-pub(crate) const CONFIG_FILE: &str = ".winter/config.toml";
+use crate::workspace_files::CONFIG_FILE;
 
 /// The workspace root of `start`: `start` itself or its nearest ancestor in which [`CONFIG_FILE`] is a
 /// regular file. A directory that holds a bare `.winter/` does not qualify.

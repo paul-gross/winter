@@ -4,9 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::files::ReadFiles;
-
-/// The state file, relative to a workspace root.
-const STATE_FILE: &str = ".winter/state.toml";
+use crate::workspace_files::STATE_FILE;
 
 /// The table of the state file that records one index per env name.
 const TABLE: &str = "env_index";

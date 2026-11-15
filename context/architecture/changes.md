@@ -22,6 +22,7 @@ in [structure.md](./structure.md).
 | A `CommandError` or `ConfigError` variant | `crates/core/src/termination.rs`                                           |
 | A port, or a field of `Context`           | `crates/core/src/context.rs` and `crates/core/src/process.rs`              |
 | A third-party crate                       | The package's `Cargo.toml`, and `Cargo.lock`                               |
+| A module only a domain entry may call     | The list of names in `crates/dev/src/architecture.rs`                      |
 
 Work that is built as parallel changes lands these edits first, in one change, with the module files it declares present
 and empty. The parallel changes then fill files that each of them alone owns.
@@ -64,7 +65,37 @@ offending entry: an alias of something that is not a command beside it, an alias
 with the name of a group.
 
 A command file holds the node's arguments and the adapter from the parsed arguments to one call into a domain module.
-Logic that two commands share lives in a domain module, never under `commands/`.
+Logic that two commands share lives in a domain module, never under `commands/`. The file holds:
+
+- the node's arguments, and the typed parameters read from the parsed arguments;
+- one call into a domain module, which is handed `cx.files`, `cx.file_writer`, and `cx.cwd` as they are;
+- the mapping of that call's typed outcome to a `Termination`;
+- the text of the human line and the fields of the `--json` document, written as [below](#writing-the-result).
+
+A command file names none of these:
+
+| Area                                 | Names a command file may not hold                                                  |
+| ------------------------------------ | ---------------------------------------------------------------------------------- |
+| The file port                        | `ReadFiles`, `WriteFiles`, `OsFiles`                                               |
+| Modules a domain entry stands on     | `workspace_root`, `workspace_files`, `config_raw`, `config_edit`, `state_registry` |
+| File formats                         | `toml::`, `toml_edit`                                                              |
+| Writing, and how a failed write ends | `writeln!`, `write!(`, `to_writer`, `InternalError`, `Backtrace`                   |
+
+The architecture test checks the names by scanning each file under `crates/core/src/commands/` as text. A test module
+and a comment are checked like the rest, and a failure names the file, the line, and the name.
+
+The list is a deny-list, and the scan sees nothing but these names. It cannot tell one call from logic of its own that
+is written without them, and it does not see a module that is not on the list. A file that holds none of the names can
+still reach what they stand for:
+
+- an item of a listed module through a re-export, by name or through a glob import of the crate root: the test module of
+  `commands/repo/remove.rs` names `crate::RepositoryKind`, which `config_edit.rs` defines;
+- a crate under another name: after `use toml as t;` no line holds `toml::`;
+- the port through the handles of the context: `cx.files.read(..)` and `cx.file_writer.update(..)` name no type of the
+  port, and `cx.out.write_all(..)` writes with none of the listed names.
+
+Those remain a matter of review. A change that adds a module only a domain entry may call adds its name to the list in
+`crates/dev/src/architecture.rs`.
 
 Its tests are unit tests of the argument mapping in the file itself, and a component test at
 `crates/core/tests/<group>_<name>.rs` for its behaviour in process. [testing.md](../standards/testing.md) describes the
@@ -100,6 +131,11 @@ nothing of a write that fails, so the diagnostic of that failure is still writte
 A domain module is a file `crates/core/src/<domain>.rs`, with its children in `crates/core/src/<domain>/`, declared by
 one `mod` line in `lib.rs` or in its parent. Modules stay private; what the binary or a test needs is re-exported by
 name from `lib.rs`.
+
+The function a command file calls, the module's entry, returns a typed value or the module's failure, never a
+`Termination`. The command file maps the failure: `repository_catalog::remove` fails with `RemoveError`, a sum of the
+module's own that the command file takes apart into `Termination::Command` and `Termination::Config`, and
+`index_lookup::answer` fails with `ConfigError` alone, which becomes `Termination::Config`.
 
 ## An error
 

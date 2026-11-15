@@ -13,12 +13,15 @@ mod discover;
 mod env_index;
 mod files;
 mod groups;
+mod index_lookup;
 mod output;
 mod parse;
 mod process;
 mod registry;
+mod repository_catalog;
 mod state_registry;
 mod termination;
+mod workspace_files;
 mod workspace_root;
 
 pub use config_edit::{CatalogError, RepositoryKind};

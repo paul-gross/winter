@@ -89,6 +89,7 @@ fn the_library_sources_name_nothing_forbidden_and_hold_no_mod_file() {
         let source = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
         violations.extend(architecture::module_file(file));
         violations.extend(architecture::forbidden_tokens(file, &source));
+        violations.extend(architecture::command_file_names(file, &source));
     }
 
     assert_none("library rules", &violations);

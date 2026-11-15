@@ -1,6 +1,7 @@
 //! The architecture rules of the repository: which packages the workspace has and how they may depend on one
-//! another, what a library source may name, which files may not name the reference tool, what the CI workflow
-//! and the Cargo aliases hold, and what the contributor documents link to, contain, and tell a reader to run.
+//! another, what a library source may name, what a command file may name, which files may not name the reference
+//! tool, what the CI workflow and the Cargo aliases hold, and what the contributor documents link to, contain,
+//! and tell a reader to run.
 //!
 //! Each rule is a function over inputs its caller passes in and answers the violations it finds; an empty answer
 //! is a pass. Nothing here reads a file or starts a process: the integration test of this package gathers the
@@ -59,6 +60,35 @@ const FILE_SYSTEM_TOKEN: &str = "std::fs";
 
 /// The one library source that may name [`FILE_SYSTEM_TOKEN`]: the file port and its adapter.
 const FILE_PORT: &str = "crates/core/src/files.rs";
+
+/// The directory of the command files, from the repository root.
+const COMMAND_FILES: &str = "crates/core/src/commands/";
+
+/// What no command file may name. A command file holds its arguments, one call into a domain module, and the
+/// mapping of that call's outcome; these are the names of what such a call stands on.
+///
+/// A deny-list: the change that adds a module only a domain entry may call adds its name here.
+const COMMAND_FILE_NAMES: [&str; 15] = [
+    // The file port.
+    "ReadFiles",
+    "WriteFiles",
+    "OsFiles",
+    // The modules a domain entry stands on.
+    "workspace_root",
+    "workspace_files",
+    "config_raw",
+    "config_edit",
+    "state_registry",
+    // The file formats.
+    "toml::",
+    "toml_edit",
+    // Writing, and how a failed write ends.
+    "writeln!",
+    "write!(",
+    "to_writer",
+    "InternalError",
+    "Backtrace",
+];
 
 /// The values of the workflow's `run:` lines, in order.
 const WORKFLOW_RUNS: [&str; 3] = [
@@ -192,6 +222,12 @@ pub enum Violation {
         line: usize,
         token: &'static str,
     },
+    /// A command file names what only a domain module may name. `line` counts from 1.
+    CommandFileName {
+        file: String,
+        line: usize,
+        name: &'static str,
+    },
     /// A library module is spelled `mod.rs`.
     ModFile { file: String },
     /// A `run:` or `uses:` line of the workflow is not the line expected at its position; `expected` is `None`
@@ -267,6 +303,12 @@ impl fmt::Display for Violation {
             }
             Self::ForbiddenToken { file, line, token } => {
                 write!(f, "{file}:{line}: `{token}` is forbidden in the library")
+            }
+            Self::CommandFileName { file, line, name } => {
+                write!(
+                    f,
+                    "{file}:{line}: `{name}` is not named in a command file; it belongs to a domain module"
+                )
             }
             Self::ModFile { file } => {
                 write!(
@@ -460,6 +502,35 @@ pub fn forbidden_tokens(file: &str, source: &str) -> Vec<Violation> {
                 });
             }
             covered = covered.max(end);
+        }
+    }
+    violations
+}
+
+/// The names of [`COMMAND_FILE_NAMES`] that one command file holds: one violation for each line and each name
+/// the line holds, however often it holds it. `file` and `source` are as [`forbidden_tokens`] takes them; a
+/// file that is not under the directory of the command files has no violation.
+///
+/// The scan is over the text as it stands: a test module is checked like the rest, and so is a comment. It finds
+/// the listed names and nothing else. A command file that holds none of them may still carry logic of its own or
+/// call a module the list does not hold. It may also reach what the names stand for: an item of a listed module
+/// through a re-export, by name or through a glob import of the crate root; a crate under another name, as after
+/// `use toml as t;`; and the port through the handles of the context, whose methods are called with no type of
+/// the port named. None of that is seen here.
+pub fn command_file_names(file: &str, source: &str) -> Vec<Violation> {
+    if !file.starts_with(COMMAND_FILES) {
+        return Vec::new();
+    }
+    let mut violations = Vec::new();
+    for (index, text) in source.lines().enumerate() {
+        for name in COMMAND_FILE_NAMES {
+            if text.contains(name) {
+                violations.push(Violation::CommandFileName {
+                    file: file.to_owned(),
+                    line: index + 1,
+                    name,
+                });
+            }
         }
     }
     violations
@@ -1265,6 +1336,132 @@ mod tests {
             "use std::io::Write;\nfn write(out: &mut dyn Write) { let _ = writeln!(out); }\n";
 
         assert_eq!(forbidden_tokens("crates/core/src/write.rs", source), []);
+    }
+
+    const COMMAND_FILE: &str = "crates/core/src/commands/repo/add.rs";
+
+    #[test]
+    fn the_names_no_command_file_may_hold_are_these_fifteen() {
+        assert_eq!(
+            COMMAND_FILE_NAMES,
+            [
+                "ReadFiles",
+                "WriteFiles",
+                "OsFiles",
+                "workspace_root",
+                "workspace_files",
+                "config_raw",
+                "config_edit",
+                "state_registry",
+                "toml::",
+                "toml_edit",
+                "writeln!",
+                "write!(",
+                "to_writer",
+                "InternalError",
+                "Backtrace",
+            ]
+        );
+    }
+
+    #[test]
+    fn each_listed_name_in_a_command_file_is_named_with_file_line_and_name() {
+        for name in COMMAND_FILE_NAMES {
+            let source = format!("fn run() {{\n    let _ = {name};\n}}\n");
+
+            let violations = command_file_names(COMMAND_FILE, &source);
+
+            assert_eq!(
+                violations,
+                [Violation::CommandFileName {
+                    file: COMMAND_FILE.to_owned(),
+                    line: 2,
+                    name,
+                }]
+            );
+            assert_eq!(
+                rendered(&violations),
+                [format!(
+                    "{COMMAND_FILE}:2: `{name}` is not named in a command file; it belongs to a domain module"
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn a_listed_name_in_a_library_source_that_is_no_command_file_is_not_named() {
+        for name in COMMAND_FILE_NAMES {
+            let source = format!("fn run() {{\n    let _ = {name};\n}}\n");
+
+            for file in [
+                "crates/core/src/parse.rs",
+                "crates/core/src/commands.rs",
+                "crates/dev/src/commands/add.rs",
+            ] {
+                assert_eq!(command_file_names(file, &source), [], "{name} in {file}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_listed_name_inside_a_test_module_and_one_inside_a_comment_are_both_reported() {
+        let source = "\
+// The entry reads through ReadFiles.
+fn run() {}
+
+#[cfg(test)]
+mod tests {
+    use crate::config_edit::RepositoryKind;
+}
+";
+
+        assert_eq!(
+            command_file_names(COMMAND_FILE, source),
+            [
+                Violation::CommandFileName {
+                    file: COMMAND_FILE.to_owned(),
+                    line: 1,
+                    name: "ReadFiles",
+                },
+                Violation::CommandFileName {
+                    file: COMMAND_FILE.to_owned(),
+                    line: 6,
+                    name: "config_edit",
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_line_gives_one_violation_for_each_listed_name_it_holds() {
+        let source = "use crate::files::{ReadFiles, WriteFiles}; fn f(a: &dyn ReadFiles) {}\n";
+
+        let names: Vec<&str> = command_file_names(COMMAND_FILE, source)
+            .into_iter()
+            .map(|violation| match violation {
+                Violation::CommandFileName { name, .. } => name,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+
+        assert_eq!(names, ["ReadFiles", "WriteFiles"]);
+    }
+
+    #[test]
+    fn a_command_file_that_names_what_a_command_file_holds_passes() {
+        let source = "\
+use crate::context::Context;
+use crate::env_index::{IndexAnswer, IndexSource};
+use crate::output;
+use crate::registry::Registration;
+use crate::termination::{ParseFault, Termination, UsageError};
+
+fn run(cx: &mut Context<'_>) -> Termination {
+    output::line(cx.out, \"done\")
+}
+";
+
+        assert_eq!(command_file_names(COMMAND_FILE, source), []);
     }
 
     #[test]

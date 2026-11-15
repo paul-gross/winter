@@ -2,14 +2,12 @@
 
 use clap::{Arg, ArgAction, ArgMatches};
 
-use crate::config_raw;
 use crate::context::Context;
-use crate::env_index::{self, IndexAnswer, IndexSource};
+use crate::env_index::{IndexAnswer, IndexSource};
+use crate::index_lookup;
 use crate::output;
 use crate::registry::Registration;
-use crate::state_registry;
-use crate::termination::{ConfigError, ParseFault, Termination, UsageError};
-use crate::workspace_root;
+use crate::termination::{ParseFault, Termination, UsageError};
 
 pub(crate) const REGISTRATION: Registration = Registration::Command {
     args,
@@ -59,7 +57,7 @@ fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
             },
         });
     };
-    let answer = match answer(params.name, cx) {
+    let answer = match index_lookup::answer(cx.files, cx.cwd, params.name) {
         Ok(answer) => answer,
         Err(error) => return Termination::Config(error),
     };
@@ -68,22 +66,6 @@ fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
     } else {
         output::line(cx.out, &line(&answer))
     }
-}
-
-/// Looks `name` up in the workspace of the working directory. Reads only.
-fn answer(name: &str, cx: &Context<'_>) -> Result<IndexAnswer, ConfigError> {
-    let root = workspace_root::find(cx.files, cx.cwd)?;
-    let config = config_raw::load(cx.files, &root)?;
-    let registry = state_registry::read(cx.files, &root);
-    // A band wider than the 65536 values of the hash gives every name the slot a still wider band gives it,
-    // so a count beyond `u32` is looked up as the largest `u32`.
-    let envs_per_workspace = u32::try_from(config.envs_per_workspace).unwrap_or(u32::MAX);
-    Ok(env_index::lookup(
-        name,
-        &config.env_aliases,
-        envs_per_workspace,
-        &registry,
-    ))
 }
 
 fn source_name(source: IndexSource) -> &'static str {

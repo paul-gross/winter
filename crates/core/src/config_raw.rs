@@ -9,10 +9,7 @@ use toml::{Table, Value};
 
 use crate::files::ReadFiles;
 use crate::termination::{ConfigError, FileCause, TomlParseError};
-use crate::workspace_root::CONFIG_FILE;
-
-/// The machine-local overlay, relative to a workspace root.
-const LOCAL_CONFIG_FILE: &str = ".winter/config.local.toml";
+use crate::workspace_files::{CONFIG_FILE, LOCAL_CONFIG_FILE};
 
 const ENV_ALIASES: &str = "env_aliases";
 const ENVS_PER_WORKSPACE: &str = "envs_per_workspace";
