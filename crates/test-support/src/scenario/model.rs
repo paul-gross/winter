@@ -583,7 +583,7 @@ fn is_object_id(id: &str) -> bool {
 
 /// Why `path` is not a relative path that stays at or below its base, when it is not: it is empty, holds a
 /// NUL, starts with `/`, or, read segment by segment, has a prefix that ends above the base.
-fn unconfined(path: &str) -> Option<String> {
+pub(super) fn unconfined(path: &str) -> Option<String> {
     if path.is_empty() {
         return Some("the path is empty".to_owned());
     }

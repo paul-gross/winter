@@ -90,13 +90,13 @@ pub const BEFORE: &str = "before";
 pub const AFTER: &str = "after";
 
 /// The file of a snapshot directory that lists the entries of the tree.
-const TREE_FILE: &str = "tree.txt";
+pub(super) const TREE_FILE: &str = "tree.txt";
 
 /// The file of a snapshot directory that holds the sections of the repositories.
-const GIT_FILE: &str = "git.txt";
+pub(super) const GIT_FILE: &str = "git.txt";
 
 /// The directory of a snapshot directory that holds the content of the changed files.
-const FILES_DIRECTORY: &str = "files";
+pub(super) const FILES_DIRECTORY: &str = "files";
 
 /// The entries of the root that are no state of a scenario, left out of the snapshot as a whole.
 const EXCLUDED: [&str; 5] = ["bin", "calls", "git-template", "cache", "tmp"];
@@ -426,7 +426,7 @@ pub fn take(
 /// The paths of the files of `tree` whose content a snapshot stores, given the snapshot `previous` before
 /// it: every file `previous` lists with another hash, or does not list as a file. A file that differs in
 /// its execute bit alone is none of them, and with no `previous` there is none.
-fn implied<'t>(tree: &'t [Entry], previous: Option<&Snapshot>) -> Vec<&'t str> {
+pub(super) fn implied<'t>(tree: &'t [Entry], previous: Option<&Snapshot>) -> Vec<&'t str> {
     let Some(previous) = previous else {
         return Vec::new();
     };
@@ -640,44 +640,58 @@ impl Snapshot {
         }
 
         let location = |path: &str| stored_directory.join(stored_path(path));
-        let implied = implied(&tree, previous);
-        if let Some(path) = implied.iter().find(|path| !files.contains_key(**path)) {
-            return Err(SnapshotError::Absent {
-                path: (*path).to_owned(),
-                file: location(path),
-            });
-        }
-        let listed: BTreeMap<&str, &str> = tree.iter().filter_map(file_of).collect();
-        for path in files.keys() {
-            let reason = if !listed.contains_key(path.as_str()) {
-                "tree.txt lists no file at the path"
-            } else if previous.is_none() {
-                "a snapshot that has none before it stores no content"
-            } else if !implied.contains(&path.as_str()) {
-                "the snapshot before lists the file with the same hash"
-            } else {
-                continue;
-            };
-            return Err(SnapshotError::Unimplied {
-                path: path.clone(),
-                file: location(path),
-                reason,
-            });
-        }
-        for (path, content) in &files {
-            let found = hash_of(content);
-            let listed = listed[path.as_str()];
-            if found != listed {
-                return Err(SnapshotError::Altered {
-                    path: path.clone(),
-                    file: location(path),
-                    listed: listed.to_owned(),
-                    found,
-                });
-            }
-        }
+        held(&tree, &files, previous, &location)?;
         Ok(Self { tree, git, files })
     }
+}
+
+/// Holds `files`, the stored content of a snapshot by the paths of the tree, to what `tree`, its listing,
+/// and `previous`, the snapshot before it, imply was stored: the rule [`Snapshot::read`] reads a stored
+/// snapshot by, with its order of failures. `location` answers where the content of a path is, or would
+/// be, stored, for the failure to name.
+pub(super) fn held(
+    tree: &[Entry],
+    files: &BTreeMap<String, Vec<u8>>,
+    previous: Option<&Snapshot>,
+    location: &dyn Fn(&str) -> PathBuf,
+) -> Result<(), SnapshotError> {
+    let implied = implied(tree, previous);
+    if let Some(path) = implied.iter().find(|path| !files.contains_key(**path)) {
+        return Err(SnapshotError::Absent {
+            path: (*path).to_owned(),
+            file: location(path),
+        });
+    }
+    let listed: BTreeMap<&str, &str> = tree.iter().filter_map(file_of).collect();
+    for path in files.keys() {
+        let reason = if !listed.contains_key(path.as_str()) {
+            "tree.txt lists no file at the path"
+        } else if previous.is_none() {
+            "a snapshot that has none before it stores no content"
+        } else if !implied.contains(&path.as_str()) {
+            "the snapshot before lists the file with the same hash"
+        } else {
+            continue;
+        };
+        return Err(SnapshotError::Unimplied {
+            path: path.clone(),
+            file: location(path),
+            reason,
+        });
+    }
+    for (path, content) in files {
+        let found = hash_of(content);
+        let listed = listed[path.as_str()];
+        if found != listed {
+            return Err(SnapshotError::Altered {
+                path: path.clone(),
+                file: location(path),
+                listed: listed.to_owned(),
+                found,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// A repository of a tree, and the two directories git names for it.
@@ -760,7 +774,7 @@ fn discover(
 }
 
 /// The line of `tree.txt` that `entry` is written as, without its line end.
-fn line_of(entry: &Entry) -> String {
+pub(super) fn line_of(entry: &Entry) -> String {
     let path = &entry.path;
     match &entry.kind {
         EntryKind::Directory => format!("d {path}"),
@@ -872,7 +886,7 @@ impl Seen {
 }
 
 /// The SHA-1 of `content`, in lowercase hexadecimal.
-fn hash_of(content: &[u8]) -> String {
+pub(super) fn hash_of(content: &[u8]) -> String {
     Sha1::digest(content)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -1087,7 +1101,7 @@ fn stored(file: &Path, line: usize, reason: impl Into<String>) -> SnapshotError 
 
 /// The entries `text`, the content of the `tree.txt` at `file`, lists: each line an entry, and each path
 /// after the one of the line before it by its bytes, so that none is listed twice.
-fn parse_tree(file: &Path, text: &str) -> Result<Vec<Entry>, SnapshotError> {
+pub(super) fn parse_tree(file: &Path, text: &str) -> Result<Vec<Entry>, SnapshotError> {
     let mut entries: Vec<Entry> = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let entry =
@@ -1146,7 +1160,7 @@ fn parse_entry(line: &str) -> Option<Entry> {
 }
 
 /// The sections `text`, the content of the `git.txt` at `file`, holds.
-fn parse_git(file: &Path, text: &str) -> Result<Vec<Repository>, SnapshotError> {
+pub(super) fn parse_git(file: &Path, text: &str) -> Result<Vec<Repository>, SnapshotError> {
     let mut repositories = Vec::new();
     let mut blocks: Vec<Block> = Vec::new();
     // An empty line after the last one ends the last section.

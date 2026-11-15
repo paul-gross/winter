@@ -1,6 +1,8 @@
 //! Recorded scenarios: what a scenario directory holds, read as typed values, the fixture one describes,
-//! built in an isolated tree, and the state of such a tree, taken as a snapshot and normalized for storing.
+//! built in an isolated tree, the state of such a tree, taken as a snapshot and normalized for storing,
+//! and the comparison of what was recorded with what was observed.
 
+pub mod compare;
 pub mod fixture;
 mod model;
 pub mod normalize;

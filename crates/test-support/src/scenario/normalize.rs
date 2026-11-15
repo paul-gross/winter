@@ -137,7 +137,7 @@ pub fn stdout_json(stdout: &[u8], mode: StdoutMode) -> Result<Option<String>, In
 
 /// The lines of `content`, each without its line feed; what follows the last line feed is a line when it
 /// is not empty.
-fn lines(content: &[u8]) -> impl Iterator<Item = &[u8]> {
+pub(super) fn lines(content: &[u8]) -> impl Iterator<Item = &[u8]> {
     let ended = content.strip_suffix(b"\n").unwrap_or(content);
     let none = content.is_empty();
     ended.split(|byte| *byte == b'\n').filter(move |_| !none)
