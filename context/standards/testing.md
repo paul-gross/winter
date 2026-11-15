@@ -115,6 +115,44 @@ guarantee: the helpers owe no refusal for it, and the rule that a test never tou
 test's author. A defect of the helpers is an honest input that has such an effect, or a listed escape that is not
 refused.
 
+## The trace collector
+
+`Collector`, in `crates/test-support/src/otlp.rs`, is a stand-in for a trace collector: a listener on 127.0.0.1, on a
+port the system chooses, served by one thread in the test process. It binds the loopback address and nothing else,
+resolves no name, lives outside the isolated tree, and holds no file.
+
+The sockets a test opens or causes are these, each on 127.0.0.1, and no other:
+
+- a `Collector` the test started, and the port `Collector::refused_endpoint` binds and releases;
+- the client side of a connection to a `Collector`, from the test itself or from a child the test starts and hands the
+  endpoint to;
+- a connection attempt to an address `Collector::refused_endpoint` gave, from the test or from such a child, which
+  reaches no listener;
+- in the support package's own tests of the collector, and nowhere else, a listener of the test's own: the listener a
+  collector serves, bound without a collector, with the client side of the connections the test makes to it while it is
+  bound; and the port of a collector that was dropped, bound again to show it free.
+
+What the collector gives a test:
+
+- `Collector::start` takes the `Answer` every request gets: `Ok`, a success status; `Status`, the status it names; or
+  `Hang`, no answer, with the connection held open until the collector stops.
+- `endpoint` is the address a client is given, `http://127.0.0.1:<port>`.
+- The thread reads one HTTP/1.1 request from each connection: the request line, the headers, and a body of
+  `Content-Length` bytes, within five seconds. Anything else, a TLS handshake or a chunked body for one, counts in
+  `connections` and adds no request.
+- `requests` stops the collector and returns what it read: method, target, headers with their names in lower case, and
+  body. A connection made before the stop is still served, for five seconds at most once the thread has seen the stop,
+  so a client that goes on connecting does not keep a stopped collector alive. Dropping the collector stops it the same
+  way; either joins the thread and frees the port.
+- `Collector::refused_endpoint` is an address of the same form at which nothing listens: a loopback port that was bound
+  and released. Nothing holds the port once it is released, so another process may take it before the test connects.
+
+`decode_export` reads the protobuf body of a trace export request into a `ReceivedExport`: the string-valued resource
+attributes, the scope's name, and each span as a `ReceivedSpan`. It is written by hand from the field numbers of the
+format, which its documentation lists, and the support package depends on no tracing crate, so a test compares what an
+exporter wrote with what it should have written. It skips every field it does not read, and a message it cannot read
+through is an error.
+
 ## What a test never does
 
 The standing rule in [AGENTS.md](../../AGENTS.md) holds for every test of the library, the binary, and the support
@@ -128,6 +166,7 @@ package. In practice:
   package that needs a child with a behaviour of its own runs `/bin/sh` as that child, with a script the test spells
   out.
 - It resolves no host name. Fixture remotes are the tree's own bare repositories.
+- It opens no socket but those [The trace collector](#the-trace-collector) lists.
 - It lets nothing of the developer's environment or home directory reach a child or decide a result. The test process
   reads its own environment only for `WINTER_TEST_` variables and for the directory of the host's git on `PATH`.
 

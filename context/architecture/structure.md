@@ -6,12 +6,12 @@ which, and where the line runs between the library and the binary. Where a parti
 
 ## Packages
 
-| Package                         | Directory              | Role                                                                                                                                               |
-| ------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `winter-workspace`              | `crates/cli/`          | The binary, the composition root. Binds streams, environment, and working directory; maps the ending to an exit.                                   |
-| `winter-workspace-core`         | `crates/core/`         | The library: parsing, commands, domain, adapters. Returns values.                                                                                  |
-| `winter-workspace-test-support` | `crates/test-support/` | Isolated trees, the process runner, git and workspace fixtures, and the scenario machinery, for tests and for the scenario recorder of the driver. |
-| `winter-workspace-dev`          | `crates/dev/`          | The development driver: the gates, the formatter call, the architecture rules, and the scenario recorder.                                          |
+| Package                         | Directory              | Role                                                                                                                                                                             |
+| ------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `winter-workspace`              | `crates/cli/`          | The binary, the composition root. Binds streams, environment, and working directory; maps the ending to an exit.                                                                 |
+| `winter-workspace-core`         | `crates/core/`         | The library: parsing, commands, domain, adapters. Returns values.                                                                                                                |
+| `winter-workspace-test-support` | `crates/test-support/` | Isolated trees, the process runner, git and workspace fixtures, the loopback trace collector, and the scenario machinery, for tests and for the scenario recorder of the driver. |
+| `winter-workspace-dev`          | `crates/dev/`          | The development driver: the gates, the formatter call, the architecture rules, and the scenario recorder.                                                                        |
 
 Every command and every domain module lives in the one library. Module boundaries inside it are the unit of structure; a
 package per domain would make every new one edit the workspace and binary manifests.
@@ -124,6 +124,7 @@ under a lock, which replaces the file through a temporary file beside it.
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `process.rs`                    | `run`, `Invocation`, `Identity`, `ProcessEnv`, `Interrupts`; after the parse: help or version written, the debug record, the one `Context` built, the command called |
 | `termination.rs`                | `Termination` and the error enums it carries                                                                                                                         |
+| `trace.rs`                      | `TraceSettings` and `TraceConfig`, `settings`, which reads them from the environment snapshot at an instant it is given, and `span_name`; it names no tracing crate  |
 | `context.rs`                    | `Context`, what a command receives, with `Invoked`, the node being run, and `RootOptions`, the root option values a command can read                                 |
 | `logging.rs`                    | `Level` and `Log`, and the resolution of `-v` and `WINTER_LOG_LEVEL` into what an invocation logs                                                                    |
 | `registry.rs`                   | `Registration` and `Entry`, and the registry the build script generates                                                                                              |

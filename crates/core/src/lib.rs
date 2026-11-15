@@ -24,6 +24,7 @@ mod registry;
 mod repository_catalog;
 mod state_registry;
 mod termination;
+mod trace;
 mod workspace_files;
 mod workspace_root;
 
@@ -33,3 +34,4 @@ pub use termination::{
     CommandError, ConfigError, FileCause, InternalError, ParseFault, Termination, TomlParseError,
     Usage, UsageError,
 };
+pub use trace::{TraceConfig, TraceSettings, settings, span_name};

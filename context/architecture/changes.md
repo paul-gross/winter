@@ -172,9 +172,12 @@ module's own that the command file takes apart into `Termination::Command` and `
 `Termination` has one variant per way an invocation ends, and each error enum it carries has one variant per failure. A
 variant is added by the behaviour that first returns it, in `crates/core/src/termination.rs`. A new variant that carries
 an error type holds it in a `Box`, under the rule on the width of `Termination` in
-[rust.md](../standards/rust.md#errors). A domain module's own error enum lives in the module; `CommandError` gains a
-variant that wraps it, and `lib.rs` re-exports the enum with the types its variants carry.
-[rust.md](../standards/rust.md#errors) has the rules an error type follows.
+[rust.md](../standards/rust.md#errors). A new variant also adds its name, as a literal, to `Termination::error_type`,
+whose match over the variants has no catch-all arm. That function answers the name of every ending whose exit code is
+not 0, for the `error.type` attribute of a trace span. The names are a closed vocabulary: a name is never renamed, and
+never given to another ending. A domain module's own error enum lives in the module; `CommandError` gains a variant that
+wraps it, and `lib.rs` re-exports the enum with the types its variants carry. [rust.md](../standards/rust.md#errors) has
+the rules an error type follows.
 
 ## A dependency
 

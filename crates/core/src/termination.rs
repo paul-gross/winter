@@ -57,6 +57,25 @@ impl Termination {
         }
     }
 
+    /// The name of this ending for the `error.type` attribute of a trace span, or `None` for an ending
+    /// whose exit code is 0.
+    ///
+    /// The name is the variant's, as a literal, and never holds anything of the variant's payload. The names
+    /// are a closed vocabulary: a new variant adds its name here, and a name is never renamed or given to
+    /// another ending.
+    pub fn error_type(&self) -> Option<&'static str> {
+        match self {
+            Self::Success => None,
+            Self::Reported => Some("Reported"),
+            Self::Usage(_) => Some("Usage"),
+            Self::BareGroup { .. } => Some("BareGroup"),
+            Self::Command(_) => Some("Command"),
+            Self::Config(_) => Some("Config"),
+            Self::BrokenPipe => Some("BrokenPipe"),
+            Self::Internal(_) => Some("Internal"),
+        }
+    }
+
     /// How an invocation ends on a write or a flush of stdout that failed with `error`.
     ///
     /// The one classifier of such a failure. A reader that closed the handle is no failure of the program: that
@@ -338,6 +357,59 @@ mod tests {
             1
         );
         assert_eq!(Termination::Internal(Box::new(panic())).exit_code(), 1);
+    }
+
+    #[test]
+    fn an_ending_has_an_error_type_exactly_when_its_exit_code_is_not_0() {
+        let one_of_every_variant = [
+            Termination::Success,
+            Termination::Reported,
+            Termination::Usage(Box::new(usage())),
+            Termination::BareGroup {
+                help: "help".to_owned(),
+            },
+            Termination::Command(Box::new(CommandError::Catalog(CatalogError::NotFound {
+                kind: crate::RepositoryKind::Project,
+                name: "docs".to_owned(),
+            }))),
+            Termination::Config(Box::new(root_not_found())),
+            Termination::BrokenPipe,
+            Termination::Internal(Box::new(panic())),
+        ];
+
+        let mut names = Vec::new();
+        for termination in &one_of_every_variant {
+            let name = termination.error_type();
+            assert_eq!(
+                name.is_none(),
+                termination.exit_code() == 0,
+                "{termination:?}"
+            );
+            names.extend(name);
+        }
+
+        assert_eq!(
+            names,
+            [
+                "Reported",
+                "Usage",
+                "BareGroup",
+                "Command",
+                "Config",
+                "BrokenPipe",
+                "Internal"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_error_type_of_an_ending_holds_nothing_of_its_payload() {
+        for fault in faults().into_iter().map(|(fault, _)| fault) {
+            assert_eq!(
+                Termination::Usage(Box::new(usage_with(fault))).error_type(),
+                Some("Usage")
+            );
+        }
     }
 
     #[test]

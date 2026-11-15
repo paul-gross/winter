@@ -1,0 +1,653 @@
+//! The pure part of tracing: the settings of the command span, read from the environment snapshot, and the
+//! span's name.
+//!
+//! Nothing here reads a clock, opens a socket, or names a tracing crate: the instant is an argument, and the
+//! environment is the snapshot.
+
+use crate::process::ProcessEnv;
+
+/// The base address of the collector. Tracing is on only when it is set and not blank.
+const ENDPOINT: &str = "WINTER_OTEL_EXPORTER_OTLP_ENDPOINT";
+/// The headers of the export request, as `name=value` items separated by commas.
+const HEADERS: &str = "WINTER_OTEL_EXPORTER_OTLP_HEADERS";
+/// The kill switch: the value `true` turns tracing off.
+const KILL_SWITCH: &str = "OTEL_SDK_DISABLED";
+const SERVICE_NAME_VARIABLE: &str = "OTEL_SERVICE_NAME";
+const RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
+const TRACEPARENT: &str = "TRACEPARENT";
+const LAUNCH_TIME: &str = "WINTER_LAUNCH_TIME";
+
+/// The path every export is sent to, below the configured address.
+const EXPORT_PATH: &str = "/v1/traces";
+/// The resource attribute that names the service.
+const SERVICE_NAME: &str = "service.name";
+/// The service name when the environment gives none.
+const DEFAULT_SERVICE_NAME: &str = "winter";
+
+const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
+
+/// What the environment says about tracing one invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TraceSettings {
+    /// No endpoint is configured, or the kill switch is set.
+    Off,
+    /// Tracing is on and cannot be carried out as configured. The text says why.
+    Unavailable(String),
+    On(TraceConfig),
+}
+
+/// What the environment configures of the command span and of its export.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceConfig {
+    /// The address the export is sent to; it ends in `/v1/traces`.
+    pub endpoint: String,
+    /// The headers of the export request, each name in lower case and held once.
+    pub headers: Vec<(String, String)>,
+    /// The resource attributes, `service.name` first.
+    pub resource: Vec<(String, String)>,
+    /// The value of `TRACEPARENT` as it was given, or `None` when the span starts a trace of its own. Whether
+    /// the value is valid is not judged here.
+    pub traceparent: Option<String>,
+    /// The instant the process was launched, when `WINTER_LAUNCH_TIME` gives a usable one.
+    pub launch_time_unix_nano: Option<u64>,
+}
+
+/// Reads the tracing settings from `env`. `now_unix_nano` is the instant of the read, which a launch time may
+/// not lie after.
+///
+/// Tracing is off when `WINTER_OTEL_EXPORTER_OTLP_ENDPOINT` is unset or blank, and when `OTEL_SDK_DISABLED`
+/// is `true` after trimming, in any letter case. The settings of an invocation that traces come from five more
+/// variables: `WINTER_OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`,
+/// `TRACEPARENT`, and `WINTER_LAUNCH_TIME`. An endpoint that is not UTF-8 makes tracing unavailable; any
+/// other of the seven that is not UTF-8 is read as unset. No variable beside the seven is read, so none
+/// switches tracing on or changes the settings.
+pub fn settings(env: &ProcessEnv, now_unix_nano: u64) -> TraceSettings {
+    let Some(raw) = env.get(ENDPOINT) else {
+        return TraceSettings::Off;
+    };
+    let endpoint = raw.to_str();
+    if endpoint.is_some_and(|value| value.trim().is_empty()) {
+        return TraceSettings::Off;
+    }
+    if text(env, KILL_SWITCH).is_some_and(|value| value.trim().eq_ignore_ascii_case("true")) {
+        return TraceSettings::Off;
+    }
+    let Some(endpoint) = endpoint else {
+        return TraceSettings::Unavailable(format!("the value of {ENDPOINT} is not UTF-8"));
+    };
+    TraceSettings::On(TraceConfig {
+        endpoint: format!("{}{EXPORT_PATH}", endpoint.trim().trim_end_matches('/')),
+        headers: headers(text(env, HEADERS).unwrap_or_default()),
+        resource: resource(
+            text(env, SERVICE_NAME_VARIABLE),
+            text(env, RESOURCE_ATTRIBUTES).unwrap_or_default(),
+        ),
+        traceparent: text(env, TRACEPARENT)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        launch_time_unix_nano: text(env, LAUNCH_TIME)
+            .and_then(|value| launch_time(value, now_unix_nano)),
+    })
+}
+
+/// The name of the command span: the literal `winter`, then the command path, joined by single spaces.
+pub fn span_name(command_path: &[String]) -> String {
+    format!("winter {}", command_path.join(" "))
+}
+
+/// The value of `key` as text, or `None` when it is unset or not UTF-8.
+fn text<'a>(env: &'a ProcessEnv, key: &str) -> Option<&'a str> {
+    env.get(key).and_then(|value| value.to_str())
+}
+
+/// The headers `value` lists: items separated by `,`, each split at its first `=`, the name and the value
+/// percent-decoded and trimmed, the name in lower case.
+///
+/// An item with no `=`, with an empty name, or with a name that is no HTTP token is skipped, and the others
+/// still apply. A name given twice keeps its first place and its last value.
+fn headers(value: &str) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    for item in value.split(',') {
+        let Some((name, value)) = item.split_once('=') else {
+            continue;
+        };
+        let name = percent_decoded(name).trim().to_ascii_lowercase();
+        if name.is_empty() || !name.bytes().all(is_token_byte) {
+            continue;
+        }
+        let value = percent_decoded(value).trim().to_owned();
+        set(&mut pairs, name, value);
+    }
+    pairs
+}
+
+/// Whether `byte` may stand in the name of an HTTP header.
+fn is_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte)
+}
+
+/// The resource attributes: `service.name` first, then every other entry of `attributes`.
+///
+/// `attributes` holds `key=value` items separated by `,`; the key is trimmed, and the value is trimmed and
+/// then percent-decoded. An item with no `=` or with an empty key is skipped, and a key given twice keeps its
+/// first place and its last value. The service name is `service_name` when it is not empty, else the
+/// `service.name` entry of `attributes` when that is not empty, else `winter`.
+fn resource(service_name: Option<&str>, attributes: &str) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+    for item in attributes.split(',') {
+        let Some((key, value)) = item.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        set(&mut entries, key.to_owned(), percent_decoded(value.trim()));
+    }
+    let listed = entries
+        .iter()
+        .position(|(key, _)| key == SERVICE_NAME)
+        .map(|index| entries.remove(index).1);
+    let name = service_name
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .or(listed.filter(|name| !name.is_empty()))
+        .unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_owned());
+    entries.insert(0, (SERVICE_NAME.to_owned(), name));
+    entries
+}
+
+/// Gives `key` the value `value` in `pairs`: in place when the key is held, at the end otherwise.
+fn set(pairs: &mut Vec<(String, String)>, key: String, value: String) {
+    match pairs.iter_mut().find(|(held, _)| *held == key) {
+        Some(pair) => pair.1 = value,
+        None => pairs.push((key, value)),
+    }
+}
+
+/// `text` with every `%` that two hexadecimal digits follow replaced by the byte they spell. A `%` that no
+/// such digits follow stays, and decoded bytes that are not UTF-8 become the replacement character.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let escaped = match bytes.get(index..index + 3) {
+            Some([b'%', high, low]) => hex_digit(*high).zip(hex_digit(*low)),
+            _ => None,
+        };
+        match escaped {
+            Some((high, low)) => {
+                decoded.push(high * 16 + low);
+                index += 3;
+            }
+            None => {
+                decoded.push(bytes[index]);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// The launch instant `value` names, in nanoseconds since the epoch.
+///
+/// The value is trimmed and each `,` is read as `.`; what remains is digits, optionally followed by `.` and
+/// digits, and nothing else: seconds since the epoch, with a fraction that is cut or padded to nine digits.
+/// Any other text, zero, an instant later than `now_unix_nano`, and one too large to hold give `None`.
+fn launch_time(value: &str, now_unix_nano: u64) -> Option<u64> {
+    let value = value.trim().replace(',', ".");
+    let (seconds, fraction) = match value.split_once('.') {
+        Some((seconds, fraction)) => (seconds, Some(fraction)),
+        None => (value.as_str(), None),
+    };
+    if !is_digits(seconds) || fraction.is_some_and(|fraction| !is_digits(fraction)) {
+        return None;
+    }
+    let nanoseconds: u64 = format!("{:0<9.9}", fraction.unwrap_or_default())
+        .parse()
+        .ok()?;
+    let instant = seconds
+        .parse::<u64>()
+        .ok()?
+        .checked_mul(NANOSECONDS_PER_SECOND)?
+        .checked_add(nanoseconds)?;
+    (instant != 0 && instant <= now_unix_nano).then_some(instant)
+}
+
+fn is_digits(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    use super::*;
+
+    /// The instant every test reads the settings at: 2023-11-14T22:13:20Z.
+    const NOW: u64 = 1_700_000_000_000_000_000;
+
+    const COLLECTOR: (&str, &[u8]) = (ENDPOINT, b"http://c:4318");
+
+    fn read(env: &[(&str, &[u8])]) -> TraceSettings {
+        let env = ProcessEnv::from_vars(
+            env.iter()
+                .map(|(key, value)| (OsString::from(key), OsString::from_vec(value.to_vec()))),
+        );
+        settings(&env, NOW)
+    }
+
+    /// The configuration of an environment that turns tracing on.
+    fn config(env: &[(&str, &[u8])]) -> TraceConfig {
+        match read(env) {
+            TraceSettings::On(config) => config,
+            other => panic!("expected tracing on, got {other:?}"),
+        }
+    }
+
+    /// The configuration of the collector's endpoint and one more variable.
+    fn config_with(key: &str, value: &[u8]) -> TraceConfig {
+        config(&[COLLECTOR, (key, value)])
+    }
+
+    fn pairs(literal: &[(&str, &str)]) -> Vec<(String, String)> {
+        literal
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn an_endpoint_alone_turns_tracing_on_with_nothing_else_configured() {
+        assert_eq!(
+            read(&[COLLECTOR]),
+            TraceSettings::On(TraceConfig {
+                endpoint: "http://c:4318/v1/traces".to_owned(),
+                headers: Vec::new(),
+                resource: pairs(&[("service.name", "winter")]),
+                traceparent: None,
+                launch_time_unix_nano: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_blank_endpoint_leaves_tracing_off() {
+        assert_eq!(read(&[]), TraceSettings::Off);
+        for blank in [&b""[..], b" ", b" \t\n "] {
+            assert_eq!(read(&[(ENDPOINT, blank)]), TraceSettings::Off, "{blank:?}");
+        }
+    }
+
+    #[test]
+    fn the_kill_switch_turns_tracing_off_in_any_letter_case_and_with_blanks_around_it() {
+        for value in [&b"true"[..], b"TRUE", b"True", b"  true\t", b" tRuE "] {
+            assert_eq!(
+                read(&[COLLECTOR, (KILL_SWITCH, value)]),
+                TraceSettings::Off,
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn any_other_value_of_the_kill_switch_leaves_tracing_on() {
+        for value in [
+            &b"1"[..],
+            b"yes",
+            b"false",
+            b"",
+            b"truely",
+            b"tru\xff",
+            b"\xff",
+        ] {
+            assert!(
+                matches!(
+                    read(&[COLLECTOR, (KILL_SWITCH, value)]),
+                    TraceSettings::On(_)
+                ),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_generic_exporter_setting_neither_turns_tracing_on_nor_changes_the_settings() {
+        let generic: [(&str, &[u8]); 6] = [
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", b"http://generic:4318"),
+            (
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                b"http://generic:4318/v1/traces",
+            ),
+            ("OTEL_EXPORTER_OTLP_HEADERS", b"authorization=generic"),
+            ("OTEL_TRACES_SAMPLER", b"always_off"),
+            ("OTEL_TRACES_EXPORTER", b"none"),
+            ("TRACESTATE", b"vendor=value"),
+        ];
+
+        assert_eq!(read(&generic[..1]), TraceSettings::Off);
+        assert_eq!(read(&generic), TraceSettings::Off);
+
+        let mut with_endpoint = generic.to_vec();
+        with_endpoint.push(COLLECTOR);
+        assert_eq!(read(&with_endpoint), read(&[COLLECTOR]));
+    }
+
+    #[test]
+    fn an_endpoint_that_is_not_utf_8_makes_tracing_unavailable_and_says_why() {
+        let TraceSettings::Unavailable(why) = read(&[(ENDPOINT, b"http://c\xff:4318")]) else {
+            panic!("expected tracing unavailable");
+        };
+
+        assert!(why.contains(ENDPOINT), "{why}");
+        assert!(why.contains("UTF-8"), "{why}");
+    }
+
+    #[test]
+    fn the_kill_switch_wins_over_an_endpoint_that_is_not_utf_8() {
+        assert_eq!(
+            read(&[(ENDPOINT, b"\xff"), (KILL_SWITCH, b"true")]),
+            TraceSettings::Off
+        );
+    }
+
+    #[test]
+    fn trailing_slashes_of_the_endpoint_are_dropped_before_the_export_path() {
+        for value in [
+            &b"http://c:4318"[..],
+            b"http://c:4318/",
+            b"http://c:4318///",
+        ] {
+            assert_eq!(
+                config(&[(ENDPOINT, value)]).endpoint,
+                "http://c:4318/v1/traces",
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_path_of_the_endpoint_is_kept_and_blanks_around_the_value_are_dropped() {
+        assert_eq!(
+            config(&[(ENDPOINT, b" http://c:4318/otlp/ ")]).endpoint,
+            "http://c:4318/otlp/v1/traces"
+        );
+    }
+
+    #[test]
+    fn an_http_and_an_https_endpoint_both_turn_tracing_on_each_kept_as_given() {
+        assert_eq!(
+            config(&[(ENDPOINT, b"http://collector.example:4318")]).endpoint,
+            "http://collector.example:4318/v1/traces"
+        );
+        assert_eq!(
+            config(&[(ENDPOINT, b"https://collector.example")]).endpoint,
+            "https://collector.example/v1/traces"
+        );
+    }
+
+    #[test]
+    fn headers_are_split_decoded_trimmed_and_named_in_lower_case() {
+        assert_eq!(
+            config_with(HEADERS, b"Authorization=Bearer%20abc%3D, x-tenant = blue ").headers,
+            pairs(&[("authorization", "Bearer abc="), ("x-tenant", "blue")])
+        );
+    }
+
+    #[test]
+    fn a_header_value_keeps_every_equals_sign_after_the_first() {
+        assert_eq!(
+            config_with(HEADERS, b"x-key=a=b==").headers,
+            pairs(&[("x-key", "a=b==")])
+        );
+    }
+
+    #[test]
+    fn a_header_item_that_cannot_be_read_is_skipped_and_the_next_applies() {
+        assert_eq!(
+            config_with(HEADERS, b"no-equals-sign,x-a=1").headers,
+            pairs(&[("x-a", "1")])
+        );
+        assert_eq!(
+            config_with(HEADERS, b"=empty,  =blank,x-a=1").headers,
+            pairs(&[("x-a", "1")])
+        );
+        assert_eq!(
+            config_with(HEADERS, b"bad name=1,bad%3Aname=2,x-a=1,").headers,
+            pairs(&[("x-a", "1")])
+        );
+    }
+
+    #[test]
+    fn a_header_name_given_twice_keeps_its_first_place_and_its_last_value() {
+        assert_eq!(
+            config_with(HEADERS, b"x-a=1,x-b=2,X-A=3").headers,
+            pairs(&[("x-a", "3"), ("x-b", "2")])
+        );
+    }
+
+    #[test]
+    fn a_header_name_and_a_header_value_are_trimmed_after_they_are_decoded() {
+        assert_eq!(
+            config_with(HEADERS, b"%20x-a%09=%20one%20two%20").headers,
+            pairs(&[("x-a", "one two")])
+        );
+    }
+
+    #[test]
+    fn a_header_with_an_empty_value_is_kept() {
+        assert_eq!(
+            config_with(HEADERS, b"x-a=,x-b= ").headers,
+            pairs(&[("x-a", ""), ("x-b", "")])
+        );
+    }
+
+    #[test]
+    fn blank_headers_and_headers_that_are_not_utf_8_give_none() {
+        for value in [&b""[..], b"  ", b"x-a=1,x-b=\xff"] {
+            assert_eq!(config_with(HEADERS, value).headers, Vec::new(), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn a_percent_sign_that_spells_no_byte_stays_and_bytes_that_are_not_utf_8_are_replaced() {
+        assert_eq!(percent_decoded("100%"), "100%");
+        assert_eq!(percent_decoded("%zz%4"), "%zz%4");
+        assert_eq!(percent_decoded("%41%62%2c"), "Ab,");
+        assert_eq!(percent_decoded("%C3%A9"), "\u{e9}");
+        assert_eq!(percent_decoded("%ff"), "\u{fffd}");
+        assert_eq!(percent_decoded("a+b"), "a+b");
+    }
+
+    #[test]
+    fn a_traceparent_is_carried_as_given_sampled_or_not() {
+        for value in [
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+            " not a traceparent ",
+        ] {
+            assert_eq!(
+                config_with(TRACEPARENT, value.as_bytes()).traceparent,
+                Some(value.to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn an_absent_an_empty_and_a_non_utf_8_traceparent_each_give_none() {
+        assert_eq!(config(&[COLLECTOR]).traceparent, None);
+        assert_eq!(config_with(TRACEPARENT, b"").traceparent, None);
+        assert_eq!(config_with(TRACEPARENT, b"00-\xff-01").traceparent, None);
+    }
+
+    #[test]
+    fn a_launch_time_is_epoch_seconds_with_a_fraction_cut_or_padded_to_nine_digits() {
+        for (value, expected) in [
+            (&b"1699999999"[..], 1_699_999_999_000_000_000),
+            (b"1699999999.5", 1_699_999_999_500_000_000),
+            (b"1699999999,25", 1_699_999_999_250_000_000),
+            (b"1699999999.123456789", 1_699_999_999_123_456_789),
+            (b"1699999999.1234567899999", 1_699_999_999_123_456_789),
+            (b"  1699999999.000000001\n", 1_699_999_999_000_000_001),
+            (b"0.000000001", 1),
+            (b"1700000000", NOW),
+            (b"1700000000.0000000009", NOW),
+        ] {
+            assert_eq!(
+                config_with(LAUNCH_TIME, value).launch_time_unix_nano,
+                Some(expected),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_launch_time_that_is_zero_later_than_the_instant_or_no_number_is_ignored() {
+        assert_eq!(config(&[COLLECTOR]).launch_time_unix_nano, None);
+        for value in [
+            &b"0"[..],
+            b"0.0",
+            b"0,000000000",
+            b"1700000000.000000001",
+            b"1700000001",
+            b"99999999999999999999999999",
+            b"soon",
+            b"",
+            b"1699999999.",
+            b".5",
+            b"1.2.3",
+            b"1,2,3",
+            b"-1",
+            b"+1",
+            b"1e9",
+            b"16999 99999",
+            b"1699999999\xff",
+        ] {
+            assert_eq!(
+                config_with(LAUNCH_TIME, value).launch_time_unix_nano,
+                None,
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_service_name_variable_wins_over_the_resource_attributes_which_win_over_winter() {
+        let attributes: (&str, &[u8]) = (
+            RESOURCE_ATTRIBUTES,
+            b"deployment.environment=dev,service.name=listed,host.name=box",
+        );
+        let others = [("deployment.environment", "dev"), ("host.name", "box")];
+
+        let named = config(&[COLLECTOR, (SERVICE_NAME_VARIABLE, b"named"), attributes]);
+        let listed = config(&[COLLECTOR, attributes]);
+        let neither = config(&[
+            COLLECTOR,
+            (
+                RESOURCE_ATTRIBUTES,
+                b"deployment.environment=dev,host.name=box",
+            ),
+        ]);
+
+        for (config, name) in [(named, "named"), (listed, "listed"), (neither, "winter")] {
+            let mut expected = pairs(&[("service.name", name)]);
+            expected.extend(pairs(&others));
+            assert_eq!(config.resource, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_empty_or_non_utf_8_service_name_falls_through_to_the_next_source() {
+        assert_eq!(
+            config(&[
+                COLLECTOR,
+                (SERVICE_NAME_VARIABLE, b""),
+                (RESOURCE_ATTRIBUTES, b"service.name=listed"),
+            ])
+            .resource,
+            pairs(&[("service.name", "listed")])
+        );
+        assert_eq!(
+            config(&[
+                COLLECTOR,
+                (SERVICE_NAME_VARIABLE, b"\xff"),
+                (RESOURCE_ATTRIBUTES, b"service.name=,k=v"),
+            ])
+            .resource,
+            pairs(&[("service.name", "winter"), ("k", "v")])
+        );
+        assert_eq!(
+            config_with(RESOURCE_ATTRIBUTES, b"k=v,service.name=\xff").resource,
+            pairs(&[("service.name", "winter")])
+        );
+    }
+
+    #[test]
+    fn resource_attributes_are_trimmed_their_values_decoded_and_unreadable_items_skipped() {
+        assert_eq!(
+            config_with(
+                RESOURCE_ATTRIBUTES,
+                b" team = core%20tools ,no-equals-sign,=nameless,a=1,a=b=2,"
+            )
+            .resource,
+            pairs(&[
+                ("service.name", "winter"),
+                ("team", "core tools"),
+                ("a", "b=2"),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_resource_key_is_not_decoded_and_a_resource_value_is_trimmed_before_it_is_decoded() {
+        assert_eq!(
+            config_with(RESOURCE_ATTRIBUTES, b" a%2Eb = %20v%20 ").resource,
+            pairs(&[("service.name", "winter"), ("a%2Eb", " v ")])
+        );
+    }
+
+    #[test]
+    fn a_resource_key_given_twice_keeps_its_first_place_and_its_last_value() {
+        assert_eq!(
+            config_with(RESOURCE_ATTRIBUTES, b"a=1,b=2,a=3").resource,
+            pairs(&[("service.name", "winter"), ("a", "3"), ("b", "2")])
+        );
+    }
+
+    #[test]
+    fn a_service_name_of_blanks_alone_is_not_empty_and_is_the_service_name() {
+        assert_eq!(
+            config(&[
+                COLLECTOR,
+                (SERVICE_NAME_VARIABLE, b" "),
+                (RESOURCE_ATTRIBUTES, b"service.name=listed"),
+            ])
+            .resource,
+            pairs(&[("service.name", " ")])
+        );
+        assert_eq!(
+            config_with(RESOURCE_ATTRIBUTES, b"service.name=%20").resource,
+            pairs(&[("service.name", " ")])
+        );
+    }
+
+    #[test]
+    fn the_span_name_is_winter_and_the_command_path_joined_by_single_spaces() {
+        assert_eq!(
+            span_name(&["ws".to_owned(), "index".to_owned()]),
+            "winter ws index"
+        );
+        assert_eq!(span_name(&["status".to_owned()]), "winter status");
+    }
+}
