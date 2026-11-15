@@ -1,5 +1,6 @@
 //! The architecture rules of the repository: which packages the workspace has and how they may depend on one
-//! another, what a library source may name, and what the CI workflow and the Cargo aliases hold.
+//! another, what a library source may name, what the CI workflow and the Cargo aliases hold, and what the
+//! contributor documents link to, contain, and tell a reader to run.
 //!
 //! Each rule is a function over inputs its caller passes in and answers the violations it finds; an empty answer
 //! is a pass. Nothing here reads a file or starts a process: the integration test of this package gathers the
@@ -71,6 +72,46 @@ const WORKFLOW_USES: [&str; 1] = ["actions/checkout@3d3c42e5aac5ba805825da76410c
 
 /// The aliases `.cargo/config.toml` defines.
 const ALIASES: [&str; 2] = ["dev", "scenarios"];
+
+/// The entry point of the contributor documents.
+const ENTRY_POINT: &str = "AGENTS.md";
+
+/// The directory of the context tree, with its separator.
+const CONTEXT_TREE: &str = "context/";
+
+/// The name of the document that routes to the others of its directory.
+const INDEX: &str = "index.md";
+
+/// What no contributor document may contain, matched as substrings without regard to ASCII case. The documents
+/// describe how to build this repository and nothing else.
+const SCOPE_TOKENS: [&str; 8] = [
+    "python",
+    "uv run",
+    "uv sync",
+    "pytest",
+    "pip install",
+    "tools/winter-cli",
+    ".venv",
+    "skills/",
+];
+
+/// The one document of the context tree the scope rule does not read.
+const SCOPE_EXEMPT: &str = "context/verification/scenarios.md";
+
+/// The commands a contributor document may tell a reader to run, beside a `cargo test -p` call on a workspace
+/// package. `cargo scenarios` also takes one filter.
+const DOCUMENTED_COMMANDS: [&str; 5] = [
+    "cargo dev gate slice",
+    "cargo dev gate full",
+    "cargo dev fmt",
+    "cargo scenarios",
+    "cargo fetch --locked",
+];
+
+/// The headings of the three parts of the verifiability matrix.
+const COMMANDS_PART: &str = "Commands";
+const MANUAL_PART: &str = "Manual testing";
+const TOOLS_PART: &str = "Tools";
 
 /// The kind of a dependency between two workspace packages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,6 +194,27 @@ pub enum Violation {
     UnlistedAlias { alias: String },
     /// The Cargo configuration lacks an expected alias.
     MissingAlias { alias: &'static str },
+    /// A contributor document is not linked from the index that routes to it.
+    Unlinked { file: String, index: String },
+    /// A relative link of a contributor document names no file of the checkout. `line` counts from 1.
+    DeadLink {
+        file: String,
+        line: usize,
+        target: String,
+    },
+    /// A contributor document contains a scope token. `line` counts from 1.
+    ScopeToken {
+        file: String,
+        line: usize,
+        token: &'static str,
+    },
+    /// A contributor document tells a reader to run a command that is not a documented one. `line` counts
+    /// from 1.
+    UnknownCommand {
+        file: String,
+        line: usize,
+        command: String,
+    },
 }
 
 impl fmt::Display for Violation {
@@ -223,6 +285,31 @@ impl fmt::Display for Violation {
                 write!(
                     f,
                     "the Cargo configuration does not define the alias `{alias}`"
+                )
+            }
+            Self::Unlinked { file, index } => {
+                write!(f, "{file}: not linked from {index}")
+            }
+            Self::DeadLink { file, line, target } => {
+                write!(
+                    f,
+                    "{file}:{line}: the link to `{target}` names no file of the checkout"
+                )
+            }
+            Self::ScopeToken { file, line, token } => {
+                write!(
+                    f,
+                    "{file}:{line}: `{token}` is outside what a contributor document describes"
+                )
+            }
+            Self::UnknownCommand {
+                file,
+                line,
+                command,
+            } => {
+                write!(
+                    f,
+                    "{file}:{line}: `{command}` is neither a gate command nor a `cargo test -p` call on a workspace package"
                 )
             }
         }
@@ -425,6 +512,326 @@ pub fn aliases(names: &BTreeSet<String>) -> Vec<Violation> {
         .filter(|alias| !names.contains(*alias))
         .map(|alias| Violation::MissingAlias { alias });
     unlisted.chain(missing).collect()
+}
+
+/// Whether `file`, a path from the repository root, is a document the context rules read: the entry point, or
+/// a Markdown file of the context tree.
+pub fn is_context_document(file: &str) -> bool {
+    file == ENTRY_POINT || (file.starts_with(CONTEXT_TREE) && file.ends_with(".md"))
+}
+
+/// The document that routes to `file`, a document of the context tree: the index of its directory, for an
+/// index the index of the directory above, and for the index of the tree the entry point.
+fn routed_from(file: &str) -> String {
+    let (directory, name) = file.rsplit_once('/').unwrap_or(("", file));
+    if name != INDEX {
+        return format!("{directory}/{INDEX}");
+    }
+    match directory.rsplit_once('/') {
+        Some((above, _)) => format!("{above}/{INDEX}"),
+        None => ENTRY_POINT.to_owned(),
+    }
+}
+
+/// The lines of `text` outside fenced code blocks, each with its number from 1.
+fn prose_lines(text: &str) -> Vec<(usize, &str)> {
+    let mut fenced = false;
+    let mut lines = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        if is_fence(line) {
+            fenced = !fenced;
+        } else if !fenced {
+            lines.push((index + 1, line));
+        }
+    }
+    lines
+}
+
+fn is_fence(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with("```") || line.starts_with("~~~")
+}
+
+/// The code spans of one line: the text between each pair of backticks.
+fn code_spans(line: &str) -> Vec<&str> {
+    line.split('`').skip(1).step_by(2).collect()
+}
+
+/// `line` with its code spans left out.
+fn without_code_spans(line: &str) -> String {
+    line.split('`').step_by(2).collect::<Vec<_>>().join(" ")
+}
+
+/// The targets of the inline links of `text`, each with the number of its line from 1. Fenced code blocks and
+/// code spans hold no link.
+pub fn link_targets(text: &str) -> Vec<(usize, String)> {
+    let mut targets = Vec::new();
+    for (line, content) in prose_lines(text) {
+        let content = without_code_spans(content);
+        for (start, _) in content.match_indices("](") {
+            let rest = &content[start + 2..];
+            let Some(end) = rest.find(')') else { continue };
+            let target = rest[..end].split_whitespace().next().unwrap_or_default();
+            let target = target.trim_start_matches('<').trim_end_matches('>');
+            targets.push((line, target.to_owned()));
+        }
+    }
+    targets
+}
+
+/// Where a link target leads.
+enum Destination {
+    /// Out of the checkout's files: another site, or a place in the document itself. Not checked.
+    Elsewhere,
+    /// A path from the repository root.
+    File(String),
+    /// Above the repository root.
+    Outside,
+}
+
+/// Where `target`, a link target of the document `file`, leads. A fragment is not part of the path.
+fn destination(file: &str, target: &str) -> Destination {
+    let path = target.split('#').next().unwrap_or_default();
+    if path.is_empty() || target.contains("://") || target.starts_with("mailto:") {
+        return Destination::Elsewhere;
+    }
+    let mut parts: Vec<&str> = if path.starts_with('/') {
+        Vec::new()
+    } else {
+        file.split('/').collect()
+    };
+    parts.pop();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    return Destination::Outside;
+                }
+            }
+            part => parts.push(part),
+        }
+    }
+    Destination::File(parts.join("/"))
+}
+
+/// Whether the document `text`, at `file`, links to the file `to`.
+fn links_to(file: &str, text: &str, to: &str) -> bool {
+    link_targets(text).iter().any(
+        |(_, target)| matches!(destination(file, target), Destination::File(path) if path == to),
+    )
+}
+
+/// Every document of the context tree is linked from the index that routes to it: a document from the index
+/// of its directory, an index from the index of the directory above, and the index of the tree from the entry
+/// point. `documents` are the documents [`is_context_document`] accepts, each as its path from the repository
+/// root and its text.
+pub fn reachable(documents: &[(String, String)]) -> Vec<Violation> {
+    documents
+        .iter()
+        .filter(|(file, _)| file != ENTRY_POINT)
+        .filter_map(|(file, _)| {
+            let index = routed_from(file);
+            let linked = documents
+                .iter()
+                .any(|(from, text)| *from == index && links_to(from, text, file));
+            (!linked).then(|| Violation::Unlinked {
+                file: file.clone(),
+                index,
+            })
+        })
+        .collect()
+}
+
+/// Every relative link of the document `text`, at `file`, names a file of the checkout. `files` are the
+/// checkout's files as paths from the repository root.
+pub fn links_resolve(file: &str, text: &str, files: &BTreeSet<String>) -> Vec<Violation> {
+    link_targets(text)
+        .into_iter()
+        .filter(|(_, target)| match destination(file, target) {
+            Destination::Elsewhere => false,
+            Destination::File(path) => !files.contains(&path),
+            Destination::Outside => true,
+        })
+        .map(|(line, target)| Violation::DeadLink {
+            file: file.to_owned(),
+            line,
+            target,
+        })
+        .collect()
+}
+
+/// The scope tokens of one contributor document. The recorded-scenario document alone is not read: it
+/// describes the tool the scenarios are recorded from.
+pub fn scope_tokens(file: &str, text: &str) -> Vec<Violation> {
+    if file == SCOPE_EXEMPT {
+        return Vec::new();
+    }
+    let mut violations = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let line = line.to_ascii_lowercase();
+        for token in SCOPE_TOKENS {
+            if line.contains(token) {
+                violations.push(Violation::ScopeToken {
+                    file: file.to_owned(),
+                    line: index + 1,
+                    token,
+                });
+            }
+        }
+    }
+    violations
+}
+
+/// The lines inside the fenced code blocks of `text` that are not blank, trimmed, each with its number from 1.
+pub fn fenced_lines(text: &str) -> Vec<(usize, String)> {
+    let mut fenced = false;
+    let mut lines = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        if is_fence(line) {
+            fenced = !fenced;
+        } else if fenced && !line.trim().is_empty() {
+            lines.push((index + 1, line.trim().to_owned()));
+        }
+    }
+    lines
+}
+
+/// The lines of the part of `text` under the second-level heading `heading`, up to the next heading of that
+/// level, each with its number from 1.
+fn part<'a>(text: &'a str, heading: &str) -> Vec<(usize, &'a str)> {
+    text.lines()
+        .enumerate()
+        .skip_while(|(_, line)| line.strip_prefix("## ").map(str::trim) != Some(heading))
+        .skip(1)
+        .take_while(|(_, line)| !line.starts_with("## "))
+        .map(|(index, line)| (index + 1, line))
+        .collect()
+}
+
+/// The cells of a table line, or `None` for a line that is no table line.
+fn cells(line: &str) -> Option<Vec<&str>> {
+    let inner = line.trim().strip_prefix('|')?;
+    let inner = inner.strip_suffix('|').unwrap_or(inner);
+    Some(inner.split('|').map(str::trim).collect())
+}
+
+/// The rows of the tables among `lines`, each as its cells: a table line that is neither the line under a
+/// header nor the header above it.
+fn table_rows<'a>(lines: &[(usize, &'a str)]) -> Vec<(usize, Vec<&'a str>)> {
+    let is_rule = |cells: &[&str]| {
+        cells
+            .iter()
+            .all(|cell| !cell.is_empty() && cell.chars().all(|c| matches!(c, '-' | ':')))
+    };
+    let tabled: Vec<(usize, Vec<&str>)> = lines
+        .iter()
+        .filter_map(|(line, text)| Some((*line, cells(text)?)))
+        .collect();
+    let mut rows = Vec::new();
+    for (position, (line, row)) in tabled.iter().enumerate() {
+        let heads = tabled
+            .get(position + 1)
+            .is_some_and(|(next, cells)| *next == line + 1 && is_rule(cells));
+        if !heads && !is_rule(row) {
+            rows.push((*line, row.clone()));
+        }
+    }
+    rows
+}
+
+/// `cell` without the backticks of a code span that is all it holds.
+fn unquoted(cell: &str) -> &str {
+    cell.strip_prefix('`')
+        .and_then(|cell| cell.strip_suffix('`'))
+        .unwrap_or(cell)
+}
+
+/// The commands of the Commands and Tools parts of the verifiability matrix `text`, each with the number of
+/// its line from 1: the whole second cell of every row of the Commands part, and every code span of either
+/// part that starts with the word `cargo`.
+pub fn matrix_commands(text: &str) -> Vec<(usize, String)> {
+    let commands_part = part(text, COMMANDS_PART);
+    let rows = table_rows(&commands_part);
+    let mut commands: Vec<(usize, String)> = rows
+        .iter()
+        .map(|(line, cells)| {
+            let command = cells.get(1).copied().unwrap_or_default();
+            (*line, unquoted(command).to_owned())
+        })
+        .collect();
+
+    let in_row = |line: usize| rows.iter().any(|(row, _)| *row == line);
+    for (line, content) in commands_part.into_iter().chain(part(text, TOOLS_PART)) {
+        if in_row(line) {
+            continue;
+        }
+        for span in code_spans(content) {
+            if span.split_whitespace().next() == Some("cargo") {
+                commands.push((line, span.to_owned()));
+            }
+        }
+    }
+    commands.sort();
+    commands
+}
+
+/// The method ids of the Commands part of the verifiability matrix `text`, in order: the first cell of every
+/// row.
+pub fn matrix_command_ids(text: &str) -> Vec<String> {
+    first_cells(text, COMMANDS_PART)
+}
+
+/// The tool ids of the Tools part of the verifiability matrix `text`, in order: the first cell of every row.
+pub fn matrix_tool_ids(text: &str) -> Vec<String> {
+    first_cells(text, TOOLS_PART)
+}
+
+fn first_cells(text: &str, heading: &str) -> Vec<String> {
+    table_rows(&part(text, heading))
+        .into_iter()
+        .map(|(_, cells)| unquoted(cells.first().copied().unwrap_or_default()).to_owned())
+        .collect()
+}
+
+/// The entries of the Manual testing part of the verifiability matrix `text`, in order: each third-level
+/// heading of the part gives an entry, whose id is the first code span of the heading and whose text is what
+/// follows it up to the next heading.
+pub fn matrix_manual_methods(text: &str) -> Vec<(String, String)> {
+    let mut methods: Vec<(String, String)> = Vec::new();
+    for (_, line) in part(text, MANUAL_PART) {
+        if let Some(heading) = line.strip_prefix("### ") {
+            let id = code_spans(heading).first().copied().unwrap_or(heading);
+            methods.push((id.to_owned(), String::new()));
+        } else if let Some((_, body)) = methods.last_mut() {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    methods
+}
+
+/// Whether `command` is one a contributor document may tell a reader to run: a gate command, `cargo scenarios`
+/// with one filter, or a `cargo test -p` call that names a workspace package.
+fn is_documented_command(command: &str) -> bool {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    DOCUMENTED_COMMANDS.contains(&words.join(" ").as_str())
+        || matches!(words.as_slice(), ["cargo", "scenarios", filter] if !filter.starts_with('-'))
+        || matches!(words.as_slice(), ["cargo", "test", "-p", package, ..] if MEMBERS.contains(package))
+}
+
+/// Every command a contributor document tells a reader to run is a documented one. `commands` are the command
+/// lines of the document `file`, as [`fenced_lines`] or [`matrix_commands`] answers them.
+pub fn documented_commands(file: &str, commands: &[(usize, String)]) -> Vec<Violation> {
+    commands
+        .iter()
+        .filter(|(_, command)| !is_documented_command(command))
+        .map(|(line, command)| Violation::UnknownCommand {
+            file: file.to_owned(),
+            line: *line,
+            command: command.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -983,5 +1390,424 @@ steps:
     #[test]
     fn a_configuration_that_is_not_toml_is_an_error() {
         assert!(alias_names("[alias\n").is_err());
+    }
+
+    fn documents(documents: &[(&str, &str)]) -> Vec<(String, String)> {
+        documents
+            .iter()
+            .map(|(file, text)| ((*file).to_owned(), (*text).to_owned()))
+            .collect()
+    }
+
+    /// A context tree in which every document is linked from the index that routes to it.
+    fn context_tree() -> Vec<(String, String)> {
+        documents(&[
+            ("AGENTS.md", "Start at [the context](./context/index.md).\n"),
+            (
+                "context/index.md",
+                "| [tooling](./tooling/index.md) | You run a gate. |\n",
+            ),
+            (
+                "context/tooling/index.md",
+                "| [development.md](./development.md) | You run a gate. |\n",
+            ),
+            ("context/tooling/development.md", "Run the gate.\n"),
+        ])
+    }
+
+    fn files(files: &[&str]) -> BTreeSet<String> {
+        files.iter().map(|file| (*file).to_owned()).collect()
+    }
+
+    const MATRIX: &str = "\
+# Verifiability matrix
+
+## Commands
+
+| Method                | Command                                     | Proves       |
+| --------------------- | ------------------------------------------- | ------------ |
+| `workspace:unit-test` | `cargo test -p winter-workspace-core --lib` | A pure rule. |
+| `workspace:slice-gate` | `cargo dev gate slice`                     | Mergeable.   |
+
+A narrower run names one file with `--test <subject>`.
+
+## Manual testing
+
+### `workspace:manual-gates`
+
+Runs in a scratch copy of the checkout.
+
+**Setup.** Inject one fault with `cargo build`.
+
+### `workspace:manual-registration`
+
+**Success.** Each run ends as stated.
+
+## Tools
+
+| Tool             | Use                                           |
+| ---------------- | --------------------------------------------- |
+| `tool:format`    | `cargo dev fmt` rewrites formatting.          |
+| `tool:keep-tree` | `WINTER_TEST_KEEP=1` on any test command.     |
+";
+
+    #[test]
+    fn a_tree_whose_every_document_is_linked_from_its_index_passes() {
+        assert_eq!(reachable(&context_tree()), []);
+    }
+
+    #[test]
+    fn a_document_no_index_links_is_named() {
+        let mut tree = context_tree();
+        tree.push((
+            "context/tooling/orphan.md".to_owned(),
+            "Nobody routes here.\n".to_owned(),
+        ));
+
+        let violations = reachable(&tree);
+
+        assert_eq!(
+            violations,
+            [Violation::Unlinked {
+                file: "context/tooling/orphan.md".to_owned(),
+                index: "context/tooling/index.md".to_owned(),
+            }]
+        );
+        assert_eq!(
+            rendered(&violations),
+            ["context/tooling/orphan.md: not linked from context/tooling/index.md"]
+        );
+    }
+
+    #[test]
+    fn a_document_linked_only_from_another_index_is_named() {
+        let mut tree = context_tree();
+        tree[0]
+            .1
+            .push_str("[direct](./context/tooling/development.md)\n");
+        tree[2].1 = "No row.\n".to_owned();
+
+        assert_eq!(
+            reachable(&tree),
+            [Violation::Unlinked {
+                file: "context/tooling/development.md".to_owned(),
+                index: "context/tooling/index.md".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn an_area_index_the_tree_index_does_not_link_and_a_tree_index_the_entry_point_does_not_link_are_named()
+     {
+        let mut tree = context_tree();
+        tree[0].1 = "No routing.\n".to_owned();
+        tree[1].1 = "No areas.\n".to_owned();
+
+        assert_eq!(
+            reachable(&tree),
+            [
+                Violation::Unlinked {
+                    file: "context/index.md".to_owned(),
+                    index: "AGENTS.md".to_owned(),
+                },
+                Violation::Unlinked {
+                    file: "context/tooling/index.md".to_owned(),
+                    index: "context/index.md".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_document_whose_directory_has_no_index_is_named() {
+        let mut tree = context_tree();
+        tree.push(("context/extra/notes.md".to_owned(), "Notes.\n".to_owned()));
+
+        assert_eq!(
+            reachable(&tree),
+            [Violation::Unlinked {
+                file: "context/extra/notes.md".to_owned(),
+                index: "context/extra/index.md".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_link_inside_a_code_span_or_a_fenced_block_links_nothing() {
+        let mut tree = context_tree();
+        tree[2].1 = "`[development.md](./development.md)`\n\n```text\n[development.md](./development.md)\n```\n"
+            .to_owned();
+
+        assert_eq!(reachable(&tree).len(), 1);
+    }
+
+    #[test]
+    fn the_documents_the_context_rules_read_are_the_entry_point_and_the_markdown_of_the_tree() {
+        assert!(is_context_document("AGENTS.md"));
+        assert!(is_context_document("context/index.md"));
+        assert!(is_context_document("context/standards/rust.md"));
+        assert!(!is_context_document("README.md"));
+        assert!(!is_context_document("context/standards/example.rs"));
+        assert!(!is_context_document("crates/core/context/index.md"));
+    }
+
+    #[test]
+    fn a_link_to_a_missing_file_is_named_with_file_and_line() {
+        let text =
+            "# Tooling\n\nSee [the gates](./gates.md) and [development](./development.md#gates).\n";
+        let present = files(&["context/tooling/index.md", "context/tooling/development.md"]);
+
+        let violations = links_resolve("context/tooling/index.md", text, &present);
+
+        assert_eq!(
+            violations,
+            [Violation::DeadLink {
+                file: "context/tooling/index.md".to_owned(),
+                line: 3,
+                target: "./gates.md".to_owned(),
+            }]
+        );
+        assert_eq!(
+            rendered(&violations),
+            ["context/tooling/index.md:3: the link to `./gates.md` names no file of the checkout"]
+        );
+    }
+
+    #[test]
+    fn links_resolve_against_the_directory_of_the_document() {
+        let text =
+            "[up](../index.md) [root](../../AGENTS.md) [source](../../crates/dev/src/lib.rs)\n";
+        let present = files(&["context/index.md", "AGENTS.md", "crates/dev/src/lib.rs"]);
+
+        assert_eq!(
+            links_resolve("context/tooling/development.md", text, &present),
+            []
+        );
+        assert_eq!(
+            links_resolve("context/development.md", text, &present).len(),
+            3
+        );
+    }
+
+    #[test]
+    fn a_link_that_leaves_the_repository_is_named() {
+        let violations = links_resolve("AGENTS.md", "[out](../elsewhere.md)\n", &files(&[]));
+
+        assert_eq!(
+            violations,
+            [Violation::DeadLink {
+                file: "AGENTS.md".to_owned(),
+                line: 1,
+                target: "../elsewhere.md".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_link_to_another_site_or_to_a_place_in_the_document_is_not_checked() {
+        let text = "[site](https://example.invalid/a.md) [mail](mailto:a@example.invalid) [here](#gates)\n";
+
+        assert_eq!(links_resolve("AGENTS.md", text, &files(&[])), []);
+    }
+
+    #[test]
+    fn a_document_that_names_the_test_runner_of_another_language_is_named() {
+        let text = "# Testing\n\nRun PyTest first.\n";
+
+        let violations = scope_tokens("context/standards/testing.md", text);
+
+        assert_eq!(
+            violations,
+            [Violation::ScopeToken {
+                file: "context/standards/testing.md".to_owned(),
+                line: 3,
+                token: "pytest",
+            }]
+        );
+        assert!(rendered(&violations)[0].starts_with("context/standards/testing.md:3: `pytest`"));
+    }
+
+    #[test]
+    fn an_entry_point_that_names_another_tool_runner_is_named() {
+        let text = "## Standing rules\n\n- Run `uv run check` before handing a change over.\n";
+
+        assert_eq!(
+            scope_tokens("AGENTS.md", text),
+            [Violation::ScopeToken {
+                file: "AGENTS.md".to_owned(),
+                line: 3,
+                token: "uv run",
+            }]
+        );
+    }
+
+    #[test]
+    fn the_recorded_scenario_document_alone_is_not_read_for_scope() {
+        let text = "The reference tool is written in python.\n";
+
+        assert_eq!(scope_tokens("context/verification/scenarios.md", text), []);
+        assert_eq!(
+            scope_tokens("context/verification/matrix.md", text).len(),
+            1
+        );
+        assert_eq!(scope_tokens("context/scenarios.md", text).len(), 1);
+    }
+
+    #[test]
+    fn every_scope_token_is_found_in_any_letter_case() {
+        for token in SCOPE_TOKENS {
+            let text = format!("Before {} after.\n", token.to_ascii_uppercase());
+
+            let found: Vec<&str> = scope_tokens("README.md", &text)
+                .into_iter()
+                .map(|violation| match violation {
+                    Violation::ScopeToken { token, .. } => token,
+                    other => panic!("{other:?}"),
+                })
+                .collect();
+
+            assert!(found.contains(&token), "{token}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_document_without_a_scope_token_passes() {
+        assert_eq!(scope_tokens("README.md", "Build with `cargo build`.\n"), []);
+    }
+
+    #[test]
+    fn the_lines_of_fenced_blocks_are_read_without_the_fences_and_blank_lines() {
+        let text = "Bootstrap:\n\n```bash\ncargo fetch --locked\n\n  cargo dev gate slice\n```\n\nThen `cargo build`.\n\n~~~\ncargo dev fmt\n~~~\n";
+
+        assert_eq!(
+            fenced_lines(text),
+            [
+                (4, "cargo fetch --locked".to_owned()),
+                (6, "cargo dev gate slice".to_owned()),
+                (12, "cargo dev fmt".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_gate_commands_and_package_tests_are_documented_commands() {
+        for command in [
+            "cargo dev gate slice",
+            "cargo dev gate full",
+            "cargo dev fmt",
+            "cargo scenarios",
+            "cargo scenarios some-filter",
+            "cargo fetch --locked",
+            "cargo test -p winter-workspace",
+            "cargo test -p winter-workspace-core --lib",
+            "cargo test -p winter-workspace-core --test '*'",
+            "cargo test -p winter-workspace-dev",
+            "cargo test -p winter-workspace-test-support --test tree",
+        ] {
+            let lines = [(1, command.to_owned())];
+
+            assert_eq!(documented_commands("AGENTS.md", &lines), [], "{command}");
+        }
+    }
+
+    #[test]
+    fn a_command_that_is_no_gate_command_and_no_package_test_is_named() {
+        for command in [
+            "cargo build",
+            "cargo test",
+            "cargo test --workspace",
+            "cargo test -p winter-workspace-extra",
+            "cargo dev gate",
+            "cargo dev record",
+            "cargo dev fmt --check",
+            "cargo scenarios --list",
+            "cargo fetch",
+            "git status",
+            "# a comment",
+        ] {
+            let lines = [(7, command.to_owned())];
+
+            let violations = documented_commands("context/tooling/development.md", &lines);
+
+            assert_eq!(
+                violations,
+                [Violation::UnknownCommand {
+                    file: "context/tooling/development.md".to_owned(),
+                    line: 7,
+                    command: command.to_owned(),
+                }],
+                "{command}"
+            );
+            assert!(
+                rendered(&violations)[0].starts_with("context/tooling/development.md:7: `"),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_matrix_commands_are_the_command_cells_and_the_cargo_spans_of_the_commands_and_tools_parts()
+     {
+        assert_eq!(
+            matrix_commands(MATRIX),
+            [
+                (7, "cargo test -p winter-workspace-core --lib".to_owned()),
+                (8, "cargo dev gate slice".to_owned()),
+                (28, "cargo dev fmt".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_command_cell_that_holds_no_command_is_still_read_as_one() {
+        let text = MATRIX.replace(
+            "`cargo dev gate slice`                    ",
+            "see the gates",
+        );
+
+        assert!(matrix_commands(&text).contains(&(8, "see the gates".to_owned())));
+    }
+
+    #[test]
+    fn a_cargo_span_under_the_commands_table_is_read_and_one_of_the_manual_part_is_not() {
+        let text = MATRIX.replace(
+            "A narrower run names one file with `--test <subject>`.",
+            "A narrower run is `cargo test --workspace`.",
+        );
+
+        let commands = matrix_commands(&text);
+
+        assert!(commands.contains(&(10, "cargo test --workspace".to_owned())));
+        assert!(!commands.iter().any(|(_, command)| command == "cargo build"));
+    }
+
+    #[test]
+    fn the_matrix_ids_are_read_from_each_part() {
+        assert_eq!(
+            matrix_command_ids(MATRIX),
+            ["workspace:unit-test", "workspace:slice-gate"]
+        );
+        assert_eq!(matrix_tool_ids(MATRIX), ["tool:format", "tool:keep-tree"]);
+
+        let manual = matrix_manual_methods(MATRIX);
+        let ids: Vec<&str> = manual.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["workspace:manual-gates", "workspace:manual-registration"]
+        );
+        assert!(manual[0].1.contains("scratch copy"));
+        assert!(manual[0].1.contains("**Setup.**"));
+        assert!(!manual[0].1.contains("**Success.**"));
+        assert!(manual[1].1.contains("**Success.**"));
+    }
+
+    #[test]
+    fn a_matrix_without_a_part_has_nothing_in_it() {
+        let text = "# Verifiability matrix\n\n## Commands\n\nNone.\n";
+
+        assert!(matrix_commands(text).is_empty());
+        assert!(matrix_command_ids(text).is_empty());
+        assert!(matrix_manual_methods(text).is_empty());
+        assert!(matrix_tool_ids(text).is_empty());
     }
 }

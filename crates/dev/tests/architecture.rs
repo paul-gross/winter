@@ -107,3 +107,127 @@ fn the_cargo_configuration_defines_the_two_aliases() {
 
     assert_none("aliases", &architecture::aliases(&names));
 }
+
+/// The document of the context tree whose fenced blocks hold commands.
+const DEVELOPMENT: &str = "context/tooling/development.md";
+
+/// The verifiability matrix.
+const MATRIX: &str = "context/verification/matrix.md";
+
+/// Every file of the checkout as its path from the repository root, without the build directory and the
+/// repository's own git directory.
+fn checkout_files() -> Vec<String> {
+    let root = repository_root();
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(&root).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        if name == "target" || name == ".git" {
+            continue;
+        }
+        if entry.file_type().unwrap().is_dir() {
+            files.extend(files_below(&entry.path()));
+        } else {
+            files.push(entry.path());
+        }
+    }
+    let mut files: Vec<String> = files
+        .iter()
+        .map(|path| {
+            path.strip_prefix(&root)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// The entry point and the documents of the context tree, each with its text.
+fn context_documents() -> Vec<(String, String)> {
+    checkout_files()
+        .into_iter()
+        .filter(|file| architecture::is_context_document(file))
+        .map(|file| {
+            let text = read(&file);
+            (file, text)
+        })
+        .collect()
+}
+
+#[test]
+fn the_context_documents_are_reachable_from_the_entry_point_and_their_links_resolve() {
+    let files = checkout_files().into_iter().collect();
+    let documents = context_documents();
+    assert!(documents.len() > 1, "the checkout holds no context tree");
+
+    let mut violations = architecture::reachable(&documents);
+    for (file, text) in &documents {
+        violations.extend(architecture::links_resolve(file, text, &files));
+    }
+
+    assert_none("context tree", &violations);
+}
+
+#[test]
+fn the_contributor_documents_stay_in_scope() {
+    let mut violations = architecture::scope_tokens("README.md", &read("README.md"));
+    for (file, text) in context_documents() {
+        violations.extend(architecture::scope_tokens(&file, &text));
+    }
+
+    assert_none("scope", &violations);
+}
+
+#[test]
+fn the_documented_commands_are_gate_commands_or_tests_of_a_workspace_package() {
+    let development = architecture::fenced_lines(&read(DEVELOPMENT));
+    let matrix = architecture::matrix_commands(&read(MATRIX));
+    assert!(!development.is_empty(), "{DEVELOPMENT} holds no command");
+    assert!(!matrix.is_empty(), "{MATRIX} holds no command");
+
+    let mut violations = architecture::documented_commands(DEVELOPMENT, &development);
+    violations.extend(architecture::documented_commands(MATRIX, &matrix));
+
+    assert_none("documented commands", &violations);
+}
+
+#[test]
+fn the_matrix_declares_its_command_methods_and_its_tools() {
+    let matrix = read(MATRIX);
+
+    assert_eq!(
+        architecture::matrix_command_ids(&matrix),
+        [
+            "workspace:unit-test",
+            "workspace:component-test",
+            "workspace:executable-test",
+            "workspace:architecture",
+            "workspace:slice-gate",
+            "workspace:full-gate",
+        ]
+    );
+    assert_eq!(
+        architecture::matrix_tool_ids(&matrix),
+        ["tool:format", "tool:keep-tree"]
+    );
+}
+
+#[test]
+fn the_matrix_declares_its_manual_methods_each_with_its_setup_its_success_and_where_it_runs() {
+    let methods = architecture::matrix_manual_methods(&read(MATRIX));
+
+    let ids: Vec<&str> = methods.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["workspace:manual-gates", "workspace:manual-registration"]
+    );
+    for (id, text) in &methods {
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        for stated in ["**Setup.**", "**Success.**", "scratch copy of the checkout"] {
+            assert!(text.contains(stated), "{id} does not state {stated}");
+        }
+    }
+}
