@@ -4,6 +4,7 @@
 //! names a process stream, the process environment, or a process exit; the binary binds those and maps the
 //! returned [`Termination`] to an exit code.
 
+mod config_edit;
 mod config_raw;
 mod context;
 #[cfg(test)]
@@ -19,6 +20,7 @@ mod state_registry;
 mod termination;
 mod workspace_root;
 
+pub use config_edit::{CatalogError, RepositoryKind};
 pub use process::{Identity, Invocation, ProcessEnv, run};
 pub use termination::{
     CommandError, ConfigError, FileCause, InternalError, ParseFault, Termination, TomlParseError,

@@ -5,6 +5,8 @@ use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::config_edit::CatalogError;
+
 /// One value per way an invocation ends.
 ///
 /// Commands return these and write only their result. The process boundary alone writes the final diagnostic of
@@ -82,7 +84,10 @@ pub enum ParseFault {
 /// A rule of a command that the invocation violates. Each variant wraps the error of the module that owns the
 /// rule.
 #[derive(Debug, thiserror::Error)]
-pub enum CommandError {}
+pub enum CommandError {
+    #[error(transparent)]
+    Catalog(#[from] CatalogError),
+}
 
 /// A failure to locate, read, or accept the workspace configuration.
 #[derive(Debug, thiserror::Error)]

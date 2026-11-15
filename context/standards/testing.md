@@ -13,7 +13,9 @@ command that runs each tier is in [the verifiability matrix](../verification/mat
 
 Choose the lowest tier that can make the claim:
 
-- A unit test takes no file, git, or process input and uses nothing from the support package.
+- A unit test takes no file, git, or process input and uses nothing from the support package. The one exception is the
+  file port, `crates/core/src/files.rs`: its unit tests touch the file system, and only inside a `TempTree` of their
+  own.
 - A component test calls the library's `run` with handles it owns and asserts on the returned `Termination` and on what
   was written. When the behaviour reads or writes files or git state, the test builds a fixture workspace with
   `TempTree`, `Git`, and `WorkspaceBuilder`; the library's manifest declares the support package as a dev-dependency

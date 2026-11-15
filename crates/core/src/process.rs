@@ -75,6 +75,7 @@ pub fn run(invocation: Invocation<'_>) -> Termination {
         out_is_terminal: stdout_is_terminal,
         err_is_terminal: stderr_is_terminal,
         files: &OsFiles,
+        file_writer: &OsFiles,
     };
 
     parse::run(REGISTRY, &args, &mut cx)

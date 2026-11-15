@@ -471,6 +471,7 @@ mod tests {
                 out_is_terminal: false,
                 err_is_terminal: false,
                 files: &OsFiles,
+                file_writer: &OsFiles,
             },
         );
         Ended {
