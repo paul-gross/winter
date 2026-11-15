@@ -103,6 +103,13 @@ The gates run every test. While working on one thing, a narrower run is quicker.
 cargo test -p winter-workspace-core --test root
 ```
 
+## Running the built binary
+
+A build writes the binary to `target/debug/winter-workspace`, and a release build to `target/release/winter-workspace`.
+Where it may run is a standing rule of [AGENTS.md](../../AGENTS.md#standing-rules). It is on no `PATH`: from a directory
+that rule permits, it is started by its path, as in `<checkout>/target/debug/winter-workspace --help`, where
+`<checkout>` is the path of the repository root.
+
 ## Markdown
 
 `dprint.json` and `.rumdl.toml` configure Markdown formatting and lint for an editor and for hand-run tools. No gate

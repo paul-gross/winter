@@ -17,6 +17,14 @@ workspace.
   and those of the record command run in an isolated tree that holds a stand-in checkout, and start git and a stand-in
   executable there.
 - Nothing in the repository starts the reference tool; `cargo dev record` alone is handed its path.
+- The built binary, however it is started outside the tests and the gates, `cargo run` included, runs only with its
+  working directory inside an isolated tree, a scratch workspace under a temporary directory, or a scratch copy of the
+  checkout under a temporary directory, and only where no directory at or above the working directory holds a
+  `.winter/config.toml` other than one made for the run; never in the checkout and never in a real workspace, because it
+  resolves the workspace upward from its working directory and `repo remove` writes to the configuration it finds there.
+  It is never installed, and never put on `PATH` under the name of the installed `winter`. The isolated tree is the one
+  [testing.md](./context/standards/testing.md#the-isolated-tree) describes; a scratch workspace is a directory made for
+  the run that holds a `.winter/config.toml` of its own.
 
 ## Routing
 
