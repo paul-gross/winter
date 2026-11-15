@@ -109,6 +109,8 @@ The standing rule in [AGENTS.md](../../AGENTS.md) holds for every test of the li
 package. In practice:
 
 - It creates files only under its own tree, and reaches no workspace or repository that is not a fixture in that tree.
+  The one exception is the repository's committed `scenarios/`, which a test may read and never writes: it copies what
+  it needs into its tree.
 - It starts a child only through `invoke` or `Git`, by an absolute path and under the pinned environment. No shell
   stands between a test and its child, and no name is looked up on `PATH`. A test of the support package that needs a
   child with a behaviour of its own runs `/bin/sh` as that child, with a script the test spells out.

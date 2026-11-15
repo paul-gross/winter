@@ -1,0 +1,5 @@
+summary = "A name that is neither recorded nor an alias answers its hash slot under the default configuration as a suggested index."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

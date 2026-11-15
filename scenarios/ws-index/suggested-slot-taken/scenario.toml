@@ -1,0 +1,5 @@
+summary = "A name that is not recorded answers its hash slot as a suggested index though the registry records another name at that slot."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

@@ -11,9 +11,11 @@ workspace.
 - Tests of the library, the binary, and the support package run in an isolated tree from
   `winter-workspace-test-support`; such a test never touches a real workspace, a real repository, the network, or
   anything else outside its tree; the only host programs it runs are git and the base system utilities on the pinned
-  `PATH`, and nothing of the developer's own environment reaches it. The driver's own tests in `crates/dev/` test the
-  tooling: those of the gates and of the architecture rules read the checkout and start Cargo, and those of the record
-  command run in an isolated tree that holds a stand-in checkout, and start git and a stand-in executable there.
+  `PATH`, and nothing of the developer's own environment reaches it. The one exception: a test may read, and never
+  writes, the repository's committed `scenarios/`, copying what it needs into its tree. The driver's own tests in
+  `crates/dev/` test the tooling: those of the gates and of the architecture rules read the checkout and start Cargo,
+  and those of the record command run in an isolated tree that holds a stand-in checkout, and start git and a stand-in
+  executable there.
 - Nothing in the repository starts the reference tool; `cargo dev record` alone is handed its path.
 
 ## Routing

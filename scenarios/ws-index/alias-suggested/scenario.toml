@@ -1,0 +1,5 @@
+summary = "A name that is an alias and is not recorded answers the position of the alias as a suggested index, and nothing is written."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"
