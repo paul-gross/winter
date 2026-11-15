@@ -1,5 +1,7 @@
-//! Recorded scenarios: what a scenario directory holds, read as typed values.
+//! Recorded scenarios: what a scenario directory holds, read as typed values, and the fixture one describes,
+//! built in an isolated tree.
 
+pub mod fixture;
 mod model;
 
 pub use model::{
