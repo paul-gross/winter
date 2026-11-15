@@ -1,8 +1,8 @@
 # winter-workspace
 
-This repository is the Rust source of the `winter-workspace` binary, a work in progress. The commands that exist today
-are `ws index` and `repo remove`; `winter-workspace --help` is the reference for them. The binary is not the installed
-`winter` and does not replace it.
+This repository is the Rust source of the `winter-workspace` binary. The binary is under construction and has the
+commands its `--help` lists: `winter-workspace --help` names the command groups, and `--help` after a group names its
+commands. The binary is not the installed `winter` and does not replace it.
 
 ## Building
 

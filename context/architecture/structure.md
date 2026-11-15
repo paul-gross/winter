@@ -6,12 +6,12 @@ which, and where the line runs between the library and the binary. Where a parti
 
 ## Packages
 
-| Package                         | Directory              | Role                                                                                       |
-| ------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------ |
-| `winter-workspace`              | `crates/cli/`          | The binary. Binds streams, environment, and working directory; maps the ending to an exit. |
-| `winter-workspace-core`         | `crates/core/`         | The library: parsing, commands, domain, adapters. Returns values.                          |
-| `winter-workspace-test-support` | `crates/test-support/` | Isolated trees, the process runner, and git and workspace fixtures for tests.              |
-| `winter-workspace-dev`          | `crates/dev/`          | The development driver: the gates, the formatter call, and the architecture rules.         |
+| Package                         | Directory              | Role                                                                                                                                               |
+| ------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `winter-workspace`              | `crates/cli/`          | The binary, the composition root. Binds streams, environment, and working directory; maps the ending to an exit.                                   |
+| `winter-workspace-core`         | `crates/core/`         | The library: parsing, commands, domain, adapters. Returns values.                                                                                  |
+| `winter-workspace-test-support` | `crates/test-support/` | Isolated trees, the process runner, git and workspace fixtures, and the scenario machinery, for tests and for the scenario recorder of the driver. |
+| `winter-workspace-dev`          | `crates/dev/`          | The development driver: the gates, the formatter call, the architecture rules, and the scenario recorder.                                          |
 
 Every command and every domain module lives in the one library. Module boundaries inside it are the unit of structure; a
 package per domain would make every new one edit the workspace and binary manifests.
@@ -41,11 +41,39 @@ checkout. [The verifiability matrix](../verification/matrix.md) names the comman
 
 ## The Cargo workspace
 
-`default-members` is the binary and the library, so a bare `cargo build` or `cargo run` produces the product alone.
-Every check names the whole workspace or one package explicitly, and none depends on that default.
+`default-members` is the binary and the library, so a bare `cargo build` builds the product alone. Every check names the
+whole workspace or one package explicitly, and none depends on that default. Where the binary a build produces may be
+started is the built-binary rule of [AGENTS.md](../../AGENTS.md#standing-rules).
 
 A third-party dependency is declared in the manifest of the package that uses it, only while a source file of that
 package uses it, and is resolved in the committed `Cargo.lock`. The toolchain is pinned in `rust-toolchain.toml`.
+
+The table gives every dependency the four manifests declare, with what uses it. A path in it that begins with `src/` or
+`tests/` is relative to the directory of its package. Each is a normal dependency unless its row says otherwise, and a
+dependency on a workspace package is an edge of [Allowed edges](#allowed-edges).
+
+| Package                         | Dependency                                                                                            | Used by                                                                                                                                                                                            |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `winter-workspace`              | `libc` 0.2                                                                                            | The SIGINT handler and its installer in `src/interrupt.rs`                                                                                                                                         |
+| `winter-workspace`              | `winter-workspace-core`                                                                               | `src/main.rs`, which calls `run`, and `src/interrupt.rs`, which holds the `Interrupts` value                                                                                                       |
+| `winter-workspace`              | `winter-workspace-test-support`, a dev-dependency                                                     | The tests under `tests/`, and the test module of `src/interrupt.rs`                                                                                                                                |
+| `winter-workspace-core`         | `clap` 4.6, without its default features, with `std`, `help`, `usage`, `error-context`, `suggestions` | The argument parser of `src/parse.rs`, the registration contract of `src/registry.rs`, the reading of a parsed argument in `src/arguments.rs`, and the arguments a command file declares and reads |
+| `winter-workspace-core`         | `thiserror` 2                                                                                         | The error types                                                                                                                                                                                    |
+| `winter-workspace-core`         | `toml` 1.2                                                                                            | The parsing of the configuration files and the state file, and `TomlParseError`, which wraps its error                                                                                             |
+| `winter-workspace-core`         | `toml_edit` 0.25, without its default features, with `parse`                                          | The edit of a configuration file's text in `src/config_edit.rs`                                                                                                                                    |
+| `winter-workspace-core`         | `serde_json` 1                                                                                        | The `--json` results: `src/output.rs` and the command files                                                                                                                                        |
+| `winter-workspace-core`         | `sha1` 0.10                                                                                           | The hash slot of a name in `src/env_index.rs`                                                                                                                                                      |
+| `winter-workspace-core`         | `winter-workspace-test-support`, a dev-dependency                                                     | The tests under `tests/`, and the test module of `src/files.rs`                                                                                                                                    |
+| `winter-workspace-test-support` | `libc` 0.2                                                                                            | The process runner of `src/process.rs`, which prepares a child before it starts, kills its process group, and waits for it                                                                         |
+| `winter-workspace-test-support` | `serde_json` 1                                                                                        | The normalisation and the comparison of scenario JSON, under `src/scenario/`                                                                                                                       |
+| `winter-workspace-test-support` | `sha1` 0.10                                                                                           | The digest of the pinned environment in `src/env.rs`, and the description digest and state snapshots of a scenario                                                                                 |
+| `winter-workspace-test-support` | `tempfile` 3                                                                                          | The isolated tree, the scratch directories of the git fixtures, and the staging directories of a scenario record                                                                                   |
+| `winter-workspace-test-support` | `toml` 1.2                                                                                            | The scenario model, and the comparison of two TOML files in `src/scenario/compare.rs`                                                                                                              |
+| `winter-workspace-dev`          | `cargo_metadata` 0.23                                                                                 | The package graph the architecture rules read, in `src/architecture.rs`                                                                                                                            |
+| `winter-workspace-dev`          | `libc` 0.2                                                                                            | The signal handling of the driver and the kill of a step's process group, in `src/step.rs`                                                                                                         |
+| `winter-workspace-dev`          | `tempfile` 3                                                                                          | The temporary home of the record command, and the directory a record is set aside in while its successor is made, in `src/record.rs`                                                               |
+| `winter-workspace-dev`          | `toml` 1.2                                                                                            | The alias table of `.cargo/config.toml` at the repository root, read by the architecture rules of `src/architecture.rs`                                                                            |
+| `winter-workspace-dev`          | `winter-workspace-test-support`                                                                       | The record command of `src/record.rs`: the scenario machinery and the isolated tree                                                                                                                |
 
 ## The library and the binary
 

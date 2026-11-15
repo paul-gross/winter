@@ -14,12 +14,12 @@ Dependencies are fetched once per checkout, and again whenever `Cargo.lock` chan
 cargo fetch --locked
 ```
 
-This is the only step that needs the network. Everything below runs offline against what it fetched.
+The bootstrap is the only step that needs the network, for the toolchain install and for this fetch. Every command below
+runs offline against what the bootstrap fetched.
 
 ## The gates
 
-Two commands decide whether a change is ready. The slice gate is run before a change is handed over, and the full gate
-before a merge.
+Two commands check a change. The slice gate is run before a change is handed over, and the full gate before a merge.
 
 ```bash
 cargo dev gate slice
@@ -61,8 +61,8 @@ a filtered run too. A filter that matches nothing reports zero scenarios and pas
 state and replays nothing. `WINTER_SCENARIO_JOBS` sets how many scenarios run at once, and with `WINTER_TEST_KEEP=1` the
 tree of each failed scenario is kept and its path printed.
 
-The CI workflow, `.github/workflows/check.yml`, installs the toolchain, runs the bootstrap, and runs the full gate. It
-runs nothing a contributor cannot run locally.
+The CI workflow, `.github/workflows/check.yml`, runs the bootstrap, its toolchain install and its fetch, and then the
+full gate. It runs nothing a contributor cannot run locally.
 
 ## Formatting
 

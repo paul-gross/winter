@@ -16,7 +16,7 @@ Run from the repository root, after the bootstrap of [development.md](../tooling
 | `workspace:component-test`  | `cargo test -p winter-workspace-core --test '*'` | A behaviour against a fixture workspace, run in process with in-memory handles. | The behaviour reads or writes files or git state.          |
 | `workspace:executable-test` | `cargo test -p winter-workspace --tests`         | Process-level contract: streams, exit code, environment.                        | The claim is about the process, not the library.           |
 | `workspace:architecture`    | `cargo test -p winter-workspace-dev`             | Package edges, library output rules, context-tree rules, workflow and aliases.  | The change adds a package, an edge, or a context document. |
-| `workspace:slice-gate`      | `cargo dev gate slice`                           | The change is mergeable.                                                        | Always, before handing a change over.                      |
+| `workspace:slice-gate`      | `cargo dev gate slice`                           | Formatting, lints, and every test but the recorded scenarios pass.              | Always, before handing a change over.                      |
 | `workspace:full-gate`       | `cargo dev gate full`                            | The branch agrees with every recorded scenario.                                 | Before a merge and before a release.                       |
 | `workspace:scenario`        | `cargo scenarios`                                | Equality with the recorded reference in exit code, JSON, and state.             | The behaviour exists in the reference tool.                |
 
@@ -30,7 +30,8 @@ A test file narrower than a row is selected with `--test <subject>` in place of 
 
 Three behaviours are exercised by hand. Two cannot be tests of the tree they change, and the third needs a signal sent
 to the running binary, which no test sends. All run in a scratch copy of the checkout under a temporary directory, never
-in the checkout itself.
+in the checkout itself. A method that starts the built binary starts it by its path, as
+[development.md](../tooling/development.md#running-the-built-binary) says.
 
 The scratch copy needs a git directory of its own, since each method ends by reading its `git status`. A clone of the
 checkout with the change under test applied has one. A plain copy does not when the checkout is a git worktree: its
@@ -41,9 +42,10 @@ checkout with the change under test applied has one. A plain copy does not when 
 Exercises the gates' own failure behaviour, which cannot be a test of the suite the gates run. Use it when a change
 touches the gate driver, a Cargo alias, or the manifest entry of the scenario target.
 
-**Setup.** Make a scratch copy of the checkout under a temporary directory and work only there. Inject one fault, run
-the command the table names, record the result, and restore the copy before the next fault. A library source is any file
-under `crates/core/src/`.
+**Setup.** Make a scratch copy of the checkout under a temporary directory, where no directory at or above the copy
+holds a `.winter/config.toml`, as the built-binary rule of [AGENTS.md](../../AGENTS.md#standing-rules) has it, and work
+only there. Inject one fault, run the command the table names, record the result, and restore the copy before the next
+fault. A library source is any file under `crates/core/src/`.
 
 | Fault                                                                                  | Command                | Expected                                                          |
 | -------------------------------------------------------------------------------------- | ---------------------- | ----------------------------------------------------------------- |
@@ -74,8 +76,9 @@ Exercises command discovery: that the build picks up a new command file, and tha
 build. Use it when a change touches `crates/core/build.rs`, `crates/core/build/discover.rs`,
 `crates/core/src/registry.rs`, or `crates/core/src/parse.rs`.
 
-**Setup.** Make a scratch copy of the checkout under a temporary directory and work only there. Run the two cases in
-order.
+**Setup.** Make a scratch copy of the checkout under a temporary directory, where no directory at or above the copy
+holds a `.winter/config.toml`, as the built-binary rule of [AGENTS.md](../../AGENTS.md#standing-rules) has it, and work
+only there. Run the two cases in order.
 
 1. Add `crates/core/src/commands/ws/probe.rs`. Its `REGISTRATION` is a `Registration::Command` whose `args` returns the
    node it is given and whose `run` returns `Termination::Success`. Then:
@@ -100,9 +103,10 @@ Nothing automatic shows this. The unit tests of `interrupt.rs` prove the install
 that raises the signal on itself, no test sends a signal to another process, and no command runs long enough to be
 interrupted.
 
-**Setup.** Make a scratch copy of the checkout under a temporary directory and work only there, in bash on Linux. Run
-`cargo build --workspace --locked`. Then make a pipe and fill it, so that the binary waits in its first write of the
-help text until it is signalled or the pipe is read:
+**Setup.** Make a scratch copy of the checkout under a temporary directory, where no directory at or above the copy
+holds a `.winter/config.toml`, as the built-binary rule of [AGENTS.md](../../AGENTS.md#standing-rules) has it, and work
+only there, in bash on Linux. Run `cargo build --workspace --locked`. Then make a pipe and fill it, so that the binary
+waits in its first write of the help text until it is signalled or the pipe is read:
 
 ```sh
 mkfifo full
