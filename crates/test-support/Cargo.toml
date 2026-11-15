@@ -6,3 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+
+[dependencies]
+libc = "0.2"
+sha1 = "0.10"
+tempfile = "3"

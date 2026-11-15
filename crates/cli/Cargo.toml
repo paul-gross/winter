@@ -9,6 +9,9 @@ license.workspace = true
 [dependencies]
 winter-workspace-core = { workspace = true }
 
+[dev-dependencies]
+winter-workspace-test-support = { workspace = true }
+
 [features]
 scenarios = [] # selects the test target below; no source file tests cfg(feature = "scenarios")
 
