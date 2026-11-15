@@ -1,0 +1,7 @@
+summary = "ws index --help before an unknown option prints the help of ws index and exits 0."
+
+[[step]]
+args = ["ws", "index", "--help", "--bogus"]
+
+[deviation]
+decision = "decision:parallel-workspaces/component-runtime/help-beside-fault"

@@ -1,0 +1,5 @@
+summary = "After -- a token spelled like an option is the name: ws index looks up the name \"--json\"."
+
+[[step]]
+args = ["ws", "index", "--json", "--", "--json"]
+stdout = "json"

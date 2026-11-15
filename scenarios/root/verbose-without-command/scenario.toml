@@ -1,0 +1,4 @@
+summary = "A root option and no command exits 2, as no argument at all does."
+
+[[step]]
+args = ["-v"]

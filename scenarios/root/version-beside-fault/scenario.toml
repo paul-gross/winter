@@ -1,0 +1,7 @@
+summary = "--version before an unknown option prints the version line and exits 0."
+
+[[step]]
+args = ["--version", "--bogus"]
+
+[deviation]
+decision = "decision:parallel-workspaces/component-runtime/help-beside-fault"

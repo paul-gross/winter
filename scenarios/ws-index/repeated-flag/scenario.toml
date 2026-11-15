@@ -1,0 +1,7 @@
+summary = "A root flag given twice is a usage error: exit 2, and nothing is looked up."
+
+[[step]]
+args = ["-v", "-v", "ws", "index", "feature-x"]
+
+[deviation]
+decision = "decision:parallel-workspaces/component-runtime/repeated-options"

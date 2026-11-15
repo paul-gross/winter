@@ -1,13 +1,16 @@
 //! What a command receives.
 
+use std::ffi::OsString;
 use std::io::{BufRead, Write};
 use std::path::Path;
 
 use crate::files::{ReadFiles, WriteFiles};
+use crate::logging::Log;
 use crate::process::{Identity, ProcessEnv};
 use crate::termination::Usage;
 
-/// The working directory, environment, identity, and stream handles of one invocation, and the node being run.
+/// The working directory, environment, identity, and stream handles of one invocation, the node being run, the
+/// root option values, and what is logged.
 #[allow(
     dead_code,
     reason = "the command contract: a field stays whether or not a present command reads it"
@@ -24,6 +27,8 @@ pub(crate) struct Context<'a> {
     pub files: &'a dyn ReadFiles,
     pub file_writer: &'a dyn WriteFiles,
     pub invoked: &'a Invoked,
+    pub root: &'a RootOptions,
+    pub log: Log,
 }
 
 /// The node being run, as the user typed it. For an alias the path holds the alias name.
@@ -34,4 +39,15 @@ pub(crate) struct Invoked {
     pub path: Vec<String>,
     /// The usage of the node at `path`.
     pub usage: Usage,
+}
+
+/// The root option values a command can read. Verbosity is not among them: it reaches logging and nothing else.
+#[allow(dead_code, reason = "as Context")]
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct RootOptions {
+    /// The effective provider override: the root option when its value is not empty, else the variable
+    /// `WINTER_SERVICE_ORCHESTRATOR` when it is set and not empty, its bytes as given.
+    pub service_orchestrator: Option<OsString>,
+    /// The value of `--source-override` as given.
+    pub source_override: Option<String>,
 }

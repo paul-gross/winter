@@ -1,0 +1,4 @@
+summary = "ws without a command exits 2, and nothing is started."
+
+[[step]]
+args = ["ws"]

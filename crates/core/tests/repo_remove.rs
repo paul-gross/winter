@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use winter_workspace_core::{
-    CatalogError, CommandError, ConfigError, FileCause, RepositoryKind, Termination, UsageError,
+    CatalogError, CommandError, ConfigError, FileCause, ParseFault, RepositoryKind, Termination,
+    UsageError,
 };
 use winter_workspace_test_support::{TempTree, WorkspaceBuilder};
 
@@ -523,13 +524,54 @@ fn a_repeated_option_is_a_usage_error_and_changes_no_file() {
             .cwd(&root)
             .run();
 
+        assert_eq!(ended.stdout, "", "{repeated}");
         assert_eq!(ended.termination.exit_code(), 2, "{repeated}");
         assert!(
             matches!(
                 &ended.termination,
-                Termination::Usage(error) if matches!(**error, UsageError::Parse { .. })
+                Termination::Usage(error) if matches!(
+                    &**error,
+                    UsageError::Parse {
+                        command_path,
+                        fault: ParseFault::RepeatedOption { option },
+                        ..
+                    } if command_path == &["repo", "remove"] && option == repeated
+                )
             ),
             "{repeated}: {:?}",
+            ended.termination
+        );
+    }
+    assert_eq!(snapshot(&root), before);
+}
+
+#[test]
+fn a_value_given_to_a_flag_is_a_usage_error_and_changes_no_file() {
+    let tree = tree();
+    let root = commented_workspace(&tree);
+    let before = snapshot(&root);
+
+    for flag in ["--json", "--local"] {
+        let given = format!("{flag}=x");
+        let ended = InProcess::new(&["repo", "remove", "project/web", &given])
+            .cwd(&root)
+            .run();
+
+        assert_eq!(ended.stdout, "", "{flag}");
+        assert_eq!(ended.termination.exit_code(), 2, "{flag}");
+        assert!(
+            matches!(
+                &ended.termination,
+                Termination::Usage(error) if matches!(
+                    &**error,
+                    UsageError::Parse {
+                        command_path,
+                        fault: ParseFault::UnexpectedArgument { values },
+                        ..
+                    } if command_path == &["repo", "remove"] && values == &[flag, "x"]
+                )
+            ),
+            "{flag}: {:?}",
             ended.termination
         );
     }

@@ -78,7 +78,8 @@ under a lock, which replaces the file through a temporary file beside it.
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `process.rs`                    | `run`, `Invocation`, `Identity`, `ProcessEnv`; what follows the parse: the help or version line written, the one `Context` built, the command called     |
 | `termination.rs`                | `Termination` and the error enums it carries                                                                                                             |
-| `context.rs`                    | `Context`, what a command receives                                                                                                                       |
+| `context.rs`                    | `Context`, what a command receives, with `Invoked`, the node being run, and `RootOptions`, the root option values a command can read                     |
+| `logging.rs`                    | `Level` and `Log`, and the resolution of `-v` and `WINTER_LOG_LEVEL` into what an invocation logs                                                        |
 | `registry.rs`                   | `Registration` and `Entry`, and the registry the build script generates                                                                                  |
 | `groups.rs`                     | The groups of the command tree and their descriptions                                                                                                    |
 | `parse.rs`                      | The argument parser, built from the registry, and what it answers: `Parsed`, with the usage of the node at fault. It writes nothing and calls no command |

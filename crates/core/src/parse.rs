@@ -4,14 +4,15 @@
 //! answer.
 
 use std::error::Error;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgAction, ArgMatches};
 
-use crate::context::{Context, Invoked};
+use crate::context::{Context, Invoked, RootOptions};
 use crate::groups;
-use crate::process::Identity;
+use crate::logging::Log;
+use crate::process::{Identity, ProcessEnv};
 use crate::registry::{Entry, Registration};
 use crate::termination::{InternalError, ParseFault, Termination, Usage, UsageError};
 
@@ -26,16 +27,58 @@ pub(crate) struct Parsed {
 
 /// How far the command line got before the token that decided the outcome.
 ///
-/// The deciding token is the first of `--help`, `--version`, or a token at fault. The command path is the
-/// command names resolved among the tokens before it, and every name resolved when no token decides before the
-/// end of the line: a dispatch, a bare group, a missing required argument.
+/// The deciding token is the first argument that is not UTF-8, when the line holds one. Otherwise it is the
+/// first of `--help`, `--version`, or a token at fault. The command path is the command names resolved among
+/// the tokens before it, and every name resolved when no token decides before the end of the line: a dispatch,
+/// a bare group, a missing required argument.
 #[derive(Debug)]
 pub(crate) enum Stage {
     /// No command name was resolved.
     Root,
-    /// At least one was. `invoked` holds the command path and the usage of its last node.
-    Command { invoked: Invoked },
+    /// At least one was. `invoked` holds the command path and the usage of its last node, and `root` the root
+    /// options given before the first command name, whether or not the tokens after it parsed.
+    Command { invoked: Invoked, root: RootArgs },
 }
+
+/// The root's own options as typed, before the environment is consulted.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct RootArgs {
+    pub verbose: bool,
+    pub service_orchestrator: Option<String>,
+    pub source_override: Option<String>,
+}
+
+/// The one place the root's arguments and the environment become values.
+///
+/// The provider override is the root option when its value is not empty, else the variable when it is set and
+/// not empty, with its bytes as given. The source override is the option's value as given.
+pub(crate) fn root_values(args: &RootArgs, env: &ProcessEnv) -> (RootOptions, Log) {
+    let typed = args
+        .service_orchestrator
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(OsString::from);
+    let service_orchestrator = typed.or_else(|| {
+        env.get(SERVICE_ORCHESTRATOR_VARIABLE)
+            .filter(|value| !value.is_empty())
+            .map(OsStr::to_os_string)
+    });
+    let options = RootOptions {
+        service_orchestrator,
+        source_override: args.source_override.clone(),
+    };
+    (
+        options,
+        Log::resolve(args.verbose, env.get(LOG_LEVEL_VARIABLE)),
+    )
+}
+
+const SERVICE_ORCHESTRATOR_VARIABLE: &str = "WINTER_SERVICE_ORCHESTRATOR";
+const LOG_LEVEL_VARIABLE: &str = "WINTER_LOG_LEVEL";
+
+const VERBOSE: &str = "verbose";
+const SERVICE_ORCHESTRATOR: &str = "service-orchestrator";
+const SOURCE_OVERRIDE: &str = "source-override";
 
 /// What the command line asks for.
 #[derive(Debug)]
@@ -45,7 +88,7 @@ pub(crate) enum Outcome {
     /// The version line, without its newline.
     Version(String),
     /// A usage error or a bare group; or, at [`Stage::Root`], an internal failure when the parser cannot be
-    /// built from the registry.
+    /// built from the registry, or when root options it accepted do not read on their own.
     Ended(Termination),
     /// A command was selected and its arguments parsed: the registration's function, and the matches of the
     /// selected node.
@@ -72,6 +115,14 @@ pub(crate) enum RegistryError {
     },
     #[error("{file}: neither a top-level command nor a command of a group")]
     Placement { file: &'static str },
+}
+
+/// The root options before a command name, which the parser accepted, do not parse on their own.
+#[derive(Debug, thiserror::Error)]
+#[error("the root options before the command '{command}' do not parse alone: {source}")]
+struct RootOptionsUnread {
+    command: String,
+    source: clap::Error,
 }
 
 /// Parses `args` against the tree built from `entries`, in one pass.
@@ -142,14 +193,46 @@ impl Parser {
     fn parse(mut self, args: &[OsString]) -> Parsed {
         // Gives every node the name its usage line carries, before any of them is asked for it.
         self.command.build();
+        // An argument that is not UTF-8 is refused before any argument is interpreted.
+        if let Some(at) = args.iter().position(|arg| arg.to_str().is_none()) {
+            return self.not_utf8(args, at);
+        }
+        // A token the walk itself refuses decides the line where it stands. The parser is not asked: it holds
+        // back a repeat whose value is a token of its own until the command after it has parsed, and drops it
+        // when a help or a fault ends that parse; and it reports the word after a `--` as what it refused.
+        let resolved = resolved(&self.command, args);
+        match resolved.refused.clone() {
+            Some(Refused::Repeated { option }) => {
+                return self.ended_at(resolved, |_, _| ParseFault::RepeatedOption { option });
+            }
+            Some(Refused::DoubleDash) => {
+                return self.ended_at(resolved, |_, _| ParseFault::UnexpectedArgument {
+                    values: vec!["--".to_owned()],
+                });
+            }
+            None => {}
+        }
         match self.command.try_get_matches_from_mut(args) {
             Ok(matches) => self.accepted(matches),
-            Err(error) => self.stopped(&error, args),
+            Err(error) => self.stopped(&error, resolved),
         }
+    }
+
+    /// The answer for a command line whose argument at `at` is the first that is not UTF-8: a usage error of
+    /// the deepest node the tokens before it resolved.
+    fn not_utf8(self, args: &[OsString], at: usize) -> Parsed {
+        let (before, refused) = args.split_at(at);
+        let argument = refused
+            .first()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let resolved = resolved(&self.command, before);
+        self.ended_at(resolved, |_, _| ParseFault::NotUtf8 { argument })
     }
 
     /// The answer for a command line the parser accepted: the command it selects, or a bare group.
     fn accepted(mut self, matches: ArgMatches) -> Parsed {
+        let root = root_args(&matches);
         let mut path = Vec::new();
         let mut selected = matches;
         while let Some((name, below)) = selected.remove_subcommand() {
@@ -167,34 +250,88 @@ impl Parser {
         };
         let usage = self.usage(&path);
         Parsed {
-            stage: stage(path, usage),
+            stage: stage(path, usage, root),
             outcome,
         }
     }
 
     /// The answer for a command line the parser stopped at: the help or version a flag asked for, or a usage
     /// error.
-    fn stopped(mut self, error: &clap::Error, args: &[OsString]) -> Parsed {
-        let Resolved { path, rest } = resolved(&self.command, args);
-        let usage = self.usage(&path);
-        let outcome = match error.kind() {
-            ErrorKind::DisplayHelp => Outcome::Help(error.render().to_string()),
-            ErrorKind::DisplayVersion => {
-                Outcome::Version(format!("{} {}", self.program, self.version))
+    fn stopped(self, error: &clap::Error, resolved: Resolved<'_>) -> Parsed {
+        match error.kind() {
+            ErrorKind::DisplayHelp => {
+                self.answered_at(resolved, |_| Outcome::Help(error.render().to_string()))
             }
-            _ => {
-                let words = self
-                    .route(&path)
-                    .map(|_| surplus(node_at(&self.command, &path), rest));
-                Outcome::Ended(Termination::Usage(Box::new(UsageError::Parse {
-                    command_path: path.clone(),
-                    usage: usage.clone(),
-                    fault: fault(error, words),
-                })))
+            ErrorKind::DisplayVersion => {
+                let line = format!("{} {}", self.program, self.version);
+                self.answered_at(resolved, |_| Outcome::Version(line))
+            }
+            _ => self.ended_at(resolved, |node, words| fault(error, node, words)),
+        }
+    }
+
+    /// A usage error of the node `resolved` ends at. `fault` is handed that node and, when it is a command,
+    /// the words of the line the command has no positional argument for.
+    fn ended_at(
+        self,
+        resolved: Resolved<'_>,
+        fault: impl FnOnce(&clap::Command, Option<Vec<String>>) -> ParseFault,
+    ) -> Parsed {
+        let words = self
+            .route(&resolved.path)
+            .map(|_| surplus(node_at(&self.command, &resolved.path), resolved.rest));
+        let fault = fault(node_at(&self.command, &resolved.path), words);
+        let command_path = resolved.path.clone();
+        self.answered_at(resolved, |usage| {
+            Outcome::Ended(Termination::Usage(Box::new(UsageError::Parse {
+                command_path,
+                usage: usage.clone(),
+                fault,
+            })))
+        })
+    }
+
+    /// The answer `outcome` gives, at the stage `resolved` reached. `outcome` is handed the usage of the node
+    /// the path ends at.
+    ///
+    /// The parser left no matches, so the root options before the first command name are read again, against
+    /// the root's option definitions alone. The parser accepted them before it reached that name; a second
+    /// reading that refuses them is an internal failure.
+    fn answered_at(
+        mut self,
+        resolved: Resolved<'_>,
+        outcome: impl FnOnce(&Usage) -> Outcome,
+    ) -> Parsed {
+        let Resolved { path, before, .. } = resolved;
+        let root = match path.first() {
+            None => RootArgs::default(),
+            Some(command) => {
+                let options = root_options(
+                    clap::Command::new(self.program)
+                        .no_binary_name(true)
+                        .disable_help_flag(true),
+                );
+                match options.try_get_matches_from(before) {
+                    Ok(matches) => root_args(&matches),
+                    Err(source) => {
+                        let error = RootOptionsUnread {
+                            command: command.clone(),
+                            source,
+                        };
+                        return Parsed {
+                            stage: Stage::Root,
+                            outcome: Outcome::Ended(Termination::Internal(Box::new(
+                                InternalError::unexpected(error),
+                            ))),
+                        };
+                    }
+                }
             }
         };
+        let usage = self.usage(&path);
+        let outcome = outcome(&usage);
         Parsed {
-            stage: stage(path, usage),
+            stage: stage(path, usage, root),
             outcome,
         }
     }
@@ -230,14 +367,25 @@ impl Parser {
     }
 }
 
-/// The stage a command line reached with `path` resolved; `usage` is that of the node at `path`.
-fn stage(path: Vec<String>, usage: Usage) -> Stage {
+/// The stage a command line reached with `path` resolved; `usage` is that of the node at `path`, and `root`
+/// the root options given before the first name of `path`.
+fn stage(path: Vec<String>, usage: Usage, root: RootArgs) -> Stage {
     if path.is_empty() {
         Stage::Root
     } else {
         Stage::Command {
             invoked: Invoked { path, usage },
+            root,
         }
+    }
+}
+
+/// The root's options as the matches of the root hold them.
+fn root_args(matches: &ArgMatches) -> RootArgs {
+    RootArgs {
+        verbose: matches.get_flag(VERBOSE),
+        service_orchestrator: matches.get_one::<String>(SERVICE_ORCHESTRATOR).cloned(),
+        source_override: matches.get_one::<String>(SOURCE_OVERRIDE).cloned(),
     }
 }
 
@@ -259,19 +407,47 @@ fn node_at<'c>(node: &'c clap::Command, path: &[String]) -> &'c clap::Command {
 }
 
 fn root(identity: &Identity) -> clap::Command {
-    with_help(
-        clap::Command::new(identity.program)
-            .about("Manage a Winter workspace")
-            .bin_name(identity.program)
-            .version(identity.version)
-            .no_binary_name(true)
-            .disable_version_flag(true),
+    root_options(
+        with_help(
+            clap::Command::new(identity.program)
+                .about("Manage a Winter workspace")
+                .bin_name(identity.program)
+                .version(identity.version)
+                .no_binary_name(true)
+                .disable_version_flag(true),
+        )
+        .arg(
+            Arg::new("version")
+                .long("version")
+                .action(ArgAction::Version)
+                .help("Print the version"),
+        ),
+    )
+}
+
+/// Gives a node the root's own options. They belong to the root alone, so they are read only before the first
+/// command name; after it they are options of the node they follow.
+fn root_options(node: clap::Command) -> clap::Command {
+    node.arg(
+        Arg::new(VERBOSE)
+            .short('v')
+            .long("verbose")
+            .action(ArgAction::SetTrue)
+            .help("Log at debug level on stderr; wins over WINTER_LOG_LEVEL"),
     )
     .arg(
-        Arg::new("version")
-            .long("version")
-            .action(ArgAction::Version)
-            .help("Print the version"),
+        Arg::new(SERVICE_ORCHESTRATOR)
+            .long("service-orchestrator")
+            .value_name("PATH_OR_NAME")
+            .allow_hyphen_values(true)
+            .help("Use this service provider for this invocation"),
+    )
+    .arg(
+        Arg::new(SOURCE_OVERRIDE)
+            .long("source-override")
+            .value_name("TEXT")
+            .allow_hyphen_values(true)
+            .hide(true),
     )
 }
 
@@ -319,56 +495,101 @@ fn leaf(entries: &[Entry], entry: &Entry) -> Result<(Run, clap::Command), Regist
     Ok((*run, node))
 }
 
-/// The command names a command line resolved before its deciding token, and the tokens after the last of them.
+/// The command names a command line resolved before its deciding token, with the tokens before the first of
+/// them and the tokens after the last, and what the walk itself refused the deciding token as.
 struct Resolved<'a> {
     path: Vec<String>,
+    before: &'a [OsString],
     rest: &'a [OsString],
+    refused: Option<Refused>,
 }
 
-/// Reads the command path of a command line the parser stopped at.
+/// A deciding token the walk refuses on its own account, at a node that takes commands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Refused {
+    /// An option that may not repeat, given a second time at one node; `option` is the name it is typed as.
+    Repeated { option: String },
+    /// A `--` with a token after it: a node that takes commands has no positional argument, so nothing may
+    /// follow the `--` there.
+    DoubleDash,
+}
+
+/// Reads the command path of a command line, up to the token that decides it.
 ///
 /// The walk ends at the first `--help` or `--version`, at the first token that names neither an option nor a
-/// command of the node it stands at, and at a node that has no commands. An option's value is stepped over, so
-/// that a value spelled like a command does not extend the path.
+/// command of the node it stands at, at a flag given a value, at an option given a second time that may not
+/// repeat, at an option whose value is missing, at a `--`, and at a node that has no commands. An option's
+/// value is stepped over, so that a value spelled like a command does not extend the path.
+///
+/// Two of these endings are answered as `refused`, and decide the line without the parser: the repeat, which
+/// the parser reports only on some lines, and the `--` that a token follows. Every other ending is where the
+/// parser decides too, and its answer is taken. The tokens of a node that has no commands are not walked: a
+/// repeat among a command's own options is the parser's to report.
+///
+/// An option that takes more than one value is read as taking one.
 fn resolved<'a>(root: &clap::Command, args: &'a [OsString]) -> Resolved<'a> {
     let mut path = Vec::new();
     let mut node = root;
+    let mut before = args;
     let mut rest = args;
+    let mut refused = None;
+    let mut given: Vec<&clap::Id> = Vec::new();
     let mut next = 0;
-    while node.has_subcommands()
+    'walk: while node.has_subcommands()
         && let Some(token) = args.get(next).map(|arg| arg.to_string_lossy())
     {
         next += 1;
         if token == "--" {
+            if next < args.len() {
+                refused = Some(Refused::DoubleDash);
+            }
             break;
         }
         if token.starts_with('-') {
-            let Some(option) = option_named(node, &token) else {
+            let OptionToken::Options { named, value_from } = option_token(node, &token) else {
                 break;
             };
-            if matches!(option.get_action(), ArgAction::Help | ArgAction::Version) {
-                break;
+            for option in named {
+                if given.contains(&option.get_id()) && !may_repeat(option) {
+                    refused = Some(Refused::Repeated {
+                        option: option_name(option).unwrap_or_else(|| token.to_string()),
+                    });
+                    break 'walk;
+                }
+                given.push(option.get_id());
             }
-            if takes_next_token(option, &token) {
-                next += 1;
+            if let Some(option) = value_from {
+                match args.get(next) {
+                    Some(value) if is_value_of(option, &value.to_string_lossy()) => next += 1,
+                    _ => break,
+                }
             }
             continue;
         }
         let Some(below) = node.find_subcommand(token.as_ref()) else {
             break;
         };
+        if path.is_empty() {
+            before = args.get(..next - 1).unwrap_or_default();
+        }
         path.push(below.get_name().to_owned());
         node = below;
+        given.clear();
         rest = args.get(next..).unwrap_or_default();
     }
-    Resolved { path, rest }
+    Resolved {
+        path,
+        before,
+        rest,
+        refused,
+    }
 }
 
 /// The words of `tokens` that `leaf` has no positional argument for, in the order given.
 ///
 /// `tokens` are those that follow the leaf's name. An option and its value are no words; after `--` every
-/// token is one, and so is a lone `-`. The answer is empty when an option the leaf does not have stands before
-/// the first such word: that option is then the fault of the line.
+/// token is one, and so is a lone `-`. The answer is empty when a token the leaf has no option for, or a flag
+/// given a value, stands before the first such word: that token is then the fault of the line.
 fn surplus(leaf: &clap::Command, tokens: &[OsString]) -> Vec<String> {
     let positionals = || leaf.get_arguments().filter(|arg| arg.is_positional());
     if positionals().any(|arg| {
@@ -382,21 +603,26 @@ fn surplus(leaf: &clap::Command, tokens: &[OsString]) -> Vec<String> {
     let mut words = 0;
     let mut surplus = Vec::new();
     let mut options_ended = false;
-    let mut tokens = tokens.iter().map(|token| token.to_string_lossy());
+    let mut tokens = tokens
+        .iter()
+        .map(|token| token.to_string_lossy())
+        .peekable();
     while let Some(token) = tokens.next() {
         if !options_ended && token == "--" {
             options_ended = true;
             continue;
         }
         if !options_ended && token.starts_with('-') && token != "-" {
-            match option_named(leaf, &token) {
-                Some(option) => {
-                    if takes_next_token(option, &token) {
-                        tokens.next();
-                    }
+            match option_token(leaf, &token) {
+                OptionToken::Options {
+                    value_from: Some(option),
+                    ..
+                } => {
+                    tokens.next_if(|value| is_value_of(option, value));
                 }
-                None if surplus.is_empty() => return surplus,
-                None => {}
+                OptionToken::Options { .. } | OptionToken::Decides => {}
+                OptionToken::Fault if surplus.is_empty() => return surplus,
+                OptionToken::Fault => {}
             }
             continue;
         }
@@ -408,31 +634,85 @@ fn surplus(leaf: &clap::Command, tokens: &[OsString]) -> Vec<String> {
     surplus
 }
 
-/// The option of `node` that `token` starts with: a long name up to any `=`, or the first short letter.
-fn option_named<'c>(node: &'c clap::Command, token: &str) -> Option<&'c Arg> {
-    match token.strip_prefix("--") {
-        Some(long) => {
-            let name = long.split_once('=').map_or(long, |(name, _)| name);
-            node.get_arguments()
-                .find(|arg| arg.get_long() == Some(name))
+/// What a token spelled like an option is to the node it stands at.
+enum OptionToken<'c> {
+    /// It holds a name the node has no option for, or gives a value to an option that takes none.
+    Fault,
+    /// It holds `--help` or `--version`.
+    Decides,
+    /// The options it names, in the order given: one long option, or the letters of a short cluster.
+    /// `value_from` is the last of them when it takes a value and the token carries none, so that the value
+    /// is the token after it.
+    Options {
+        named: Vec<&'c Arg>,
+        value_from: Option<&'c Arg>,
+    },
+}
+
+/// Reads `token`, which starts with `-`, against the options of `node`.
+///
+/// A long name ends at the first `=`, and what follows is its value. In a short cluster every letter is a
+/// flag but the last option named: when that one takes a value, the rest of the token is the value.
+fn option_token<'c>(node: &'c clap::Command, token: &str) -> OptionToken<'c> {
+    let decides = |arg: &Arg| matches!(arg.get_action(), ArgAction::Help | ArgAction::Version);
+    if let Some(long) = token.strip_prefix("--") {
+        let (name, attached) = match long.split_once('=') {
+            Some((name, _)) => (name, true),
+            None => (long, false),
+        };
+        let Some(option) = node
+            .get_arguments()
+            .find(|arg| arg.get_long() == Some(name))
+        else {
+            return OptionToken::Fault;
+        };
+        let takes_value = option.get_action().takes_values();
+        return match (attached, takes_value) {
+            (true, false) => OptionToken::Fault,
+            _ if decides(option) => OptionToken::Decides,
+            _ => OptionToken::Options {
+                named: vec![option],
+                value_from: (takes_value && !attached).then_some(option),
+            },
+        };
+    }
+    let mut named = Vec::new();
+    let mut letters = token.chars().skip(1);
+    while let Some(letter) = letters.next() {
+        let Some(option) = node
+            .get_arguments()
+            .find(|arg| arg.get_short() == Some(letter))
+        else {
+            return OptionToken::Fault;
+        };
+        if decides(option) {
+            return OptionToken::Decides;
         }
-        None => {
-            let short = token.chars().nth(1);
-            node.get_arguments()
-                .find(|arg| short.is_some() && arg.get_short() == short)
+        named.push(option);
+        if option.get_action().takes_values() {
+            let value_from = letters.next().is_none().then_some(option);
+            return OptionToken::Options { named, value_from };
         }
+    }
+    if named.is_empty() {
+        return OptionToken::Fault;
+    }
+    OptionToken::Options {
+        named,
+        value_from: None,
     }
 }
 
-/// Whether the value of `option`, typed as `token`, is the token after it: the option takes a value and
-/// `token` carries none.
-fn takes_next_token(option: &Arg, token: &str) -> bool {
-    option.get_action().takes_values() && !token.contains('=') && is_whole_name(token)
+/// Whether `option` may be given more than once.
+fn may_repeat(option: &Arg) -> bool {
+    matches!(option.get_action(), ArgAction::Append | ArgAction::Count)
 }
 
-/// Whether `token` is an option name alone, with no value attached to a short letter.
-fn is_whole_name(token: &str) -> bool {
-    token.starts_with("--") || token.chars().count() == 2
+/// Whether `token`, which follows `option` on the line, is its value. An option declared to accept a value
+/// that starts with `-` takes the token whatever it looks like; any other takes a lone `-` and a token that
+/// does not start with one.
+fn is_value_of(option: &Arg, token: &str) -> bool {
+    option.is_allow_hyphen_values_set() || !token.starts_with('-') || token == "-"
 }
 
 /// Classes what the parser refused.
@@ -440,8 +720,9 @@ fn is_whole_name(token: &str) -> bool {
 /// `surplus` is `Some` when the fault happened in a command's own arguments, where a stray word is an argument
 /// too many, and holds every such word of the line; it is `None` at the root or a group, where a stray word
 /// names no command. A refused token spelled like an option is an argument too many where it is the first of
-/// those words, as after `--`, and an unknown option otherwise.
-fn fault(error: &clap::Error, surplus: Option<Vec<String>>) -> ParseFault {
+/// those words, as after `--`, and an unknown option otherwise. `node` is the node at fault: an option of it
+/// that was given twice is named as the node declares it.
+fn fault(error: &clap::Error, node: &clap::Command, surplus: Option<Vec<String>>) -> ParseFault {
     let text = |kind| match error.get(kind) {
         Some(ContextValue::String(text)) => text.clone(),
         Some(ContextValue::Strings(texts)) => texts.join(" "),
@@ -496,6 +777,18 @@ fn fault(error: &clap::Error, surplus: Option<Vec<String>>) -> ParseFault {
                 option: text(ContextKind::InvalidArg),
             }
         }
+        // The parser reports an option given twice as one in conflict with itself.
+        ErrorKind::ArgumentConflict
+            if text(ContextKind::PriorArg) == text(ContextKind::InvalidArg) =>
+        {
+            let shown = text(ContextKind::InvalidArg);
+            let option = node
+                .get_arguments()
+                .find(|arg| arg.to_string() == shown)
+                .and_then(option_name)
+                .unwrap_or(shown);
+            ParseFault::RepeatedOption { option }
+        }
         _ => ParseFault::UnexpectedArgument {
             values: [ContextKind::InvalidArg, ContextKind::InvalidValue]
                 .map(text)
@@ -506,11 +799,22 @@ fn fault(error: &clap::Error, surplus: Option<Vec<String>>) -> ParseFault {
     }
 }
 
+/// The name `option` is typed as: its long name, or its short letter when it has no long name.
+fn option_name(option: &Arg) -> Option<String> {
+    match (option.get_long(), option.get_short()) {
+        (Some(long), _) => Some(format!("--{long}")),
+        (None, Some(short)) => Some(format!("-{short}")),
+        (None, None) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::os::unix::ffi::OsStringExt;
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use super::*;
+    use crate::logging::Level;
     use crate::process::run_in_memory;
     use crate::registry::REGISTRY;
 
@@ -646,7 +950,7 @@ mod tests {
     fn path_of(stage: &Stage) -> Vec<String> {
         match stage {
             Stage::Root => Vec::new(),
-            Stage::Command { invoked } => invoked.path.clone(),
+            Stage::Command { invoked, .. } => invoked.path.clone(),
         }
     }
 
@@ -660,7 +964,7 @@ mod tests {
                     fault,
                 } = *error;
                 assert_eq!(command_path, staged);
-                if let Stage::Command { invoked } = &parsed.stage {
+                if let Stage::Command { invoked, .. } = &parsed.stage {
                     assert_eq!(invoked.usage, usage);
                 }
                 (command_path, usage, fault)
@@ -703,9 +1007,18 @@ mod tests {
         Ended,
     }
 
+    fn kind_of(outcome: &Outcome) -> Kind {
+        match outcome {
+            Outcome::Dispatch { .. } => Kind::Dispatch,
+            Outcome::Help(_) => Kind::Help,
+            Outcome::Version(_) => Kind::Version,
+            Outcome::Ended(_) => Kind::Ended,
+        }
+    }
+
     #[test]
     fn each_command_line_reaches_its_stage_with_its_command_path_and_its_outcome() {
-        let rows: [(&[&str], &[&str], Kind); 12] = [
+        let rows: [(&[&str], &[&str], Kind); 13] = [
             (&["ws", "index", "NAME"], &["ws", "index"], Kind::Dispatch),
             (&["ws", "index", "--bogus"], &["ws", "index"], Kind::Ended),
             (&["ws", "index"], &["ws", "index"], Kind::Ended),
@@ -717,6 +1030,7 @@ mod tests {
             (&["--bogus"], &[], Kind::Ended),
             (&["nope"], &[], Kind::Ended),
             (&["--bogus", "ws", "index"], &[], Kind::Ended),
+            (&["-v", "-v", "ws", "index", "NAME"], &[], Kind::Ended),
             (&[], &[], Kind::Ended),
         ];
 
@@ -725,20 +1039,19 @@ mod tests {
 
             match &parsed.stage {
                 Stage::Root => assert!(path.is_empty(), "{args:?}: the root stage"),
-                Stage::Command { invoked } => {
+                Stage::Command { invoked, .. } => {
                     assert_eq!(invoked.path, path, "{args:?}");
                     let help_command = format!("winter-workspace {} --help", path.join(" "));
                     assert_eq!(invoked.usage.help_command, help_command, "{args:?}");
                 }
             }
             assert_eq!(path_of(&parsed.stage), path, "{args:?}");
-            let answered = match &parsed.outcome {
-                Outcome::Dispatch { .. } => Kind::Dispatch,
-                Outcome::Help(_) => Kind::Help,
-                Outcome::Version(_) => Kind::Version,
-                Outcome::Ended(_) => Kind::Ended,
-            };
-            assert_eq!(answered, kind, "{args:?}: {:?}", parsed.outcome);
+            assert_eq!(
+                kind_of(&parsed.outcome),
+                kind,
+                "{args:?}: {:?}",
+                parsed.outcome
+            );
         }
     }
 
@@ -980,6 +1293,32 @@ mod tests {
     }
 
     #[test]
+    fn the_root_help_lists_exactly_the_groups_and_top_level_commands_of_the_registry() {
+        let help = help_of(REGISTRY, &["--help"]);
+        let listed: Vec<&str> = help
+            .lines()
+            .skip_while(|line| *line != "Commands:")
+            .skip(1)
+            .take_while(|line| !line.is_empty())
+            .filter_map(|line| line.split_whitespace().next())
+            .collect();
+
+        let mut held: Vec<&str> = REGISTRY
+            .iter()
+            .filter(|entry| {
+                !matches!(
+                    entry.registration,
+                    Registration::Command { hidden: true, .. }
+                ) || entry.path.len() > 1
+            })
+            .filter_map(|entry| entry.path.first().copied())
+            .collect();
+        held.sort_unstable();
+        held.dedup();
+        assert_eq!(listed, held, "{help}");
+    }
+
+    #[test]
     fn a_bare_group_ends_with_its_help() {
         let parsed = parsed(ENTRIES, &["service"]);
 
@@ -1178,6 +1517,1124 @@ mod tests {
 
         assert_eq!(resolved.path, ["ws", "index"]);
         assert_eq!(resolved.rest, &args[4..]);
+    }
+
+    fn parsed_os(entries: &[Entry], args: &[&[u8]]) -> Parsed {
+        let args: Vec<OsString> = args
+            .iter()
+            .map(|arg| OsString::from_vec(arg.to_vec()))
+            .collect();
+        parse(entries, &IDENTITY, &args)
+    }
+
+    /// The root options of a command line that reached a command.
+    fn root_of(parsed: &Parsed) -> &RootArgs {
+        match &parsed.stage {
+            Stage::Command { root, .. } => root,
+            Stage::Root => panic!("expected the command stage, got {:?}", parsed.outcome),
+        }
+    }
+
+    /// What `root_values` answers for `args`, parsed with the parser the registry builds, under `env`.
+    fn values(args: &[&str], env: &[(&str, &[u8])]) -> (RootOptions, Log) {
+        let parsed = parsed(REGISTRY, args);
+        let env = ProcessEnv::from_vars(
+            env.iter()
+                .map(|(key, value)| (OsString::from(key), OsString::from_vec(value.to_vec()))),
+        );
+        root_values(root_of(&parsed), &env)
+    }
+
+    /// Every option of the tree that `is` holds for, each as the command and the option; the root is named by
+    /// the program.
+    fn options_where(entries: &[Entry], is: fn(&Arg) -> bool) -> Vec<String> {
+        fn collect(node: &clap::Command, name: &str, is: fn(&Arg) -> bool, held: &mut Vec<String>) {
+            for option in node.get_arguments() {
+                if !option.is_positional() && is(option) {
+                    let option = option_name(option).unwrap_or_default();
+                    held.push(format!("{name}: {option}"));
+                }
+            }
+            for below in node.get_subcommands() {
+                let name = if name == IDENTITY.program {
+                    below.get_name().to_owned()
+                } else {
+                    format!("{name} {}", below.get_name())
+                };
+                collect(below, &name, is, held);
+            }
+        }
+        let mut parser = Parser::build(entries, &IDENTITY).expect("a tree");
+        // Building the tree fills in what the parser derives, the number of values among it.
+        parser.command.build();
+        let mut held = Vec::new();
+        collect(&parser.command, IDENTITY.program, is, &mut held);
+        held
+    }
+
+    /// Every option that takes a value and refuses one that starts with `-`.
+    fn options_refusing_a_hyphen_value(entries: &[Entry]) -> Vec<String> {
+        options_where(entries, |option| {
+            option.get_action().takes_values() && !option.is_allow_hyphen_values_set()
+        })
+    }
+
+    /// Every option declared to take more than one value at one giving.
+    fn options_taking_several_values(entries: &[Entry]) -> Vec<String> {
+        options_where(entries, |option| {
+            option
+                .get_num_args()
+                .is_some_and(|values| values.max_values() > 1)
+        })
+    }
+
+    /// Every positional of the tree declared to accept a value that starts with `-`, named as above.
+    fn positionals_accepting_a_hyphen_value(entries: &[Entry]) -> Vec<String> {
+        fn collect(node: &clap::Command, name: &str, accepting: &mut Vec<String>) {
+            for positional in node.get_arguments().filter(|arg| arg.is_positional()) {
+                if positional.is_allow_hyphen_values_set() {
+                    accepting.push(format!("{name}: {}", positional.get_id()));
+                }
+            }
+            for below in node.get_subcommands() {
+                collect(below, &format!("{name} {}", below.get_name()), accepting);
+            }
+        }
+        let parser = Parser::build(entries, &IDENTITY).expect("a tree");
+        let mut accepting = Vec::new();
+        collect(&parser.command, IDENTITY.program, &mut accepting);
+        accepting
+    }
+
+    #[test]
+    fn every_value_taking_option_accepts_a_value_that_starts_with_a_hyphen() {
+        assert_eq!(
+            options_refusing_a_hyphen_value(REGISTRY),
+            Vec::<String>::new(),
+            "declare each with allow_hyphen_values(true)"
+        );
+    }
+
+    #[test]
+    fn an_option_that_refuses_a_hyphen_value_is_named_with_its_command() {
+        assert_eq!(
+            options_refusing_a_hyphen_value(ENTRIES),
+            [
+                "service start: --tail",
+                "service start: --mode",
+                "service up: --tail",
+                "service up: --mode"
+            ]
+        );
+        assert_eq!(
+            options_refusing_a_hyphen_value(INDEX_ENTRIES),
+            ["ws index: --base"]
+        );
+    }
+
+    #[test]
+    fn no_option_takes_more_than_one_value_at_one_giving() {
+        assert_eq!(
+            options_taking_several_values(REGISTRY),
+            Vec::<String>::new(),
+            "the walk of the command path reads an option as taking one value"
+        );
+
+        fn span_args(command: clap::Command) -> clap::Command {
+            command
+                .arg(Arg::new("between").long("between").num_args(2))
+                .arg(Arg::new("range").long("range").value_names(["FROM", "TO"]))
+        }
+        static SPAN: Registration = Registration::Command {
+            args: span_args,
+            run: agents_run,
+            hidden: false,
+        };
+        static SPAN_ENTRIES: &[Entry] = &[Entry {
+            path: &["ws", "span"],
+            file: "crates/core/src/commands/ws/span.rs",
+            registration: &SPAN,
+        }];
+        assert_eq!(
+            options_taking_several_values(SPAN_ENTRIES),
+            ["ws span: --between", "ws span: --range"]
+        );
+        assert_eq!(options_taking_several_values(ENTRIES), Vec::<String>::new());
+    }
+
+    #[test]
+    fn no_positional_accepts_a_value_that_starts_with_a_hyphen() {
+        assert_eq!(
+            positionals_accepting_a_hyphen_value(REGISTRY),
+            Vec::<String>::new()
+        );
+
+        let (command_path, fault) = fault_of(parsed(REGISTRY, &["ws", "index", "--bogus"]));
+        assert_eq!(command_path, ["ws", "index"]);
+        assert!(
+            matches!(&fault, ParseFault::UnknownOption { name } if name == "--bogus"),
+            "{fault:?}"
+        );
+    }
+
+    #[test]
+    fn the_verbose_flag_gives_debug_logging_and_wins_over_the_variable() {
+        let verbose = Log {
+            threshold: Level::Debug,
+            switched: true,
+        };
+        for flag in ["-v", "--verbose"] {
+            let args = [flag, "ws", "index", "NAME"];
+            assert_eq!(values(&args, &[]).1, verbose, "{flag}");
+            assert_eq!(
+                values(&args, &[("WINTER_LOG_LEVEL", b"ERROR")]).1,
+                verbose,
+                "{flag}"
+            );
+        }
+    }
+
+    #[test]
+    fn without_the_verbose_flag_the_variable_decides_the_logging() {
+        let args = ["ws", "index", "NAME"];
+
+        assert_eq!(values(&args, &[]).1, Log::DEFAULT);
+        assert_eq!(
+            values(&args, &[("WINTER_LOG_LEVEL", b"info")]).1,
+            Log {
+                threshold: Level::Info,
+                switched: true
+            }
+        );
+    }
+
+    #[test]
+    fn the_orchestrator_option_gives_the_override() {
+        let (options, _) = values(&["--service-orchestrator", "X", "ws", "index", "NAME"], &[]);
+        assert_eq!(options.service_orchestrator, Some(OsString::from("X")));
+
+        let (options, _) = values(
+            &["--service-orchestrator=X", "ws", "index", "NAME"],
+            &[("WINTER_SERVICE_ORCHESTRATOR", b"Y")],
+        );
+        assert_eq!(options.service_orchestrator, Some(OsString::from("X")));
+    }
+
+    #[test]
+    fn an_empty_orchestrator_option_falls_back_to_the_variable() {
+        let (options, _) = values(
+            &["--service-orchestrator", "", "ws", "index", "NAME"],
+            &[("WINTER_SERVICE_ORCHESTRATOR", b"Y")],
+        );
+
+        assert_eq!(options.service_orchestrator, Some(OsString::from("Y")));
+    }
+
+    #[test]
+    fn no_orchestrator_option_and_an_empty_or_absent_variable_give_no_override() {
+        let args = ["ws", "index", "NAME"];
+
+        assert_eq!(
+            values(&args, &[("WINTER_SERVICE_ORCHESTRATOR", b"")])
+                .0
+                .service_orchestrator,
+            None
+        );
+        assert_eq!(values(&args, &[]).0.service_orchestrator, None);
+        let empty = ["--service-orchestrator", "", "ws", "index", "NAME"];
+        assert_eq!(
+            values(&empty, &[("WINTER_SERVICE_ORCHESTRATOR", b"")])
+                .0
+                .service_orchestrator,
+            None
+        );
+    }
+
+    #[test]
+    fn an_orchestrator_variable_that_is_not_utf_8_is_kept_as_its_bytes() {
+        let (options, _) = values(
+            &["ws", "index", "NAME"],
+            &[("WINTER_SERVICE_ORCHESTRATOR", b"pro\xffvider")],
+        );
+
+        assert_eq!(
+            options.service_orchestrator,
+            Some(OsString::from_vec(b"pro\xffvider".to_vec()))
+        );
+    }
+
+    #[test]
+    fn an_orchestrator_value_may_start_with_a_hyphen() {
+        for (args, value) in [
+            (
+                &["--service-orchestrator", "-x", "ws", "index", "NAME"][..],
+                "-x",
+            ),
+            (
+                &["--service-orchestrator", "--help", "ws", "index", "NAME"],
+                "--help",
+            ),
+            (
+                &["--service-orchestrator", "--version", "ws", "index", "NAME"],
+                "--version",
+            ),
+            (
+                &["--service-orchestrator", "--", "ws", "index", "NAME"],
+                "--",
+            ),
+            (
+                &["--service-orchestrator", "-v", "ws", "index", "NAME"],
+                "-v",
+            ),
+            (&["--service-orchestrator=-x", "ws", "index", "NAME"], "-x"),
+        ] {
+            let parsed = parsed(REGISTRY, args);
+            assert!(
+                matches!(parsed.outcome, Outcome::Dispatch { .. }),
+                "{args:?}: {:?}",
+                parsed.outcome
+            );
+            assert_eq!(path_of(&parsed.stage), ["ws", "index"], "{args:?}");
+            assert_eq!(
+                root_of(&parsed).service_orchestrator.as_deref(),
+                Some(value),
+                "{args:?}"
+            );
+            assert!(!root_of(&parsed).verbose, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn the_source_override_option_gives_its_value_as_given() {
+        let (options, _) = values(&["--source-override", "T", "ws", "index", "NAME"], &[]);
+        assert_eq!(options.source_override.as_deref(), Some("T"));
+
+        let (options, _) = values(&["--source-override", "", "ws", "index", "NAME"], &[]);
+        assert_eq!(options.source_override.as_deref(), Some(""));
+
+        let (options, _) = values(&["--source-override", "-t", "ws", "index", "NAME"], &[]);
+        assert_eq!(options.source_override.as_deref(), Some("-t"));
+
+        let (options, _) = values(&["ws", "index", "NAME"], &[]);
+        assert_eq!(options.source_override, None);
+    }
+
+    #[test]
+    fn the_root_options_are_kept_when_the_tokens_after_the_command_name_do_not_parse() {
+        let parsed = parsed(REGISTRY, &["-v", "ws", "index", "--bogus"]);
+
+        assert_eq!(path_of(&parsed.stage), ["ws", "index"]);
+        assert_eq!(
+            root_of(&parsed),
+            &RootArgs {
+                verbose: true,
+                service_orchestrator: None,
+                source_override: None
+            }
+        );
+        assert!(
+            matches!(parsed.outcome, Outcome::Ended(Termination::Usage(_))),
+            "{:?}",
+            parsed.outcome
+        );
+    }
+
+    #[test]
+    fn the_root_options_are_kept_whatever_ends_the_line_after_a_command_name() {
+        let all = RootArgs {
+            verbose: true,
+            service_orchestrator: Some("--help".to_owned()),
+            source_override: Some("ws".to_owned()),
+        };
+        let given = [
+            "--service-orchestrator",
+            "--help",
+            "-v",
+            "--source-override=ws",
+        ];
+        for after in [
+            &["ws", "index", "NAME"][..],
+            &["ws", "index", "--bogus"],
+            &["ws", "index"],
+            &["ws", "index", "--help"],
+            &["ws", "--help"],
+            &["ws", "nope"],
+            &["ws"],
+            &["ws", "index", "-v", "NAME"],
+        ] {
+            let args: Vec<&str> = given.iter().chain(after).copied().collect();
+
+            let parsed = parsed(REGISTRY, &args);
+
+            assert_eq!(root_of(&parsed), &all, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn a_repeated_root_option_ends_at_the_root_as_a_repeated_option() {
+        for (args, option) in [
+            (&["-v", "-v", "ws", "index", "NAME"][..], "--verbose"),
+            (&["-vv", "ws", "index", "NAME"], "--verbose"),
+            (&["-v", "--verbose", "ws", "index", "NAME"], "--verbose"),
+            (&["-v", "-v", "ws", "index", "--bogus"], "--verbose"),
+            (&["-v", "-v"], "--verbose"),
+            (
+                &[
+                    "--service-orchestrator",
+                    "a",
+                    "--service-orchestrator",
+                    "b",
+                    "ws",
+                    "index",
+                    "NAME",
+                ],
+                "--service-orchestrator",
+            ),
+            (
+                &[
+                    "--service-orchestrator=a",
+                    "--service-orchestrator=b",
+                    "ws",
+                    "index",
+                ],
+                "--service-orchestrator",
+            ),
+            (
+                &[
+                    "--source-override",
+                    "a",
+                    "--source-override",
+                    "b",
+                    "ws",
+                    "index",
+                    "NAME",
+                ],
+                "--source-override",
+            ),
+        ] {
+            let parsed = parsed(REGISTRY, args);
+
+            assert!(
+                matches!(parsed.stage, Stage::Root),
+                "{args:?}: {:?}",
+                parsed.stage
+            );
+            let (command_path, usage, fault) = usage_of(parsed);
+            assert!(command_path.is_empty(), "{args:?}");
+            assert_eq!(usage.help_command, "winter-workspace --help", "{args:?}");
+            assert!(
+                matches!(&fault, ParseFault::RepeatedOption { option: named } if named == option),
+                "{args:?}: {fault:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repeated_root_option_decides_before_a_help_or_a_fault_that_follows_it() {
+        for option in ["--service-orchestrator", "--source-override"] {
+            for tail in [
+                &["ws", "index", "--help"][..],
+                &["ws", "--help"],
+                &["ws", "index", "--bogus"],
+                &["ws", "nope"],
+                &["--bogus"],
+                &["nope"],
+                &["--help"],
+                &["--version"],
+                &[],
+            ] {
+                let args: Vec<&str> = [option, "a", option, "b"]
+                    .into_iter()
+                    .chain(tail.iter().copied())
+                    .collect();
+
+                let parsed = parsed(REGISTRY, &args);
+
+                assert!(
+                    matches!(parsed.stage, Stage::Root),
+                    "{args:?}: {:?}",
+                    parsed.stage
+                );
+                let (command_path, usage, fault) = usage_of(parsed);
+                assert!(command_path.is_empty(), "{args:?}");
+                assert_eq!(usage.help_command, "winter-workspace --help", "{args:?}");
+                assert!(
+                    matches!(&fault, ParseFault::RepeatedOption { option: named } if named == option),
+                    "{args:?}: {fault:?}"
+                );
+            }
+
+            // Given a second time without a value, it is the repeat that is refused, not the missing value.
+            let (command_path, fault) = fault_of(parsed(REGISTRY, &[option, "a", option]));
+            assert!(command_path.is_empty(), "{option}");
+            assert!(
+                matches!(&fault, ParseFault::RepeatedOption { option: named } if named == option),
+                "{option}: {fault:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repeated_option_of_a_command_is_a_repeated_option_of_that_command() {
+        for args in [
+            &["ws", "index", "NAME", "--json", "--json"][..],
+            &["ws", "index", "--json", "NAME", "--json"],
+            &["ws", "index", "--json", "--json"],
+            &["-v", "ws", "index", "--json", "--json", "one", "two"],
+        ] {
+            let (command_path, fault) = fault_of(parsed(REGISTRY, args));
+
+            assert_eq!(command_path, ["ws", "index"], "{args:?}");
+            assert!(
+                matches!(&fault, ParseFault::RepeatedOption { option } if option == "--json"),
+                "{args:?}: {fault:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_root_option_after_a_command_name_is_an_unknown_option_of_that_node() {
+        for (args, path, name) in [
+            (
+                &["ws", "index", "-v", "NAME"][..],
+                &["ws", "index"][..],
+                "-v",
+            ),
+            (
+                &["ws", "index", "NAME", "--verbose"],
+                &["ws", "index"],
+                "--verbose",
+            ),
+            (
+                &["ws", "index", "NAME", "--service-orchestrator", "X"],
+                &["ws", "index"],
+                "--service-orchestrator",
+            ),
+            (&["ws", "-v", "index", "NAME"], &["ws"], "-v"),
+            (
+                &["ws", "--source-override", "T", "index", "NAME"],
+                &["ws"],
+                "--source-override",
+            ),
+        ] {
+            let (command_path, fault) = fault_of(parsed(REGISTRY, args));
+
+            assert_eq!(command_path, path, "{args:?}");
+            assert!(
+                matches!(&fault, ParseFault::UnknownOption { name: named } if named == name),
+                "{args:?}: {fault:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn root_options_and_no_command_end_as_the_bare_root_does() {
+        let help = help_of(REGISTRY, &["--help"]);
+        for args in [
+            &["-v"][..],
+            &["--service-orchestrator", "X"],
+            &["-v", "--service-orchestrator", "X"],
+            &["--service-orchestrator", "ws"],
+            &["--service-orchestrator", "--help"],
+            &["--source-override", "T"],
+        ] {
+            let parsed = parsed(REGISTRY, args);
+
+            assert!(
+                matches!(parsed.stage, Stage::Root),
+                "{args:?}: {:?}",
+                parsed.stage
+            );
+            assert!(
+                matches!(&parsed.outcome, Outcome::Ended(Termination::BareGroup { help: carried }) if *carried == help),
+                "{args:?}: {:?}",
+                parsed.outcome
+            );
+        }
+    }
+
+    #[test]
+    fn a_fault_among_the_root_options_ends_at_the_root_whatever_follows() {
+        for args in [
+            &["--verbose=x", "ws", "index", "NAME"][..],
+            &["-vx", "ws", "index", "NAME"],
+            &["-xv", "ws", "index", "NAME"],
+            &["-v=x", "ws", "index", "NAME"],
+            &["--service-orchestrator"],
+            &["-v", "--service-orchestrator"],
+            &["--service-orchestrator", "ws", "index", "NAME"],
+            &["--help=x", "ws", "index", "NAME"],
+            &["--version=x", "ws", "index", "NAME"],
+            &["-", "ws", "index", "NAME"],
+        ] {
+            let parsed = parsed(REGISTRY, args);
+
+            assert!(
+                matches!(parsed.stage, Stage::Root),
+                "{args:?}: {:?}",
+                parsed.stage
+            );
+            let (command_path, usage, _) = usage_of(parsed);
+            assert!(command_path.is_empty(), "{args:?}");
+            assert_eq!(usage.help_command, "winter-workspace --help", "{args:?}");
+        }
+    }
+
+    #[test]
+    fn a_double_dash_before_a_command_name_is_refused_at_the_node_it_stands_at() {
+        for (args, path) in [
+            (&["--", "ws", "index", "NAME"][..], &[][..]),
+            (&["-v", "--", "ws", "index", "NAME"], &[]),
+            (&["--", "--help"], &[]),
+            (&["--", "nope"], &[]),
+            (&["ws", "--", "index", "NAME"], &["ws"]),
+            (&["ws", "--", "--help"], &["ws"]),
+        ] {
+            let parsed = parsed(REGISTRY, args);
+
+            assert_eq!(path_of(&parsed.stage), path, "{args:?}");
+            let (command_path, fault) = fault_of(parsed);
+            assert_eq!(command_path, path, "{args:?}");
+            assert!(
+                matches!(&fault, ParseFault::UnexpectedArgument { values } if values == &["--"]),
+                "{args:?}: {fault:?}"
+            );
+        }
+
+        // With nothing after it, the line ends as the bare node does.
+        for (args, path) in [(&["--"][..], &[][..]), (&["ws", "--"], &["ws"])] {
+            let parsed = parsed(REGISTRY, args);
+
+            assert_eq!(path_of(&parsed.stage), path, "{args:?}");
+            assert!(
+                matches!(
+                    parsed.outcome,
+                    Outcome::Ended(Termination::BareGroup { .. })
+                ),
+                "{args:?}: {:?}",
+                parsed.outcome
+            );
+        }
+
+        // At a command it ends the options, and the word after it is the command's argument.
+        let parsed = parsed(REGISTRY, &["ws", "index", "--", "NAME"]);
+        assert!(
+            matches!(parsed.outcome, Outcome::Dispatch { .. }),
+            "{:?}",
+            parsed.outcome
+        );
+    }
+
+    #[test]
+    fn the_faults_of_the_root_options_are_classed() {
+        let (_, fault) = fault_of(parsed(REGISTRY, &["--service-orchestrator"]));
+        assert!(
+            matches!(&fault, ParseFault::MissingOptionValue { option } if option.contains("--service-orchestrator")),
+            "{fault:?}"
+        );
+
+        let (_, fault) = fault_of(parsed(
+            REGISTRY,
+            &["--service-orchestrator", "ws", "index", "NAME"],
+        ));
+        assert!(
+            matches!(&fault, ParseFault::UnknownCommand { name } if name == "index"),
+            "{fault:?}"
+        );
+
+        let (_, fault) = fault_of(parsed(REGISTRY, &["-vx", "ws", "index", "NAME"]));
+        assert!(
+            matches!(&fault, ParseFault::UnknownOption { name } if name == "-x"),
+            "{fault:?}"
+        );
+    }
+
+    #[test]
+    fn a_value_given_to_a_flag_is_refused_at_the_node_of_the_flag() {
+        for (args, path, flag) in [
+            (
+                &["--verbose=x", "ws", "index", "NAME"][..],
+                &[][..],
+                "--verbose",
+            ),
+            (
+                &["ws", "index", "--json=x", "one"],
+                &["ws", "index"],
+                "--json",
+            ),
+            (
+                &["repo", "remove", "project/a", "--local=x"],
+                &["repo", "remove"],
+                "--local",
+            ),
+        ] {
+            let (command_path, fault) = fault_of(parsed(REGISTRY, args));
+
+            assert_eq!(command_path, path, "{args:?}");
+            assert!(
+                matches!(&fault, ParseFault::UnexpectedArgument { values } if values == &[flag, "x"]),
+                "{args:?}: {fault:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn help_or_version_and_a_fault_at_one_node_end_as_the_one_that_stands_first() {
+        let rows: [(&[&str], &[&str], Kind); 9] = [
+            (&["--version", "--bogus"], &[], Kind::Version),
+            (&["--bogus", "--version"], &[], Kind::Ended),
+            (&["--help", "--bogus"], &[], Kind::Help),
+            (&["--bogus", "--help"], &[], Kind::Ended),
+            (
+                &["ws", "index", "--help", "--bogus"],
+                &["ws", "index"],
+                Kind::Help,
+            ),
+            (
+                &["ws", "index", "--bogus", "--help"],
+                &["ws", "index"],
+                Kind::Ended,
+            ),
+            (&["--version", "ws", "bogus"], &[], Kind::Version),
+            (&["ws", "index", "--help"], &["ws", "index"], Kind::Help),
+            (&["-v", "-v", "--help"], &[], Kind::Ended),
+        ];
+
+        for (args, path, kind) in rows {
+            let parsed = parsed(REGISTRY, args);
+
+            assert_eq!(path_of(&parsed.stage), path, "{args:?}");
+            assert_eq!(
+                kind_of(&parsed.outcome),
+                kind,
+                "{args:?}: {:?}",
+                parsed.outcome
+            );
+        }
+    }
+
+    #[test]
+    fn an_argument_that_is_not_utf_8_is_refused_at_the_node_the_tokens_before_it_reached() {
+        let bad: &[u8] = b"na\xffme";
+        let rows: [(&[&[u8]], &[&str]); 14] = [
+            (&[b"ws", b"index", bad], &["ws", "index"]),
+            (&[b"ws", b"index", b"--", bad], &["ws", "index"]),
+            (&[b"ws", b"index", b"--help", bad], &["ws", "index"]),
+            (
+                &[b"ws", b"index", b"NAME", b"--json", bad],
+                &["ws", "index"],
+            ),
+            (&[b"ws", bad, b"index"], &["ws"]),
+            (&[b"ws", b"--help", bad], &["ws"]),
+            (&[bad], &[]),
+            (&[bad, b"ws", b"index", b"NAME"], &[]),
+            (
+                &[b"--service-orchestrator", bad, b"ws", b"index", b"NAME"],
+                &[],
+            ),
+            (&[b"--help", bad], &[]),
+            (&[b"--version", bad], &[]),
+            (&[b"--bogus", b"ws", b"index", bad], &[]),
+            (&[b"-v", b"-v", b"ws", b"index", bad], &[]),
+            (&[b"--", bad], &[]),
+        ];
+
+        for (args, path) in rows {
+            let parsed = parsed_os(REGISTRY, args);
+
+            let (command_path, usage, fault) = usage_of(parsed);
+            assert_eq!(command_path, path, "{args:?}");
+            let words: Vec<&str> = ["winter-workspace"]
+                .into_iter()
+                .chain(path.iter().copied())
+                .collect();
+            assert_eq!(
+                usage.help_command,
+                format!("{} --help", words.join(" ")),
+                "{args:?}"
+            );
+            assert!(
+                matches!(&fault, ParseFault::NotUtf8 { argument } if argument == "na\u{fffd}me"),
+                "{args:?}: {fault:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_first_argument_that_is_not_utf_8_is_the_one_reported_and_the_root_options_before_it_are_kept()
+     {
+        let parsed = parsed_os(
+            REGISTRY,
+            &[
+                b"-v",
+                b"--service-orchestrator",
+                b"X",
+                b"ws",
+                b"index",
+                b"one\xff",
+                b"two\xfe",
+                b"--bogus",
+            ],
+        );
+
+        assert_eq!(
+            root_of(&parsed),
+            &RootArgs {
+                verbose: true,
+                service_orchestrator: Some("X".to_owned()),
+                source_override: None
+            }
+        );
+        let (command_path, fault) = fault_of(parsed);
+        assert_eq!(command_path, ["ws", "index"]);
+        assert!(
+            matches!(&fault, ParseFault::NotUtf8 { argument } if argument == "one\u{fffd}"),
+            "{fault:?}"
+        );
+    }
+
+    /// The command path of an accepted line is the parser's own; the walk that reads the path of a refused
+    /// line has to answer the same for it.
+    #[test]
+    fn the_walk_reads_the_command_path_the_parser_selects() {
+        let mut parser = Parser::build(REGISTRY, &IDENTITY).expect("a tree");
+        parser.command.build();
+        for args in [
+            &["ws", "index", "NAME"][..],
+            &["-v", "ws", "index", "NAME"],
+            &["--verbose", "ws", "index", "NAME"],
+            &["--service-orchestrator", "ws", "ws", "index", "NAME"],
+            &["--service-orchestrator", "--help", "ws", "index", "NAME"],
+            &["--service-orchestrator", "--bogus", "ws", "index", "NAME"],
+            &["--service-orchestrator", "-v", "-v", "ws", "index", "NAME"],
+            &["--service-orchestrator=", "ws", "index", "NAME"],
+            &["--service-orchestrator", "--", "ws", "index", "NAME"],
+            &[
+                "--source-override",
+                "--service-orchestrator",
+                "--service-orchestrator",
+                "-v",
+                "ws",
+                "index",
+                "x",
+            ],
+            &[
+                "-v",
+                "--service-orchestrator",
+                "X",
+                "--source-override",
+                "T",
+                "repo",
+                "remove",
+                "project/a",
+            ],
+            &["-v"],
+            &["--service-orchestrator", "ws"],
+            &["ws"],
+        ] {
+            let os_args: Vec<OsString> = args.iter().map(OsString::from).collect();
+            let mut selected = parser
+                .command
+                .try_get_matches_from_mut(&os_args)
+                .unwrap_or_else(|error| panic!("{args:?}: {error}"));
+            let mut path = Vec::new();
+            while let Some((name, below)) = selected.remove_subcommand() {
+                path.push(name);
+                selected = below;
+            }
+
+            assert_eq!(resolved(&parser.command, &os_args).path, path, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn the_resolved_path_follows_what_each_option_takes_as_its_value() {
+        let tree = with_help(
+            clap::Command::new("tool")
+                .arg(Arg::new("provider").long("provider").short('p'))
+                .arg(
+                    Arg::new("source")
+                        .long("source")
+                        .short('s')
+                        .allow_hyphen_values(true),
+                )
+                .arg(
+                    Arg::new("verbose")
+                        .long("verbose")
+                        .short('v')
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(Arg::new("quiet").short('q').action(ArgAction::SetTrue))
+                .arg(Arg::new("level").short('l').action(ArgAction::Count))
+                .subcommand(with_help(
+                    clap::Command::new("ws").subcommand(clap::Command::new("index")),
+                )),
+        );
+        let path = |args: &[&str]| {
+            let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+            resolved(&tree, &args).path
+        };
+
+        // A value slot that holds an option: taken by an option that accepts a hyphen-leading value, and
+        // the fault or the help of the line for one that does not.
+        assert_eq!(path(&["--source", "--help", "ws"]), ["ws"]);
+        assert_eq!(path(&["--source", "--verbose", "--verbose", "ws"]), ["ws"]);
+        assert_eq!(path(&["--source", "--", "ws"]), ["ws"]);
+        assert_eq!(path(&["-s", "-v", "ws"]), ["ws"]);
+        assert!(path(&["--provider", "--help", "ws"]).is_empty());
+        assert!(path(&["--provider", "--verbose", "ws"]).is_empty());
+        assert!(path(&["--provider", "-v", "ws"]).is_empty());
+        assert!(path(&["-p", "--", "ws"]).is_empty());
+        assert_eq!(path(&["--provider", "-", "ws"]), ["ws"]);
+        assert!(path(&["--provider"]).is_empty());
+        assert!(path(&["--source"]).is_empty());
+
+        // A short cluster: every letter is read, and the letters after one that takes a value are its
+        // value.
+        assert_eq!(path(&["-vq", "ws"]), ["ws"]);
+        assert_eq!(path(&["-qv", "ws", "index"]), ["ws", "index"]);
+        assert_eq!(path(&["-vp", "ws", "ws"]), ["ws"]);
+        assert_eq!(path(&["-vpws", "ws"]), ["ws"]);
+        assert_eq!(path(&["-vsq", "ws"]), ["ws"]);
+        assert_eq!(path(&["-vs", "--help", "ws"]), ["ws"]);
+        assert!(path(&["-vx", "ws"]).is_empty());
+        assert!(path(&["-xv", "ws"]).is_empty());
+        assert!(path(&["-vp", "--help", "ws"]).is_empty());
+
+        // An option given twice ends the path unless it may repeat.
+        assert!(path(&["-vv", "ws"]).is_empty());
+        assert!(path(&["-v", "--verbose", "ws"]).is_empty());
+        assert!(path(&["-vqv", "ws"]).is_empty());
+        assert!(path(&["--provider", "a", "-pb", "ws"]).is_empty());
+        assert!(path(&["--source=a", "--source", "b", "ws"]).is_empty());
+        assert_eq!(path(&["-ll", "-l", "ws"]), ["ws"]);
+
+        // A flag takes no value.
+        assert!(path(&["--verbose=x", "ws"]).is_empty());
+        assert!(path(&["--help=x", "ws"]).is_empty());
+        assert_eq!(path(&["--provider=--help", "ws"]), ["ws"]);
+    }
+
+    #[test]
+    fn the_walk_and_the_parser_agree_on_where_a_line_of_that_tree_is_decided() {
+        let mut tree = with_help(
+            clap::Command::new("tool")
+                .no_binary_name(true)
+                .arg(Arg::new("provider").long("provider").short('p'))
+                .arg(
+                    Arg::new("source")
+                        .long("source")
+                        .short('s')
+                        .allow_hyphen_values(true),
+                )
+                .arg(
+                    Arg::new("verbose")
+                        .long("verbose")
+                        .short('v')
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(Arg::new("quiet").short('q').action(ArgAction::SetTrue))
+                .arg(Arg::new("level").short('l').action(ArgAction::Count))
+                .subcommand(with_help(clap::Command::new("ws")).subcommand_required(false)),
+        );
+        tree.build();
+        // Each line ends in the one command of the tree, so the parser accepts it exactly when nothing
+        // before that name decides, which is when the walk reads the name into the path.
+        for options in [
+            &["--source", "--help"][..],
+            &["--source", "--verbose", "--verbose"],
+            &["--source", "--"],
+            &["-s", "-v"],
+            &["--provider", "--help"],
+            &["--provider", "--verbose"],
+            &["--provider", "-v"],
+            &["-p", "--"],
+            &["--provider", "-"],
+            &["-vq"],
+            &["-vp", "ws"],
+            &["-vpws"],
+            &["-vsq"],
+            &["-vs", "--help"],
+            &["-vx"],
+            &["-xv"],
+            &["-vp", "--help"],
+            &["-vv"],
+            &["-v", "--verbose"],
+            &["-vqv"],
+            &["--provider", "a", "-pb"],
+            &["--source=a", "--source", "b"],
+            &["-ll", "-l"],
+            &["--verbose=x"],
+            &["--help=x"],
+            &["--provider=--help"],
+            &["-v=x"],
+            &["-p=x"],
+            &["-"],
+            &["--source", "a", "--source", "b"],
+            &["--provider", "a", "--provider", "b"],
+            &["-p", "a", "-s", "b", "-p", "c"],
+        ] {
+            // The same holds when the command is followed by its help flag or by a fault of its own: the
+            // parser answers with that token exactly when the walk read the name.
+            for tail in [&["ws"][..], &["ws", "--help"], &["ws", "--bogus"]] {
+                let args: Vec<OsString> = options.iter().chain(tail).map(OsString::from).collect();
+
+                let walked = resolved(&tree, &args);
+                let at_the_tail = match (tail, tree.try_get_matches_from_mut(&args)) {
+                    ([_], answer) => answer.is_ok(),
+                    ([_, "--help"], Err(help)) => {
+                        help.kind() == ErrorKind::DisplayHelp
+                            && help
+                                .render()
+                                .to_string()
+                                .lines()
+                                .any(|line| line.starts_with("Usage:") && line.ends_with("ws"))
+                    }
+                    (_, Err(fault)) => {
+                        fault.kind() == ErrorKind::UnknownArgument
+                            && matches!(
+                                fault.get(ContextKind::InvalidArg),
+                                Some(ContextValue::String(name)) if name == "--bogus"
+                            )
+                    }
+                    (_, Ok(_)) => false,
+                };
+
+                // A repeat the walk refuses is decided by the walk, and the parser is not asked: before a
+                // help or a fault of the command it answers some such lines with that later token.
+                if tail.len() > 1 && matches!(walked.refused, Some(Refused::Repeated { .. })) {
+                    assert!(walked.path.is_empty(), "{options:?} {tail:?}");
+                    continue;
+                }
+                assert_eq!(!walked.path.is_empty(), at_the_tail, "{options:?} {tail:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_walk_refuses_a_repeat_and_a_double_dash_that_a_token_follows() {
+        let tree = with_help(
+            clap::Command::new("tool")
+                .no_binary_name(true)
+                .arg(Arg::new("provider").long("provider").short('p'))
+                .arg(Arg::new("quiet").short('q').action(ArgAction::SetTrue))
+                .arg(Arg::new("level").short('l').action(ArgAction::Count))
+                .subcommand(with_help(
+                    clap::Command::new("ws").subcommand(clap::Command::new("index")),
+                )),
+        );
+        let refused = |args: &[&str]| {
+            let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+            let walked = resolved(&tree, &args);
+            (walked.path, walked.refused)
+        };
+        let repeated = |option: &str| {
+            Some(Refused::Repeated {
+                option: option.to_owned(),
+            })
+        };
+
+        for tail in [&[][..], &["ws"], &["ws", "--help"], &["--bogus"], &["nope"]] {
+            let line: Vec<&str> = ["--provider", "a", "--provider", "b"]
+                .into_iter()
+                .chain(tail.iter().copied())
+                .collect();
+            assert_eq!(refused(&line), (vec![], repeated("--provider")), "{tail:?}");
+        }
+        assert_eq!(
+            refused(&["-p", "a", "-pb", "ws"]),
+            (vec![], repeated("--provider"))
+        );
+        assert_eq!(refused(&["-qq", "ws"]), (vec![], repeated("-q")));
+        assert_eq!(
+            refused(&["--provider", "a", "--provider"]),
+            (vec![], repeated("--provider"))
+        );
+        // An option that may repeat is not refused, and an option's value is no second giving of it.
+        assert_eq!(refused(&["-l", "-ll", "ws"]), (vec!["ws".to_owned()], None));
+        assert_eq!(refused(&["--provider", "--provider", "ws"]), (vec![], None));
+
+        assert_eq!(refused(&["--", "ws"]), (vec![], Some(Refused::DoubleDash)));
+        assert_eq!(
+            refused(&["ws", "--", "index"]),
+            (vec!["ws".to_owned()], Some(Refused::DoubleDash))
+        );
+        assert_eq!(
+            refused(&["-q", "--", "--help"]),
+            (vec![], Some(Refused::DoubleDash))
+        );
+        // Nothing follows it, so nothing is refused; and at a node that has no commands it is not read.
+        assert_eq!(refused(&["--"]), (vec![], None));
+        assert_eq!(refused(&["ws", "--"]), (vec!["ws".to_owned()], None));
+        assert_eq!(
+            refused(&["ws", "index", "--", "x"]),
+            (vec!["ws".to_owned(), "index".to_owned()], None)
+        );
+        // A help, a version, or a fault that stands first decides, and nothing after it is refused.
+        assert_eq!(refused(&["--help", "-q", "-q"]), (vec![], None));
+        assert_eq!(refused(&["--bogus", "--", "ws"]), (vec![], None));
+    }
+
+    #[test]
+    fn no_line_of_root_tokens_before_a_command_ends_as_an_internal_failure() {
+        const TOKENS: [&[u8]; 16] = [
+            b"-v",
+            b"--verbose",
+            b"-vv",
+            b"--verbose=x",
+            b"--service-orchestrator",
+            b"--service-orchestrator=a",
+            b"--source-override",
+            b"--source-override=",
+            b"--help",
+            b"--version",
+            b"--",
+            b"-",
+            b"",
+            b"--bogus",
+            b"ws",
+            b"x",
+        ];
+        const ENDS: [&[&[u8]]; 6] = [
+            &[b"ws", b"index", b"NAME"],
+            &[b"ws", b"index", b"--bogus"],
+            &[b"ws", b"nope"],
+            &[b"ws", b"index", b"--help"],
+            &[b"ws", b"index", b"\xff"],
+            &[b"ws", b"--", b"index"],
+        ];
+        // Every line of up to three of the tokens, each followed by each ending.
+        let mut lines: Vec<Vec<&[u8]>> = vec![Vec::new()];
+        let mut longest = lines.clone();
+        for _ in 0..3 {
+            longest = longest
+                .iter()
+                .flat_map(|line| {
+                    TOKENS.iter().map(move |token| {
+                        let mut line = line.clone();
+                        line.push(*token);
+                        line
+                    })
+                })
+                .collect();
+            lines.extend(longest.iter().cloned());
+        }
+
+        for line in &lines {
+            for end in ENDS {
+                let args: Vec<&[u8]> = line.iter().chain(end).copied().collect();
+
+                let parsed = parsed_os(REGISTRY, &args);
+
+                assert!(
+                    !matches!(parsed.outcome, Outcome::Ended(Termination::Internal(_))),
+                    "{:?}",
+                    args.iter()
+                        .map(|arg| String::from_utf8_lossy(arg))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
     }
 
     #[test]

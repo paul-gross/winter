@@ -1,0 +1,4 @@
+summary = "--help at the root prints the root help and exits 0."
+
+[[step]]
+args = ["--help"]

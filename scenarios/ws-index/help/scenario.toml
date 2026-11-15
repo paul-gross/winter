@@ -1,0 +1,4 @@
+summary = "ws index --help exits 0 without a name, and nothing is looked up."
+
+[[step]]
+args = ["ws", "index", "--help"]

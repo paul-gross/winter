@@ -1,0 +1,38 @@
+Usage: winter [OPTIONS] COMMAND [ARGS]...
+
+  Winter — workspace management CLI.
+
+Options:
+  --version                       Show the version and exit.
+  --service-orchestrator PATH_OR_NAME
+                                  Override the service orchestrator for this
+                                  invocation. A local path (contains a path
+                                  separator or resolves to an existing
+                                  directory) short-circuits the registered-
+                                  extension lookup and reads that directory's
+                                  winter-ext.toml directly. A bare name falls
+                                  back to the registered-extension lookup.
+                                  Takes precedence over
+                                  WINTER_SERVICE_ORCHESTRATOR and
+                                  capabilities.service in .winter/config.toml.
+  -v, --verbose                   Enable DEBUG-level logging on stderr.
+                                  Equivalent to WINTER_LOG_LEVEL=DEBUG.
+                                  Diagnostics always go to stderr; --json
+                                  stdout stays pure JSON.
+  --help                          Show this message and exit.
+
+Commands:
+  agents        Show the resolved model and effort for every installed...
+  capabilities  List every known capability slot — its bound provider,...
+  clean         Run each matched provision handler's declared `clean`...
+  dashboard     Launch the TUI dashboard.
+  doctor        Run preflight checks for the workspace and every...
+  env           Print the runtime environment variables for SCOPE as...
+  ext           Extension management commands.
+  graph         Print the module dependency graph declared in...
+  lint          Run convention lint checks over the project repos in a...
+  provision     Provision one or more feature envs matched by PATTERNS:...
+  repo          Manage repositories.
+  service       Control workspace services via the registered...
+  space         Print the winter-space directory for artifact KIND...
+  ws            Manage feature environments.

@@ -1,0 +1,4 @@
+summary = "No argument at all exits 2, and nothing is started."
+
+[[step]]
+args = []

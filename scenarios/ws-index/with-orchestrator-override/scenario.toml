@@ -1,0 +1,5 @@
+summary = "A provider override given at the root changes nothing ws index answers."
+
+[[step]]
+args = ["--service-orchestrator", "X", "ws", "index", "feature-x", "--json"]
+stdout = "json"

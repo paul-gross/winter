@@ -1,0 +1,4 @@
+summary = "A root option after the command name is an option the command does not have: exit 2, and nothing is looked up."
+
+[[step]]
+args = ["ws", "index", "-v", "feature-x"]

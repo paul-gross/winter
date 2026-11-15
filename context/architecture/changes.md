@@ -64,6 +64,17 @@ A unit test in `crates/core/src/parse.rs` checks the registry as a whole and fai
 offending entry: an alias of something that is not a command beside it, an alias of an alias, or a top-level command
 with the name of a group.
 
+An option that takes a value is declared with `allow_hyphen_values(true)`, so that the token after it is its value
+whatever it looks like: `--service-orchestrator -x`. A positional is never given that setting, and a positional that
+starts with `-` needs `--` before it. The unit test
+`every_value_taking_option_accepts_a_value_that_starts_with_a_hyphen` in `crates/core/src/parse.rs` checks every option
+of the root and of every registered command, and fails naming the command and the option.
+
+An option takes one value each time it is given: the parser's reading of the command path steps over one token after an
+option that takes a value. The unit test `no_option_takes_more_than_one_value_at_one_giving` in the same file fails
+naming the command and the option that takes more tokens than one, whether it is declared with a number of values or
+with more than one value name; it reads the count from the built tree.
+
 A command file holds the node's arguments and the adapter from the parsed arguments to one call into a domain module.
 Logic that two commands share lives in a domain module, never under `commands/`. The file holds:
 

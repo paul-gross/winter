@@ -1,0 +1,4 @@
+summary = "--version prints the version line and exits 0."
+
+[[step]]
+args = ["--version"]

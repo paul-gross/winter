@@ -1,0 +1,4 @@
+summary = "A value given to a flag of repo remove is a usage error: exit 2, and no file changes."
+
+[[step]]
+args = ["repo", "remove", "project/web", "--json=x"]

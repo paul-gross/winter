@@ -15,6 +15,7 @@ mod env_index;
 mod files;
 mod groups;
 mod index_lookup;
+mod logging;
 mod output;
 mod parse;
 mod process;

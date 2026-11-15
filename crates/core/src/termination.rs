@@ -105,6 +105,13 @@ pub enum ParseFault {
     },
     #[error("unexpected argument: {}", quoted(.values))]
     UnexpectedArgument { values: Vec<String> },
+    /// A flag or a single-value option given more than once.
+    #[error("option '{option}' is given more than once")]
+    RepeatedOption { option: String },
+    /// An argument of the command line that is not UTF-8. `argument` is its text with each invalid sequence
+    /// replaced, and is rendered in quotes with its control characters escaped.
+    #[error("argument is not valid UTF-8: {argument:?}")]
+    NotUtf8 { argument: String },
 }
 
 /// Each value in quotes with its control characters escaped, so that an empty value shows and a value that
@@ -266,6 +273,18 @@ mod tests {
                 },
                 "\"extra\"",
             ),
+            (
+                ParseFault::RepeatedOption {
+                    option: "--json".to_owned(),
+                },
+                "--json",
+            ),
+            (
+                ParseFault::NotUtf8 {
+                    argument: "na\u{fffd}me".to_owned(),
+                },
+                "\"na\u{fffd}me\"",
+            ),
         ]
     }
 
@@ -376,6 +395,19 @@ mod tests {
         let lines: Vec<&str> = diagnostic.lines().collect();
         assert_eq!(lines.len(), 3, "{diagnostic:?}");
         assert!(lines[0].ends_with(r#""two" "" "a\nb""#), "{diagnostic}");
+    }
+
+    #[test]
+    fn an_argument_that_is_not_utf_8_is_quoted_and_stays_on_the_error_line() {
+        let diagnostic = Termination::Usage(Box::new(usage_with(ParseFault::NotUtf8 {
+            argument: "a\nb\u{fffd}".to_owned(),
+        })))
+        .diagnostic()
+        .expect("a diagnostic");
+
+        let lines: Vec<&str> = diagnostic.lines().collect();
+        assert_eq!(lines.len(), 3, "{diagnostic:?}");
+        assert!(lines[0].ends_with("\"a\\nb\u{fffd}\""), "{diagnostic}");
     }
 
     #[test]

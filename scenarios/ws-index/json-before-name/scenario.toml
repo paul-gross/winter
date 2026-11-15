@@ -1,0 +1,5 @@
+summary = "The --json flag of ws index may stand before the name."
+
+[[step]]
+args = ["ws", "index", "--json", "feature-x"]
+stdout = "json"

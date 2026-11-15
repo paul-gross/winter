@@ -1,0 +1,4 @@
+Usage: winter [OPTIONS] COMMAND [ARGS]...
+Try 'winter --help' for help.
+
+Error: No such option: --bogus Did you mean --verbose?

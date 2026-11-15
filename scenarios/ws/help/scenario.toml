@@ -1,0 +1,4 @@
+summary = "ws --help prints the help of the group and exits 0."
+
+[[step]]
+args = ["ws", "--help"]

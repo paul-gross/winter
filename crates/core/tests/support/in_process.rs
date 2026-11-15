@@ -35,6 +35,14 @@ impl InProcess {
         }
     }
 
+    /// The same invocation for arguments that need not be text.
+    pub fn os_args(args: Vec<OsString>) -> Self {
+        Self {
+            args,
+            ..Self::new(&[])
+        }
+    }
+
     /// Sets the working directory.
     pub fn cwd(mut self, cwd: &Path) -> Self {
         self.cwd = cwd.to_path_buf();

@@ -1,6 +1,8 @@
 //! `ws index`: the index of a feature env name, looked up in a fixture workspace and never recorded.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -10,7 +12,7 @@ use winter_workspace_test_support::{TempTree, WorkspaceBuilder};
 #[path = "support/in_process.rs"]
 mod in_process;
 
-use in_process::InProcess;
+use in_process::{Ended, InProcess};
 
 /// A configuration file that declares nothing, so both keys take their defaults.
 const DEFAULTS: &str = "# workspace\n";
@@ -550,10 +552,17 @@ fn ws_alone_writes_nothing_and_ends_as_a_bare_group_with_the_ws_help() {
 
 /// The parts of a usage error that wrote nothing to either handle and exits 2.
 fn usage_error(args: &[&str]) -> (Vec<String>, Usage, ParseFault) {
-    let ended = InProcess::new(args).cwd(Path::new("/")).run();
-    assert_eq!(ended.stdout, "", "{args:?}");
-    assert_eq!(ended.stderr, "", "{args:?}");
-    assert_eq!(ended.termination.exit_code(), 2, "{args:?}");
+    usage_parts(
+        InProcess::new(args).cwd(Path::new("/")).run(),
+        &format!("{args:?}"),
+    )
+}
+
+/// The parts of the usage error `ended` holds, which wrote nothing to either handle and exits 2.
+fn usage_parts(ended: Ended, line: &str) -> (Vec<String>, Usage, ParseFault) {
+    assert_eq!(ended.stdout, "", "{line}");
+    assert_eq!(ended.stderr, "", "{line}");
+    assert_eq!(ended.termination.exit_code(), 2, "{line}");
     match ended.termination {
         Termination::Usage(error) => {
             let UsageError::Parse {
@@ -563,7 +572,7 @@ fn usage_error(args: &[&str]) -> (Vec<String>, Usage, ParseFault) {
             } = *error;
             (command_path, usage, fault)
         }
-        other => panic!("{args:?}: expected a usage termination, got {other:?}"),
+        other => panic!("{line}: expected a usage termination, got {other:?}"),
     }
 }
 
@@ -657,23 +666,265 @@ fn two_names_too_many_are_both_rendered_each_quoted() {
 }
 
 #[test]
-fn a_repeated_json_flag_is_refused_as_a_usage_error() {
+fn a_repeated_option_is_refused_as_a_repeated_option_and_nothing_is_looked_up() {
     let tree = tree();
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .build()
         .expect("a workspace");
 
-    let ended = InProcess::new(&["ws", "index", "feature-x", "--json", "--json"])
+    for (args, path, option) in [
+        (
+            &["-v", "-v", "ws", "index", "feature-x"][..],
+            &[][..],
+            "--verbose",
+        ),
+        (
+            &["ws", "index", "feature-x", "--json", "--json"],
+            &["ws", "index"],
+            "--json",
+        ),
+        (
+            &[
+                "--service-orchestrator",
+                "a",
+                "--service-orchestrator",
+                "b",
+                "ws",
+                "index",
+                "feature-x",
+            ],
+            &[],
+            "--service-orchestrator",
+        ),
+    ] {
+        let ended = InProcess::new(args).cwd(&workspace.root).run();
+
+        let (command_path, _, fault) = usage_parts(ended, &format!("{args:?}"));
+        assert_eq!(command_path, path, "{args:?}");
+        assert!(
+            matches!(&fault, ParseFault::RepeatedOption { option: named } if named == option),
+            "{args:?}: {fault:?}"
+        );
+    }
+}
+
+#[test]
+fn a_root_option_after_the_command_name_is_a_usage_error_of_ws_index() {
+    for (args, name) in [
+        (&["ws", "index", "-v", "feature-x"][..], "-v"),
+        (
+            &["ws", "index", "feature-x", "--service-orchestrator", "X"],
+            "--service-orchestrator",
+        ),
+    ] {
+        let (command_path, usage, fault) = usage_error(args);
+
+        assert_eq!(command_path, ["ws", "index"], "{args:?}");
+        assert!(
+            matches!(&fault, ParseFault::UnknownOption { name: named } if named == name),
+            "{args:?}: {fault:?}"
+        );
+        assert_usage_of(&usage, &["ws", "index", "--help"]);
+    }
+}
+
+#[test]
+fn the_root_options_before_the_command_name_are_accepted_and_change_no_result() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .state("[env_index]\nfeature-x = 15\n")
+        .build()
+        .expect("a workspace");
+    let plain = document(&workspace.root, "feature-x");
+
+    for options in [
+        &["-v"][..],
+        &["--verbose"],
+        &["--service-orchestrator", "X"],
+        &["--service-orchestrator", "-x"],
+        &["--service-orchestrator", ""],
+        &["--source-override", "T"],
+        &["-v", "--service-orchestrator=X", "--source-override=T"],
+    ] {
+        let args: Vec<&str> = options
+            .iter()
+            .chain(&["ws", "index", "feature-x", "--json"])
+            .copied()
+            .collect();
+
+        let ended = InProcess::new(&args)
+            .cwd(&workspace.root)
+            .env("WINTER_LOG_LEVEL", "DEBUG")
+            .env("WINTER_SERVICE_ORCHESTRATOR", "Y")
+            .run();
+
+        assert!(
+            matches!(ended.termination, Termination::Success),
+            "{args:?}: {:?}",
+            ended.termination
+        );
+        assert_eq!(ended.stderr, "", "{args:?}");
+        let document: Value = serde_json::from_str(&ended.stdout).expect("a document");
+        assert_eq!(document, plain, "{args:?}");
+    }
+}
+
+#[test]
+fn a_name_after_a_double_dash_is_looked_up_though_it_is_spelled_like_an_option() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .state("[env_index]\n--json = 7\n")
+        .build()
+        .expect("a workspace");
+
+    let ended = InProcess::new(&["ws", "index", "--json", "--", "--json"])
         .cwd(&workspace.root)
         .run();
 
-    assert_eq!(ended.stdout, "");
-    assert_eq!(ended.stderr, "");
-    assert_eq!(ended.termination.exit_code(), 2);
     assert!(
-        matches!(ended.termination, Termination::Usage(_)),
+        matches!(ended.termination, Termination::Success),
         "{:?}",
         ended.termination
     );
+    let document: Value = serde_json::from_str(&ended.stdout).expect("a document");
+    assert_eq!(
+        document,
+        json!({"name": "--json", "index": 7, "source": "registry"})
+    );
+}
+
+#[test]
+fn help_before_a_fault_of_ws_index_is_written_and_succeeds() {
+    let help = InProcess::new(&["ws", "index", "--help"])
+        .cwd(Path::new("/"))
+        .run();
+    assert!(
+        matches!(help.termination, Termination::Success),
+        "{:?}",
+        help.termination
+    );
+    assert!(help.stdout.contains("NAME"), "{}", help.stdout);
+    assert_eq!(help.stderr, "");
+
+    for args in [
+        &["ws", "index", "--help", "--bogus"][..],
+        &["ws", "index", "--help", "one", "two"],
+        &["ws", "index", "--json", "--help", "--json"],
+    ] {
+        let ended = InProcess::new(args).cwd(Path::new("/")).run();
+
+        assert!(
+            matches!(ended.termination, Termination::Success),
+            "{args:?}: {:?}",
+            ended.termination
+        );
+        assert_eq!(ended.stdout, help.stdout, "{args:?}");
+        assert_eq!(ended.stderr, "", "{args:?}");
+    }
+}
+
+#[test]
+fn a_fault_before_the_help_of_ws_index_is_a_usage_error() {
+    let (command_path, usage, fault) = usage_error(&["ws", "index", "--bogus", "--help"]);
+
+    assert_eq!(command_path, ["ws", "index"]);
+    assert!(
+        matches!(&fault, ParseFault::UnknownOption { name } if name == "--bogus"),
+        "{fault:?}"
+    );
+    assert_usage_of(&usage, &["ws", "index", "--help"]);
+}
+
+#[test]
+fn an_argument_of_ws_index_that_is_not_utf_8_is_refused_and_nothing_is_looked_up() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .build()
+        .expect("a workspace");
+    let name = || OsString::from_vec(b"feat\xffure".to_vec());
+
+    for args in [
+        vec!["ws".into(), "index".into(), name()],
+        vec!["ws".into(), "index".into(), "--".into(), name()],
+        vec!["ws".into(), "index".into(), name(), "--json".into()],
+        vec!["ws".into(), "index".into(), "--help".into(), name()],
+        vec!["-v".into(), "ws".into(), "index".into(), name()],
+    ] {
+        let line = format!("{args:?}");
+
+        let ended = InProcess::os_args(args).cwd(&workspace.root).run();
+
+        let (command_path, usage, fault) = usage_parts(ended, &line);
+        assert_eq!(command_path, ["ws", "index"], "{line}");
+        assert!(
+            matches!(&fault, ParseFault::NotUtf8 { argument } if argument == "feat\u{fffd}ure"),
+            "{line}: {fault:?}"
+        );
+        assert_usage_of(&usage, &["ws", "index", "--help"]);
+    }
+}
+
+#[test]
+fn a_repeated_root_option_is_refused_though_a_help_or_a_fault_follows_it() {
+    for option in ["--service-orchestrator", "--source-override"] {
+        for tail in [
+            &["ws", "index", "--help"][..],
+            &["ws", "--help"],
+            &["ws", "index", "--bogus"],
+            &["ws", "nope"],
+            &["--bogus"],
+            &["nope"],
+        ] {
+            let args: Vec<&str> = [option, "a", option, "b"]
+                .into_iter()
+                .chain(tail.iter().copied())
+                .collect();
+
+            let (command_path, usage, fault) = usage_error(&args);
+
+            assert!(command_path.is_empty(), "{args:?}: {command_path:?}");
+            assert_usage_of(&usage, &["--help"]);
+            assert!(
+                matches!(&fault, ParseFault::RepeatedOption { option: named } if named == option),
+                "{args:?}: {fault:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_double_dash_before_a_command_name_is_a_usage_error_and_nothing_is_looked_up() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .state("[env_index]\nfeature-x = 15\n")
+        .build()
+        .expect("a workspace");
+
+    for (args, path, help_args) in [
+        (
+            &["--", "ws", "index", "feature-x"][..],
+            &[][..],
+            &["--help"][..],
+        ),
+        (
+            &["ws", "--", "index", "feature-x"],
+            &["ws"],
+            &["ws", "--help"],
+        ),
+    ] {
+        let ended = InProcess::new(args).cwd(&workspace.root).run();
+
+        let (command_path, usage, fault) = usage_parts(ended, &format!("{args:?}"));
+        assert_eq!(command_path, path, "{args:?}");
+        assert_usage_of(&usage, help_args);
+        assert!(
+            matches!(&fault, ParseFault::UnexpectedArgument { values } if values == &["--"]),
+            "{args:?}: {fault:?}"
+        );
+    }
 }

@@ -1,0 +1,7 @@
+summary = "--help before an unknown option prints the root help and exits 0."
+
+[[step]]
+args = ["--help", "--bogus"]
+
+[deviation]
+decision = "decision:parallel-workspaces/component-runtime/help-beside-fault"

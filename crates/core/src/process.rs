@@ -80,12 +80,21 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
     } = invocation;
 
     let Parsed { stage, outcome } = parse::parse(entries, &identity, &args);
+    // Logging and the root option values are resolved only once a command name was: an invocation that ends
+    // at the root resolves neither.
+    let command = match stage {
+        Stage::Root => None,
+        Stage::Command { invoked, root } => {
+            let (options, log) = parse::root_values(&root, &env);
+            Some((invoked, options, log))
+        }
+    };
     match outcome {
         Outcome::Help(text) => output::text(stdout, &text),
         Outcome::Version(line) => output::line(stdout, &line),
         Outcome::Ended(ending) => ending,
         Outcome::Dispatch { run, matches } => {
-            let Stage::Command { invoked } = stage else {
+            let Some((invoked, options, log)) = command else {
                 return Termination::Internal(Box::new(InternalError::unexpected(DispatchAtRoot)));
             };
             let mut cx = Context {
@@ -100,6 +109,8 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
                 files: &OsFiles,
                 file_writer: &OsFiles,
                 invoked: &invoked,
+                root: &options,
+                log,
             };
             run(&matches, &mut cx)
         }
@@ -169,11 +180,30 @@ mod tests {
     };
     static DISPLAY: Registration = Registration::Alias { of: "show" };
 
+    fn given_args(command: clap::Command) -> clap::Command {
+        command.about("Show the root option values and the logging")
+    }
+
+    fn given_run(_: &ArgMatches, cx: &mut Context<'_>) -> Termination {
+        output::line(cx.out, &format!("{:?} | {:?}", cx.root, cx.log))
+    }
+
+    static GIVEN: Registration = Registration::Command {
+        args: given_args,
+        run: given_run,
+        hidden: false,
+    };
+
     static ENTRIES: &[Entry] = &[
         Entry {
             path: &["ws", "display"],
             file: "crates/core/src/commands/ws/display.rs",
             registration: &DISPLAY,
+        },
+        Entry {
+            path: &["ws", "given"],
+            file: "crates/core/src/commands/ws/given.rs",
+            registration: &GIVEN,
         },
         Entry {
             path: &["ws", "show"],
@@ -215,6 +245,44 @@ mod tests {
             stdout.ends_with("| winter-workspace ws display --help\n"),
             "{stdout}"
         );
+    }
+
+    #[test]
+    fn a_command_is_called_with_the_root_option_values_and_the_logging_and_nothing_is_written_about_them()
+     {
+        let (termination, stdout, stderr) = run_in_memory(
+            ENTRIES,
+            &[
+                "-v",
+                "--service-orchestrator",
+                "X",
+                "--source-override",
+                "T",
+                "ws",
+                "given",
+            ],
+        );
+
+        assert!(matches!(termination, Termination::Success));
+        assert_eq!(
+            stdout,
+            "RootOptions { service_orchestrator: Some(\"X\"), source_override: Some(\"T\") } \
+             | Log { threshold: Debug, switched: true }\n"
+        );
+        assert_eq!(stderr, "");
+    }
+
+    #[test]
+    fn a_command_typed_without_root_options_is_called_with_none_and_the_default_logging() {
+        let (termination, stdout, stderr) = run_in_memory(ENTRIES, &["ws", "given"]);
+
+        assert!(matches!(termination, Termination::Success));
+        assert_eq!(
+            stdout,
+            "RootOptions { service_orchestrator: None, source_override: None } \
+             | Log { threshold: Warning, switched: false }\n"
+        );
+        assert_eq!(stderr, "");
     }
 
     #[test]

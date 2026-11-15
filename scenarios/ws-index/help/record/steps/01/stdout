@@ -1,0 +1,22 @@
+Usage: winter ws index [OPTIONS] NAME
+
+  Print the port-offset index for a feature environment name.
+
+  If NAME has already been created via `winter ws init`, the persisted
+  (registry-assigned) index is returned and is authoritative — it will not
+  change for the lifetime of the env.
+
+  If NAME has not yet been created, the suggested index is returned instead.
+  Configured aliases (e.g. alpha, beta, gamma) always land on their fixed
+  slot, so the suggestion is stable. Ad-hoc names (arbitrary feature-branch
+  names) hash into a dynamic slot that may shift on create if a collision is
+  detected and the allocator probes to the next free slot.
+
+    winter ws index alpha           # persisted index for an existing env
+    winter ws index my-feature      # suggested index (may shift on create)
+    winter ws index alpha --json    # {"name","index","source":"registry"}
+    winter ws index new-env --json  # {"name","index","source":"suggested"}
+
+Options:
+  --json  Output as JSON.
+  --help  Show this message and exit.

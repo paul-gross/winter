@@ -1,0 +1,4 @@
+summary = "An unknown option before --version is a usage error: exit 2, and no version line decides the ending."
+
+[[step]]
+args = ["--bogus", "--version"]

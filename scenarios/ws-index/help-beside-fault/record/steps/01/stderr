@@ -1,0 +1,4 @@
+Usage: winter ws index [OPTIONS] NAME
+Try 'winter ws index --help' for help.
+
+Error: No such option: --bogus
