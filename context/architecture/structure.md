@@ -51,18 +51,23 @@ package uses it, and is resolved in the committed `Cargo.lock`. The toolchain is
 
 The library returns values. Its one entry is `run`, which takes an `Invocation` and returns a `Termination`:
 
-- The `Invocation` carries everything the process would otherwise supply: the arguments, the working directory, a
-  snapshot of the environment, the program's name and version, the three stream handles, and whether each output is a
-  terminal.
+- The `Invocation` carries everything the process would otherwise supply: the arguments, the working directory or the
+  error of asking for it, a snapshot of the environment, the program's name and version, the three stream handles, and
+  whether each output is a terminal.
 - `run` parses, dispatches, and writes to those handles: results, and the help or version a flag asks for, to the stdout
   handle, and log records to the stderr handle. It never writes the final diagnostic and never exits.
 - The `Termination` says how the invocation ended. It answers its exit code and the diagnostic the process boundary
   writes for it, if any.
 
-`crates/cli/src/main.rs` is the process boundary and the whole binary. It snapshots the arguments, the working
-directory, and the environment, locks the three streams, calls `run`, flushes stdout, writes the diagnostic to stderr,
-and exits with the termination's code. It is the only file that names the process streams, the process environment, or
-the process exit, which is why a test can call `run` with in-memory handles and observe everything a command does.
+`crates/cli/src/main.rs` is the process boundary and the whole binary. Its `main` installs the panic hook, snapshots the
+arguments, the working directory, and the environment, and hands `conclude` three things: a closure that locks the three
+streams and calls `run`, a closure that flushes stdout, and stderr. `conclude` calls `run` inside an unwind catch,
+flushes stdout, writes the diagnostic of the ending to stderr, with the backtrace of an internal failure when one was
+captured, and answers the exit code, which `main` exits with. The hook writes nothing for a panic of the thread
+`conclude` runs on: it stores the message and a backtrace for `conclude`, which ends the invocation as an internal
+failure. A panic of any other thread goes to the hook that was installed before. `main.rs` is the only file that names
+the process streams, the process environment, or the process exit, which is why a test can call `run` with in-memory
+handles and observe everything a command does.
 
 [rust.md](../standards/rust.md) lists what this boundary forbids a library source to name.
 

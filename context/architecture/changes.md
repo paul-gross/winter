@@ -136,13 +136,18 @@ builds the value and the text, and never writes to a handle itself or inspects a
 Each of the three functions hands its result to the handle whole, in one write. A line-buffered handle then keeps
 nothing of a write that fails, so the diagnostic of that failure is still written after it.
 
-`output.rs` alone decides how a failed write ends:
+`Termination::from_write_error` in `crates/core/src/termination.rs` is the one classifier of a failed write or flush of
+stdout. `output.rs` calls it for a write of a result, and the binary calls it for its final flush, where it replaces the
+ending only when that ending's exit code is 0. No other code inspects such an error:
 
-| The write                                        | Ending                                                                              |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| Succeeds                                         | `Termination::Success`                                                              |
-| Fails with `std::io::ErrorKind::BrokenPipe`      | `Termination::BrokenPipe`: exit 1 and no diagnostic, since the reader closed stdout |
-| Fails with any other error, or cannot be encoded | `Termination::Internal(InternalError::Unexpected { .. })`, with the error as source |
+| The write                                   | Ending                                                                              |
+| ------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Succeeds                                    | `Termination::Success`                                                              |
+| Fails with `std::io::ErrorKind::BrokenPipe` | `Termination::BrokenPipe`: exit 1 and no diagnostic, since the reader closed stdout |
+| Fails with any other error                  | `Termination::Internal(InternalError::Unexpected { .. })`, with the error as source |
+
+A document that cannot be encoded was never handed to the handle. `output::document` ends it as the same internal
+failure, built through `InternalError::unexpected` with the encoder's error as source.
 
 ## A domain module
 

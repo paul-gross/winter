@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::io::{BufRead, Write};
+use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use crate::context::Context;
@@ -41,7 +41,9 @@ impl ProcessEnv {
 pub struct Invocation<'a> {
     /// The process arguments without the program name.
     pub args: Vec<OsString>,
-    pub cwd: PathBuf,
+    /// The working directory, or the error the process met when it asked for it. The error is kept as it
+    /// is: only a command that is dispatched reads the directory, and such a command ends with that error.
+    pub cwd: io::Result<PathBuf>,
     pub env: ProcessEnv,
     pub identity: Identity,
     pub stdin: &'a mut dyn BufRead,
@@ -69,7 +71,9 @@ struct DispatchAtRoot;
 ///
 /// The one place that writes the help and the version line, builds the `Context`, and calls a command. Once a
 /// command name was resolved it writes one debug record that names the command path to the stderr handle,
-/// whatever the outcome.
+/// whatever the outcome. The working directory is read only for a command that is dispatched: when the
+/// invocation carries an error in its place, that command is not called and the invocation ends as an internal
+/// failure with the error as its source.
 pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termination {
     let Invocation {
         args,
@@ -111,6 +115,12 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
             let Some((invoked, options, log)) = command else {
                 return Termination::Internal(Box::new(InternalError::unexpected(DispatchAtRoot)));
             };
+            let cwd = match cwd {
+                Ok(cwd) => cwd,
+                Err(error) => {
+                    return Termination::Internal(Box::new(InternalError::unexpected(error)));
+                }
+            };
             let mut cx = Context {
                 cwd: &cwd,
                 env: &env,
@@ -144,7 +154,7 @@ pub(crate) fn run_in_memory(entries: &[Entry], args: &[&str]) -> (Termination, S
         entries,
         Invocation {
             args: args.iter().map(OsString::from).collect(),
-            cwd: PathBuf::from("/"),
+            cwd: Ok(PathBuf::from("/")),
             env: ProcessEnv::from_vars([]),
             identity: Identity {
                 program: "winter-workspace",

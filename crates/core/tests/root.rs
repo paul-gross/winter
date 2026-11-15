@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 
-use winter_workspace_core::{ParseFault, Termination, Usage, UsageError};
+use winter_workspace_core::{InternalError, ParseFault, Termination, Usage, UsageError};
 use winter_workspace_test_support::{TempTree, WorkspaceBuilder};
 
 #[path = "support/in_process.rs"]
@@ -559,5 +559,86 @@ fn the_record_is_written_for_a_command_stage_ending_under_the_variable_alone() {
         let ended = InProcess::new(args).env("WINTER_LOG_LEVEL", "DEBUG").run();
 
         assert_eq!(ended.stderr, record, "{args:?}");
+    }
+}
+
+/// The error a process meets when its working directory was removed.
+fn no_working_directory() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "the working directory is gone",
+    )
+}
+
+#[test]
+fn a_dispatched_command_without_a_readable_working_directory_is_an_internal_failure_that_carries_the_error()
+ {
+    for args in [
+        &["ws", "index", "feature-x"][..],
+        &["ws", "index", "feature-x", "--json"],
+    ] {
+        let ended = InProcess::new(args).cwd_error(no_working_directory()).run();
+
+        let Termination::Internal(error) = &ended.termination else {
+            panic!(
+                "{args:?}: expected an internal failure, got {:?}",
+                ended.termination
+            );
+        };
+        assert!(
+            matches!(**error, InternalError::Unexpected { .. }),
+            "{args:?}: {error:?}"
+        );
+        let source = std::error::Error::source(&**error).expect("a source");
+        let source = source
+            .downcast_ref::<std::io::Error>()
+            .expect("the error of the working directory");
+        assert_eq!(source.kind(), std::io::ErrorKind::NotFound, "{args:?}");
+        assert_eq!(ended.termination.exit_code(), 1, "{args:?}");
+        assert_eq!(
+            ended.termination.diagnostic().as_deref(),
+            Some("error: the working directory is gone"),
+            "{args:?}"
+        );
+        assert_eq!(ended.stdout, "", "{args:?}");
+        assert_eq!(ended.stderr, "", "{args:?}");
+    }
+}
+
+#[test]
+fn an_invocation_that_dispatches_no_command_ends_the_same_without_a_readable_working_directory() {
+    for args in [
+        &["--help"][..],
+        &["--version"],
+        &["ws", "--help"],
+        &["ws", "index", "--help"],
+        &["ws", "index", "--bogus"],
+        &["ws", "index"],
+        &["-v", "ws", "index", "--bogus"],
+        &["ws"],
+        &["nope"],
+        &[],
+    ] {
+        let with = InProcess::new(args).run();
+
+        let without = InProcess::new(args).cwd_error(no_working_directory()).run();
+
+        assert_eq!(
+            format!("{:?}", without.termination),
+            format!("{:?}", with.termination),
+            "{args:?}"
+        );
+        assert_eq!(
+            without.termination.exit_code(),
+            with.termination.exit_code(),
+            "{args:?}"
+        );
+        assert_eq!(
+            without.termination.diagnostic(),
+            with.termination.diagnostic(),
+            "{args:?}"
+        );
+        assert_eq!(without.stdout, with.stdout, "{args:?}");
+        assert_eq!(without.stderr, with.stderr, "{args:?}");
     }
 }

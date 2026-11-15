@@ -56,6 +56,17 @@ impl Termination {
             Self::Internal(error) => Some(format!("{ERROR_MARKER}{error}")),
         }
     }
+
+    /// How an invocation ends on a write or a flush of stdout that failed with `error`.
+    ///
+    /// The one classifier of such a failure. A reader that closed the handle is no failure of the program: that
+    /// ending has no diagnostic. Every other error is an internal failure that carries it.
+    pub fn from_write_error(error: std::io::Error) -> Self {
+        match error.kind() {
+            std::io::ErrorKind::BrokenPipe => Self::BrokenPipe,
+            _ => Self::Internal(Box::new(InternalError::unexpected(error))),
+        }
+    }
 }
 
 /// What opens the first line of every error diagnostic.
@@ -339,6 +350,48 @@ mod tests {
     fn a_broken_pipe_exits_1_and_has_no_diagnostic() {
         assert_eq!(Termination::BrokenPipe.exit_code(), 1);
         assert_eq!(Termination::BrokenPipe.diagnostic(), None);
+    }
+
+    #[test]
+    fn a_failed_write_to_a_handle_the_reader_closed_is_a_broken_pipe() {
+        let termination =
+            Termination::from_write_error(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
+
+        assert!(
+            matches!(termination, Termination::BrokenPipe),
+            "{termination:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_write_of_any_other_kind_is_an_internal_failure_that_carries_the_error() {
+        for kind in [
+            std::io::ErrorKind::StorageFull,
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::Other,
+        ] {
+            let termination =
+                Termination::from_write_error(std::io::Error::new(kind, "the device is full"));
+
+            let Termination::Internal(error) = &termination else {
+                panic!("{kind:?}: expected an internal failure, got {termination:?}");
+            };
+            assert!(
+                matches!(**error, InternalError::Unexpected { .. }),
+                "{kind:?}: {error:?}"
+            );
+            let source = error.source().expect("a source");
+            let source = source
+                .downcast_ref::<std::io::Error>()
+                .expect("the write error");
+            assert_eq!(source.kind(), kind);
+            assert_eq!(termination.exit_code(), 1, "{kind:?}");
+            assert_eq!(
+                termination.diagnostic().as_deref(),
+                Some("error: the device is full"),
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]

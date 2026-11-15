@@ -1,0 +1,4 @@
+summary = "ws index outside any workspace fails: exit 1, with no configuration file at or above the working directory."
+
+[[step]]
+args = ["ws", "index", "feature-x"]

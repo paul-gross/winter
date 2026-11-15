@@ -177,3 +177,13 @@ fn a_logging_switch_writes_its_record_on_stderr_and_leaves_the_document_on_stdou
         assert!(stderr.contains("ws index"), "{line}: {stderr:?}");
     }
 }
+
+#[test]
+fn a_command_that_needs_a_workspace_exits_1_with_nothing_on_stdout_outside_any_workspace() {
+    let (stdout, stderr, exit) = run(&["ws", "index", "feature-x"]);
+
+    assert_eq!(stdout, "");
+    assert!(stderr.starts_with("error: "), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert_eq!(exit, Exit::Code(1));
+}

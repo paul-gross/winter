@@ -1,11 +1,10 @@
-//! Writing a command's result, and how a failed write ends.
+//! Writing a command's result.
 //!
 //! The one owner of how a result reaches the stdout handle. A command's `run` and the parser's help and
 //! version path write through these functions and return what they return; neither inspects a write error.
+//! A write that fails ends as [`Termination::from_write_error`] classifies its error.
 
-use std::backtrace::Backtrace;
-use std::error::Error;
-use std::io::{self, Write};
+use std::io::Write;
 
 use crate::termination::{InternalError, Termination};
 
@@ -17,12 +16,12 @@ pub(crate) fn line(out: &mut dyn Write, line: &str) -> Termination {
     let mut whole = String::with_capacity(line.len() + 1);
     whole.push_str(line);
     whole.push('\n');
-    ended(out.write_all(whole.as_bytes()))
+    ending(out.write_all(whole.as_bytes()))
 }
 
 /// Writes `text` to `out` as it stands, in one `write_all`, and returns how the invocation ends on that write.
 pub(crate) fn text(out: &mut dyn Write, text: &str) -> Termination {
-    ended(out.write_all(text.as_bytes()))
+    ending(out.write_all(text.as_bytes()))
 }
 
 /// Writes `document` to `out` as one line of JSON, and returns how the invocation ends on that write.
@@ -32,33 +31,21 @@ pub(crate) fn text(out: &mut dyn Write, text: &str) -> Termination {
 pub(crate) fn document(out: &mut dyn Write, document: &serde_json::Value) -> Termination {
     let mut encoded = Vec::new();
     if let Err(error) = serde_json::to_writer(&mut encoded, document) {
-        return internal(error);
+        return Termination::Internal(Box::new(InternalError::unexpected(error)));
     }
     encoded.push(b'\n');
-    ended(out.write_all(&encoded))
+    ending(out.write_all(&encoded))
 }
 
-/// How an invocation ends on a write of its result.
-///
-/// A reader that closed the handle is no failure of the program: that ending has no diagnostic. Every other
-/// error is an internal failure.
-fn ended(written: io::Result<()>) -> Termination {
-    match written {
-        Ok(()) => Termination::Success,
-        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Termination::BrokenPipe,
-        Err(error) => internal(error),
-    }
-}
-
-fn internal(error: impl Error + Send + Sync + 'static) -> Termination {
-    Termination::Internal(Box::new(InternalError::Unexpected {
-        source: Box::new(error),
-        backtrace: Backtrace::capture(),
-    }))
+/// The ending of a write of a result: success, or what [`Termination::from_write_error`] makes of its error.
+fn ending(written: std::io::Result<()>) -> Termination {
+    written.map_or_else(Termination::from_write_error, |()| Termination::Success)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use super::*;
 
     /// A handle whose every write fails with an error of one kind.

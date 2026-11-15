@@ -49,8 +49,15 @@ A module `x` is `x.rs`, with its children in `x/`. The architecture test fails o
   have supplied, a command selected under an empty command path, root options the parser accepted that do not read on
   their own.
 - No `unwrap`, `expect`, or `panic!` is applied to a value that comes from the user, a file, or a child process.
+- A panic ends the invocation as the internal failure: the hook and `conclude` in `crates/cli/src/main.rs` turn it into
+  `Termination::Internal(InternalError::Panic { .. })`, with its error line on stderr and exit code 1. No library code
+  outside a test module catches an unwind. A test module may catch one to turn a panic of the code under test into a
+  failure it reports itself, as the registry consistency check of `crates/core/src/parse.rs` does around the parser's
+  debug assertions.
 
-The width of `Termination` is checked by its unit test, and the rest in review.
+The width of `Termination` is checked by its unit test, and the ending of a panic that reaches `conclude` by the unit
+tests of `crates/cli/src/main.rs`. The rest is checked in review, the absence of an unwind catch in library code outside
+a test module included.
 
 ## Unsafe
 

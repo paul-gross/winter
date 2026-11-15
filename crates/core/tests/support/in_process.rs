@@ -6,7 +6,7 @@
 #![allow(dead_code, reason = "each test target uses part of the scaffold")]
 
 use std::ffi::OsString;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use winter_workspace_core::{Identity, Invocation, ProcessEnv, Termination, run};
@@ -14,7 +14,7 @@ use winter_workspace_core::{Identity, Invocation, ProcessEnv, Termination, run};
 /// One invocation of the library, over handles the scaffold owns.
 pub struct InProcess {
     args: Vec<OsString>,
-    cwd: PathBuf,
+    cwd: io::Result<PathBuf>,
     env: Vec<(OsString, OsString)>,
     stdin: Vec<u8>,
     stdout_is_terminal: bool,
@@ -27,7 +27,7 @@ impl InProcess {
     pub fn new(args: &[&str]) -> Self {
         Self {
             args: args.iter().map(OsString::from).collect(),
-            cwd: PathBuf::from("/"),
+            cwd: Ok(PathBuf::from("/")),
             env: Vec::new(),
             stdin: Vec::new(),
             stdout_is_terminal: false,
@@ -45,7 +45,14 @@ impl InProcess {
 
     /// Sets the working directory.
     pub fn cwd(mut self, cwd: &Path) -> Self {
-        self.cwd = cwd.to_path_buf();
+        self.cwd = Ok(cwd.to_path_buf());
+        self
+    }
+
+    /// Makes the working directory one the process could not read: the invocation carries `error` in its
+    /// place.
+    pub fn cwd_error(mut self, error: io::Error) -> Self {
+        self.cwd = Err(error);
         self
     }
 
