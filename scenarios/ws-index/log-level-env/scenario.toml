@@ -1,0 +1,6 @@
+summary = "WINTER_LOG_LEVEL=DEBUG leaves the JSON document of ws index alone on stdout."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"
+env = { WINTER_LOG_LEVEL = "DEBUG" }

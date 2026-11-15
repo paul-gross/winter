@@ -54,8 +54,8 @@ The library returns values. Its one entry is `run`, which takes an `Invocation` 
 - The `Invocation` carries everything the process would otherwise supply: the arguments, the working directory, a
   snapshot of the environment, the program's name and version, the three stream handles, and whether each output is a
   terminal.
-- `run` parses, dispatches, and writes results, and the help or version a flag asks for, to those handles. It never
-  writes the final diagnostic and never exits.
+- `run` parses, dispatches, and writes to those handles: results, and the help or version a flag asks for, to the stdout
+  handle, and log records to the stderr handle. It never writes the final diagnostic and never exits.
 - The `Termination` says how the invocation ended. It answers its exit code and the diagnostic the process boundary
   writes for it, if any.
 
@@ -76,7 +76,7 @@ under a lock, which replaces the file through a temporary file beside it.
 
 | Module                          | Holds                                                                                                                                                    |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `process.rs`                    | `run`, `Invocation`, `Identity`, `ProcessEnv`; what follows the parse: the help or version line written, the one `Context` built, the command called     |
+| `process.rs`                    | `run`, `Invocation`, `Identity`, `ProcessEnv`; after the parse: help or version written, the debug record, the one `Context` built, the command called   |
 | `termination.rs`                | `Termination` and the error enums it carries                                                                                                             |
 | `context.rs`                    | `Context`, what a command receives, with `Invoked`, the node being run, and `RootOptions`, the root option values a command can read                     |
 | `logging.rs`                    | `Level` and `Log`, and the resolution of `-v` and `WINTER_LOG_LEVEL` into what an invocation logs                                                        |
@@ -85,6 +85,7 @@ under a lock, which replaces the file through a temporary file beside it.
 | `parse.rs`                      | The argument parser, built from the registry, and what it answers: `Parsed`, with the usage of the node at fault. It writes nothing and calls no command |
 | `arguments.rs`                  | The reading of a parsed argument that the parser guarantees                                                                                              |
 | `output.rs`                     | The writing of a result and the ending of a failed write; see [changes.md](./changes.md#writing-the-result)                                              |
+| `diagnostics.rs`                | The writing of a log record to the stderr handle: the threshold, the two record formats, and a failed write ignored                                      |
 | `commands/`                     | One file per command; see [changes.md](./changes.md#a-command)                                                                                           |
 | `files.rs`                      | The file port `ReadFiles` and `WriteFiles`, and its adapter `OsFiles`; the only source that names the file system                                        |
 | `config_edit.rs`                | The removal of one repository block from the text of a configuration file, and `CatalogError`                                                            |

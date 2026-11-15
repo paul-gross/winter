@@ -6,7 +6,9 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use crate::context::Context;
+use crate::diagnostics::{self, Record};
 use crate::files::OsFiles;
+use crate::logging::Level;
 use crate::output;
 use crate::parse::{self, Outcome, Parsed, Stage};
 use crate::registry::{Entry, REGISTRY};
@@ -65,7 +67,9 @@ struct DispatchAtRoot;
 
 /// [`run`] over the commands of `entries`: asks the parser, then acts on its answer.
 ///
-/// The one place that writes the help and the version line, builds the `Context`, and calls a command.
+/// The one place that writes the help and the version line, builds the `Context`, and calls a command. Once a
+/// command name was resolved it writes one debug record that names the command path to the stderr handle,
+/// whatever the outcome.
 pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termination {
     let Invocation {
         args,
@@ -81,11 +85,21 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
 
     let Parsed { stage, outcome } = parse::parse(entries, &identity, &args);
     // Logging and the root option values are resolved only once a command name was: an invocation that ends
-    // at the root resolves neither.
+    // at the root resolves neither and writes no record.
     let command = match stage {
         Stage::Root => None,
         Stage::Command { invoked, root } => {
             let (options, log) = parse::root_values(&root, &env);
+            diagnostics::record(
+                stderr,
+                log,
+                &Record {
+                    level: Level::Debug,
+                    origin: "parse",
+                    message: &format!("command path: {}", invoked.path.join(" ")),
+                    only_when_switched: false,
+                },
+            );
             Some((invoked, options, log))
         }
     };
@@ -248,8 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn a_command_is_called_with_the_root_option_values_and_the_logging_and_nothing_is_written_about_them()
-     {
+    fn a_command_is_called_with_the_root_option_values_and_the_logging() {
         let (termination, stdout, stderr) = run_in_memory(
             ENTRIES,
             &[
@@ -269,7 +282,7 @@ mod tests {
             "RootOptions { service_orchestrator: Some(\"X\"), source_override: Some(\"T\") } \
              | Log { threshold: Debug, switched: true }\n"
         );
-        assert_eq!(stderr, "");
+        assert_eq!(stderr, "DEBUG parse: command path: ws given\n");
     }
 
     #[test]

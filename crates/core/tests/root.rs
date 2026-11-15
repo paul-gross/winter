@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 
 use winter_workspace_core::{ParseFault, Termination, Usage, UsageError};
+use winter_workspace_test_support::{TempTree, WorkspaceBuilder};
 
 #[path = "support/in_process.rs"]
 mod in_process;
@@ -401,5 +402,162 @@ fn the_root_help_lists_exactly_the_groups_and_top_level_commands_registered() {
         };
 
         assert_eq!(listed_commands(&help), REGISTERED, "{args:?}: {help}");
+    }
+}
+
+/// The record the runtime writes for the command path `ws index` under a switched log at debug.
+const INDEX_RECORD: &str = "DEBUG parse: command path: ws index\n";
+
+/// `ws index feature-x --json` after `options`, with `variable` as `WINTER_LOG_LEVEL` when given, in a fixture
+/// workspace that holds the name. The run succeeded and left stdout one line of JSON.
+fn index_run(options: &[&str], variable: Option<&str>) -> in_process::Ended {
+    let tree = TempTree::new().expect("an isolated tree");
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config("# workspace\n")
+        .state("[env_index]\nfeature-x = 15\n")
+        .build()
+        .expect("a workspace");
+    let args: Vec<&str> = options
+        .iter()
+        .chain(&["ws", "index", "feature-x", "--json"])
+        .copied()
+        .collect();
+    let line = format!("{args:?} under {variable:?}");
+    let mut invocation = InProcess::new(&args).cwd(&workspace.root);
+    if let Some(value) = variable {
+        invocation = invocation.env("WINTER_LOG_LEVEL", value);
+    }
+
+    let ended = invocation.run();
+
+    assert!(
+        matches!(ended.termination, Termination::Success),
+        "{line}: {:?}",
+        ended.termination
+    );
+    assert_eq!(ended.termination.exit_code(), 0, "{line}");
+    assert_eq!(
+        ended.stdout.lines().count(),
+        1,
+        "{line}: {:?}",
+        ended.stdout
+    );
+    assert!(ended.stdout.ends_with('\n'), "{line}: {:?}", ended.stdout);
+    let document: serde_json::Value = serde_json::from_str(&ended.stdout)
+        .unwrap_or_else(|error| panic!("{line}: {error}: {:?}", ended.stdout));
+    assert!(document.is_object(), "{line}: {document}");
+    ended
+}
+
+#[test]
+fn the_verbose_flag_writes_the_record_of_the_command_path_to_stderr_and_leaves_stdout_one_document()
+{
+    for flag in ["-v", "--verbose"] {
+        assert_eq!(index_run(&[flag], None).stderr, INDEX_RECORD, "{flag}");
+    }
+}
+
+#[test]
+fn without_a_logging_switch_a_command_writes_nothing_to_stderr() {
+    assert_eq!(index_run(&[], None).stderr, "");
+}
+
+#[test]
+fn the_log_level_variable_at_debug_writes_the_record_without_the_verbose_flag() {
+    for value in ["debug", "DEBUG", "Debug"] {
+        assert_eq!(index_run(&[], Some(value)).stderr, INDEX_RECORD, "{value}");
+    }
+}
+
+#[test]
+fn the_log_level_variable_above_debug_writes_no_record() {
+    for value in [
+        "INFO", "info", "WARNING", "WARN", "ERROR", "CRITICAL", "FATAL", "fatal",
+    ] {
+        assert_eq!(index_run(&[], Some(value)).stderr, "", "{value}");
+    }
+}
+
+#[test]
+fn the_log_level_variable_that_names_no_level_or_is_notset_writes_nothing_and_succeeds() {
+    for value in ["bogus", "NOTSET", "notset", "", "10", " DEBUG"] {
+        assert_eq!(index_run(&[], Some(value)).stderr, "", "{value:?}");
+    }
+}
+
+#[test]
+fn the_verbose_flag_wins_over_every_value_of_the_log_level_variable() {
+    for value in ["ERROR", "CRITICAL", "NOTSET", "bogus", ""] {
+        assert_eq!(
+            index_run(&["-v"], Some(value)).stderr,
+            INDEX_RECORD,
+            "{value:?}"
+        );
+    }
+}
+
+#[test]
+fn an_invocation_that_ends_at_the_root_writes_no_record_though_logging_is_asked_for() {
+    for args in [
+        &["-v", "--help"][..],
+        &["-v", "--version"],
+        &["-v"],
+        &["-v", "nope"],
+        &["-v", "--bogus", "ws", "index"],
+    ] {
+        let ended = InProcess::new(args).env("WINTER_LOG_LEVEL", "DEBUG").run();
+
+        assert_eq!(ended.stderr, "", "{args:?}");
+    }
+    for args in [&["-v", "--help"][..], &["-v", "--version"]] {
+        let ended = InProcess::new(args).run();
+
+        assert!(
+            matches!(ended.termination, Termination::Success),
+            "{args:?}: {:?}",
+            ended.termination
+        );
+        assert_ne!(ended.stdout, "", "{args:?}");
+    }
+}
+
+#[test]
+fn the_help_of_a_group_writes_the_record_that_names_the_group() {
+    let ended = InProcess::new(&["-v", "ws", "--help"]).run();
+
+    assert!(
+        matches!(ended.termination, Termination::Success),
+        "{:?}",
+        ended.termination
+    );
+    assert_ne!(ended.stdout, "");
+    assert_eq!(ended.stderr, "DEBUG parse: command path: ws\n");
+}
+
+#[test]
+fn a_usage_error_of_a_command_writes_the_record_that_names_the_command() {
+    let ended = InProcess::new(&["-v", "ws", "index", "--bogus"]).run();
+
+    assert_eq!(ended.termination.exit_code(), 2);
+    assert!(
+        matches!(ended.termination, Termination::Usage(_)),
+        "{:?}",
+        ended.termination
+    );
+    assert_eq!(ended.stdout, "");
+    assert_eq!(ended.stderr, INDEX_RECORD);
+}
+
+#[test]
+fn the_record_is_written_for_a_command_stage_ending_under_the_variable_alone() {
+    for (args, record) in [
+        (&["ws", "--help"][..], "DEBUG parse: command path: ws\n"),
+        (&["ws", "index", "--bogus"], INDEX_RECORD),
+        (&["ws", "index"], INDEX_RECORD),
+        (&["ws"], "DEBUG parse: command path: ws\n"),
+    ] {
+        let ended = InProcess::new(args).env("WINTER_LOG_LEVEL", "DEBUG").run();
+
+        assert_eq!(ended.stderr, record, "{args:?}");
     }
 }

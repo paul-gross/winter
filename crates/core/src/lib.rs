@@ -8,6 +8,7 @@ mod arguments;
 mod config_edit;
 mod config_raw;
 mod context;
+mod diagnostics;
 #[cfg(test)]
 #[path = "../build/discover.rs"]
 mod discover;

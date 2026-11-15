@@ -21,8 +21,13 @@ A command writes its result to the stdout handle of its `Context` through `crate
 [changes.md](../architecture/changes.md#writing-the-result) describes, and reads the environment and the working
 directory from the `Context`.
 
-The architecture test checks this by scanning each source as text. Nothing is exempt: a test module inside the library
-is checked like the rest, and so is a comment. A failure names the file, the line, and the token.
+The architecture test checks the token table by scanning each source as text. Nothing is exempt: a test module inside
+the library is checked like the rest, and so is a comment. A failure names the file, the line, and the token.
+
+A module reports a condition by handing a `Record` to `diagnostics::record` in `crates/core/src/diagnostics.rs`, with
+the stderr handle and the `Log` of the invocation. That function alone decides whether the record is written and in
+which format; no other module formats a log record or writes one to the stderr handle itself. This rule is checked in
+review: the scan for tokens does not see it.
 
 ## Module files
 

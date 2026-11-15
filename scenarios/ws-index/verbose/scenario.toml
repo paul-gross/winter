@@ -1,0 +1,5 @@
+summary = "The verbose flag at the root leaves the JSON document of ws index alone on stdout."
+
+[[step]]
+args = ["-v", "ws", "index", "feature-x", "--json"]
+stdout = "json"

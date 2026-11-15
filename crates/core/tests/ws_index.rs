@@ -17,6 +17,9 @@ use in_process::{Ended, InProcess};
 /// A configuration file that declares nothing, so both keys take their defaults.
 const DEFAULTS: &str = "# workspace\n";
 
+/// The one record the runtime writes for the command path `ws index` when logging is switched to debug.
+const RECORD: &str = "DEBUG parse: command path: ws index\n";
+
 /// The document a successful `ws index NAME --json` in `cwd` writes, which is all it writes.
 fn document(cwd: &Path, name: &str) -> Value {
     let ended = InProcess::new(&["ws", "index", name, "--json"])
@@ -765,7 +768,7 @@ fn the_root_options_before_the_command_name_are_accepted_and_change_no_result() 
             "{args:?}: {:?}",
             ended.termination
         );
-        assert_eq!(ended.stderr, "", "{args:?}");
+        assert_eq!(ended.stderr, RECORD, "{args:?}");
         let document: Value = serde_json::from_str(&ended.stdout).expect("a document");
         assert_eq!(document, plain, "{args:?}");
     }
@@ -847,17 +850,32 @@ fn an_argument_of_ws_index_that_is_not_utf_8_is_refused_and_nothing_is_looked_up
         .expect("a workspace");
     let name = || OsString::from_vec(b"feat\xffure".to_vec());
 
-    for args in [
-        vec!["ws".into(), "index".into(), name()],
-        vec!["ws".into(), "index".into(), "--".into(), name()],
-        vec!["ws".into(), "index".into(), name(), "--json".into()],
-        vec!["ws".into(), "index".into(), "--help".into(), name()],
-        vec!["-v".into(), "ws".into(), "index".into(), name()],
+    // With the verbose flag the runtime writes its record before the refusal ends the run.
+    for (args, record) in [
+        (vec!["ws".into(), "index".into(), name()], ""),
+        (vec!["ws".into(), "index".into(), "--".into(), name()], ""),
+        (
+            vec!["ws".into(), "index".into(), name(), "--json".into()],
+            "",
+        ),
+        (
+            vec!["ws".into(), "index".into(), "--help".into(), name()],
+            "",
+        ),
+        (
+            vec!["-v".into(), "ws".into(), "index".into(), name()],
+            RECORD,
+        ),
     ] {
         let line = format!("{args:?}");
 
         let ended = InProcess::os_args(args).cwd(&workspace.root).run();
 
+        assert_eq!(ended.stderr, record, "{line}");
+        let ended = Ended {
+            stderr: String::new(),
+            ..ended
+        };
         let (command_path, usage, fault) = usage_parts(ended, &line);
         assert_eq!(command_path, ["ws", "index"], "{line}");
         assert!(

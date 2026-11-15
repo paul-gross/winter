@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 
-use winter_workspace_test_support::{Exit, Observation, TempTree, invoke};
+use winter_workspace_test_support::{Exit, Observation, TempTree, WorkspaceBuilder, invoke};
 
 /// Runs the built binary with `args` in an isolated tree and returns its two streams as text with its exit.
 fn run(args: &[&str]) -> (String, String, Exit) {
@@ -113,5 +113,67 @@ fn help_is_the_same_bytes_at_every_terminal_width_and_no_line_is_longer_than_100
     assert_eq!(narrow, wide);
     for line in narrow.lines() {
         assert!(line.chars().count() <= 100, "{line:?}");
+    }
+}
+
+/// Runs the built binary with `options` before `ws index feature-x --json`, and `variables` added to the pinned
+/// environment, in a workspace of an isolated tree that holds the name.
+fn index_run(options: &[&str], variables: &[(&str, &str)]) -> (String, String, Exit) {
+    let tree = TempTree::new().expect("an isolated tree");
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config("# workspace\n")
+        .state("[env_index]\nfeature-x = 15\n")
+        .build()
+        .expect("a workspace");
+    let mut invocation = tree.invocation(Path::new(env!("CARGO_BIN_EXE_winter-workspace")));
+    invocation.cwd = workspace.root;
+    invocation.args = options
+        .iter()
+        .chain(&["ws", "index", "feature-x", "--json"])
+        .map(Into::into)
+        .collect();
+    for (key, value) in variables {
+        invocation.env.set(key, value);
+    }
+    let Observation {
+        stdout,
+        stderr,
+        exit,
+    } = invoke(invocation).expect("the binary runs to its end");
+    (
+        String::from_utf8(stdout).expect("UTF-8 on stdout"),
+        String::from_utf8(stderr).expect("UTF-8 on stderr"),
+        exit,
+    )
+}
+
+#[test]
+fn a_logging_switch_writes_its_record_on_stderr_and_leaves_the_document_on_stdout_as_it_was() {
+    let (plain, plain_stderr, plain_exit) = index_run(&[], &[]);
+
+    assert_eq!(plain_exit, Exit::Code(0));
+    assert_eq!(plain_stderr, "");
+    assert_eq!(plain.lines().count(), 1, "{plain:?}");
+    assert!(
+        plain.starts_with('{') && plain.ends_with("}\n"),
+        "{plain:?}"
+    );
+    assert!(plain.contains("feature-x"), "{plain:?}");
+
+    for (options, variables) in [
+        (&["-v"][..], &[][..]),
+        (&["--verbose"], &[]),
+        (&[], &[("WINTER_LOG_LEVEL", "DEBUG")]),
+        (&["-v"], &[("WINTER_LOG_LEVEL", "ERROR")]),
+    ] {
+        let line = format!("{options:?} under {variables:?}");
+
+        let (stdout, stderr, exit) = index_run(options, variables);
+
+        assert_eq!(exit, Exit::Code(0), "{line}");
+        assert_eq!(stdout, plain, "{line}");
+        assert_eq!(stderr.lines().count(), 1, "{line}: {stderr:?}");
+        assert!(stderr.ends_with('\n'), "{line}: {stderr:?}");
+        assert!(stderr.contains("ws index"), "{line}: {stderr:?}");
     }
 }
