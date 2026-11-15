@@ -467,7 +467,9 @@ version = "0.1.0"
 dependencies = [
  "cargo_metadata",
  "libc",
+ "tempfile",
  "toml",
+ "winter-workspace-test-support",
 ]
 
 [[package]]

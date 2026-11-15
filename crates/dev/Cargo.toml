@@ -10,4 +10,6 @@ publish = false
 [dependencies]
 cargo_metadata = "0.23"
 libc = "0.2"
+tempfile = "3"
 toml = "1.2"
+winter-workspace-test-support = { workspace = true }

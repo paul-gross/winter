@@ -1,6 +1,6 @@
 //! The architecture rules of the repository: which packages the workspace has and how they may depend on one
-//! another, what a library source may name, what the CI workflow and the Cargo aliases hold, and what the
-//! contributor documents link to, contain, and tell a reader to run.
+//! another, what a library source may name, which files may not name the reference tool, what the CI workflow
+//! and the Cargo aliases hold, and what the contributor documents link to, contain, and tell a reader to run.
 //!
 //! Each rule is a function over inputs its caller passes in and answers the violations it finds; an empty answer
 //! is a pass. Nothing here reads a file or starts a process: the integration test of this package gathers the
@@ -97,6 +97,22 @@ const SCOPE_TOKENS: [&str; 8] = [
 
 /// The one document of the context tree the scope rule does not read.
 const SCOPE_EXEMPT: &str = "context/verification/scenarios.md";
+
+/// The variable that carries the path of the reference tool. Only the development driver knows it.
+const REFERENCE_VARIABLE: &str = "WINTER_REFERENCE_BIN";
+
+/// The directories no file of which may contain [`REFERENCE_VARIABLE`], each with its separator.
+const WITHOUT_REFERENCE_VARIABLE: [&str; 3] =
+    ["crates/cli/", "crates/core/", "crates/test-support/"];
+
+/// The language of the reference tool, matched without regard to ASCII case. The code that builds fixtures,
+/// runs steps, records, and replays cannot name it.
+const REFERENCE_LANGUAGE: &str = "python";
+
+/// The directory no file of which may contain [`REFERENCE_LANGUAGE`], with its separator, and the one file
+/// outside it that may not either.
+const WITHOUT_REFERENCE_LANGUAGE: (&str, &str) =
+    ("crates/test-support/", "crates/cli/tests/scenarios.rs");
 
 /// The commands a contributor document may tell a reader to run, beside a `cargo test -p` call on a workspace
 /// package. `cargo scenarios` also takes one filter.
@@ -208,6 +224,13 @@ pub enum Violation {
         line: usize,
         token: &'static str,
     },
+    /// A file that may not name the reference tool's variable or its language contains one of the two. `line`
+    /// counts from 1.
+    ReferenceName {
+        file: String,
+        line: usize,
+        token: &'static str,
+    },
     /// A contributor document tells a reader to run a command that is not a documented one. `line` counts
     /// from 1.
     UnknownCommand {
@@ -300,6 +323,12 @@ impl fmt::Display for Violation {
                 write!(
                     f,
                     "{file}:{line}: `{token}` is outside what a contributor document describes"
+                )
+            }
+            Self::ReferenceName { file, line, token } => {
+                write!(
+                    f,
+                    "{file}:{line}: `{token}` names the reference tool, which no file here may"
                 )
             }
             Self::UnknownCommand {
@@ -678,6 +707,38 @@ pub fn scope_tokens(file: &str, text: &str) -> Vec<Violation> {
                     token,
                 });
             }
+        }
+    }
+    violations
+}
+
+/// What `text`, the text of the file `file`, holds of the two names that keep the reference tool apart: the
+/// variable that carries its path, in a file under the binary's, the library's, or the support package's
+/// directory, and its language, in any letter case, in a file under the support package's directory or in
+/// the replay target. `file` is a path from the repository root, with `/` between components. A file
+/// elsewhere is not read.
+///
+/// The scan is over the text as it stands, source, test, comment, or data alike, and a line is reported once
+/// for each name it holds.
+pub fn reference_names(file: &str, text: &str) -> Vec<Violation> {
+    let variable = WITHOUT_REFERENCE_VARIABLE
+        .iter()
+        .any(|directory| file.starts_with(directory));
+    let (directory, target) = WITHOUT_REFERENCE_LANGUAGE;
+    let language = file.starts_with(directory) || file == target;
+    let mut violations = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let found = [
+            (variable && line.contains(REFERENCE_VARIABLE)).then_some(REFERENCE_VARIABLE),
+            (language && line.to_ascii_lowercase().contains(REFERENCE_LANGUAGE))
+                .then_some(REFERENCE_LANGUAGE),
+        ];
+        for token in found.into_iter().flatten() {
+            violations.push(Violation::ReferenceName {
+                file: file.to_owned(),
+                line: index + 1,
+                token,
+            });
         }
     }
     violations
@@ -1673,6 +1734,94 @@ Runs in a scratch copy of the checkout.
     #[test]
     fn a_document_without_a_scope_token_passes() {
         assert_eq!(scope_tokens("README.md", "Build with `cargo build`.\n"), []);
+    }
+
+    #[test]
+    fn the_variable_of_the_reference_is_named_under_the_library_the_binary_and_the_support_package()
+    {
+        let text = "fn f() {}\n// reads WINTER_REFERENCE_BIN\n";
+
+        for file in [
+            "crates/core/src/process.rs",
+            "crates/cli/tests/root.rs",
+            "crates/test-support/src/scenario/record.rs",
+        ] {
+            let violations = reference_names(file, text);
+
+            assert_eq!(
+                violations,
+                [Violation::ReferenceName {
+                    file: file.to_owned(),
+                    line: 2,
+                    token: "WINTER_REFERENCE_BIN",
+                }]
+            );
+            assert!(rendered(&violations)[0].starts_with(&format!("{file}:2: ")));
+        }
+    }
+
+    #[test]
+    fn the_language_of_the_reference_is_named_under_the_support_package_and_in_the_replay_target() {
+        let text = "fn f() {}\n\nconst SEED: &str = \"PYTHONHASHSEED\";\n";
+
+        for file in [
+            "crates/test-support/src/env.rs",
+            "crates/cli/tests/scenarios.rs",
+        ] {
+            let violations = reference_names(file, text);
+
+            assert_eq!(
+                violations,
+                [Violation::ReferenceName {
+                    file: file.to_owned(),
+                    line: 3,
+                    token: "python",
+                }]
+            );
+            assert!(rendered(&violations)[0].starts_with(&format!("{file}:3: `python`")));
+        }
+    }
+
+    #[test]
+    fn the_language_of_the_reference_is_found_in_any_letter_case_and_in_data() {
+        for text in ["python", "Python 3", "a PyThOn b"] {
+            assert_eq!(
+                reference_names("crates/test-support/Cargo.toml", text).len(),
+                1,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_product_may_name_the_language_of_the_reference_where_a_contract_of_its_own_does() {
+        let text = "env.remove(\"PYTHONPATH\");\n";
+
+        for file in [
+            "crates/core/src/process.rs",
+            "crates/core/src/commands/doctor.rs",
+            "crates/cli/src/main.rs",
+            "crates/cli/tests/root.rs",
+        ] {
+            assert_eq!(reference_names(file, text), [], "{file}");
+        }
+    }
+
+    #[test]
+    fn the_driver_may_name_both() {
+        let text = "const A: &str = \"WINTER_REFERENCE_BIN\"; // python\n";
+
+        assert_eq!(reference_names("crates/dev/src/record.rs", text), []);
+        assert_eq!(reference_names("AGENTS.md", text), []);
+    }
+
+    #[test]
+    fn a_line_that_holds_both_names_is_reported_for_each() {
+        let text = "WINTER_REFERENCE_BIN=/x/python\n";
+
+        let violations = reference_names("crates/test-support/tests/scenario_record.rs", text);
+
+        assert_eq!(violations.len(), 2, "{violations:?}");
     }
 
     #[test]

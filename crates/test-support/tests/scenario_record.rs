@@ -650,6 +650,24 @@ fn a_variable_the_caller_adds_is_not_one_a_step_sets() {
 }
 
 #[test]
+fn a_value_the_caller_adds_names_the_root_of_the_tree_the_step_runs_in() {
+    let script = "echo \"$PATH\"\ntest -d \"$CALLER\" && echo \"$CALLER\"\n";
+    let written = Written::new(script, ONE_STEP);
+    let scenario = written.scenario();
+    let tree = build(&scenario).expect("the fixture builds");
+    let caller = [
+        ("PATH".to_owned(), "<ROOT>/bin:/usr/bin:/bin".to_owned()),
+        ("CALLER".to_owned(), "<ROOT>/ws".to_owned()),
+    ];
+
+    let records = run_steps(&scenario, &tree, Path::new("/bin/sh"), &caller).expect("a run");
+
+    // What is stored has the root replaced again, so the directory test of the script is what shows that
+    // the child saw a path of its own tree.
+    assert_eq!(records[0].stdout, b"<ROOT>/bin:/usr/bin:/bin\n<ROOT>/ws\n");
+}
+
+#[test]
 fn a_json_output_that_differs_between_two_roots_is_refused() {
     let written = Written::new(
         "printf '%s\\n' \"$$\"\n",

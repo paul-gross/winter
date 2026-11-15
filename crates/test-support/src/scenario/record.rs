@@ -60,8 +60,8 @@ pub(super) const STUB_KEY: &str = "stub";
 pub struct RecordOptions {
     /// The executable every step runs: an absolute path.
     pub executable: PathBuf,
-    /// Additions to the environment of every step, after the step's own. They are not part of the digest
-    /// of the environment.
+    /// Additions to the environment of every step, after the step's own. Every `<ROOT>` of a value becomes
+    /// the root of the tree the step runs in. They are not part of the digest of the environment.
     pub extra_env: Vec<(String, String)>,
     /// Each path, as bytes, becomes its token in everything that is stored, after the root is replaced.
     pub redactions: Vec<(PathBuf, String)>,

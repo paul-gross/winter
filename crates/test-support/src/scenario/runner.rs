@@ -249,7 +249,9 @@ impl std::error::Error for RunFailure {
 ///
 /// A step runs under the pinned environment of the tree with its own additions and then `extra_env`, the
 /// caller's, in its working directory, with its arguments and its input, to the deadline of an invocation
-/// of the tree. The module says what a step may ask for and what is observed of it.
+/// of the tree. An addition of the caller may replace a pinned variable, and every `<ROOT>` of its value
+/// becomes the root of the tree, as in a step's own. The module says what a step may ask for and what is
+/// observed of it.
 pub fn run_steps(
     scenario: &Scenario,
     tree: &TempTree,
@@ -314,7 +316,7 @@ pub fn run_steps_within(
             invocation.env.set(name, &with_root(value, tree.root()));
         }
         for (name, value) in extra_env {
-            invocation.env.set(name, value);
+            invocation.env.set(name, &with_root(value, tree.root()));
         }
         let observation = invoke(invocation).map_err(|failure| not_observed(number, failure))?;
 
@@ -341,8 +343,10 @@ pub fn run_steps_within(
 
 /// The first step of `scenario` that asks for what needs no tree to refuse, as the failure that says so:
 /// a variable, a value, an argument that names an absolute path, or an input, under the rules of the
-/// module. `extra_env` is what the caller adds to the environment of every step.
-pub(super) fn refused(scenario: &Scenario, extra_env: &[(String, String)]) -> Option<RunFailure> {
+/// module. `extra_env` is what the caller adds to the environment of every step. [`run_steps`] asks this
+/// itself; a caller that starts the executable for anything else before the steps asks it first, so that
+/// nothing is started for a scenario that is refused.
+pub fn refused(scenario: &Scenario, extra_env: &[(String, String)]) -> Option<RunFailure> {
     scenario.steps.iter().enumerate().find_map(|(index, step)| {
         refused_step(step, &scenario.dir, extra_env).map(|(key, reason)| RunFailure::Refused {
             step: number(index),

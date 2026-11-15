@@ -116,9 +116,19 @@ package. In practice:
 - It lets nothing of the developer's environment or home directory reach a child or decide a result. The test process
   reads its own environment only for `WINTER_TEST_` variables and for the directory of the host's git on `PATH`.
 
-The driver's own tests, in `crates/dev/`, test the tooling and not the product, and they do not use the isolated tree.
-They start Cargo and `/bin/sh` directly, read the checkout, and write only under a scratch directory of their own in the
-system temporary directory.
+The driver's own tests, in `crates/dev/`, test the tooling and not the product. Those of the gates and of the
+architecture rules do not use the isolated tree: they start Cargo and `/bin/sh` directly, read the checkout, and write
+only under a scratch directory of their own in the system temporary directory.
+
+Those of `cargo dev record` do use it. Each makes a stand-in checkout, a stand-in executable, and a scenarios root
+inside a tree of its own. Most run the command over them in the test process, with the stand-in and a `PATH` value as
+arguments. Those that assert which trees a run made or left run it in a child test process instead, started through
+`invoke` with `WINTER_TEST_TMPDIR` naming a directory of the tree, and hand it the stand-in through a variable: the one
+of a run naming no reference, those of a scenario that is not confined, the one that asserts `--keep` leaves both trees,
+the one whose tree for the version call cannot be made, and the two whose record step panics over a tree it cannot
+remove, which the test then reaches in that directory. Two call `record::refusals` directly and never run the command.
+The command starts git from that `PATH` value under a cleared environment of its own, and the stand-in through `invoke`.
+Beside its trees it makes one directory in the system temporary directory, the `HOME` of its git calls, and removes it.
 
 ## Tests that must fail
 

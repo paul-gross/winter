@@ -94,6 +94,27 @@ fn the_library_sources_name_nothing_forbidden_and_hold_no_mod_file() {
     assert_none("library rules", &violations);
 }
 
+/// The directories whose files may not name the reference tool, from the repository root.
+const KEPT_FROM_THE_REFERENCE: [&str; 3] = ["crates/cli", "crates/core", "crates/test-support"];
+
+#[test]
+fn no_file_of_the_product_or_the_support_package_names_the_reference_tool() {
+    let root = repository_root();
+
+    let mut violations = Vec::new();
+    for directory in KEPT_FROM_THE_REFERENCE {
+        let files = files_below(&root.join(directory));
+        assert!(!files.is_empty(), "{directory} holds no file");
+        for path in files {
+            let file = path.strip_prefix(&root).unwrap().to_str().unwrap();
+            let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
+            violations.extend(architecture::reference_names(file, &text));
+        }
+    }
+
+    assert_none("reference names", &violations);
+}
+
 #[test]
 fn the_workflow_runs_the_bootstrap_and_the_full_gate() {
     let workflow = read(".github/workflows/check.yml");

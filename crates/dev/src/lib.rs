@@ -3,6 +3,7 @@
 pub mod architecture;
 mod fmt;
 mod gate;
+pub mod record;
 mod step;
 
 use std::ffi::OsString;
@@ -13,12 +14,16 @@ pub use fmt::format_files;
 pub use gate::{Gate, plan};
 pub use step::{STEP_DEADLINE, Step, run_steps};
 
-const USAGE: &str = "usage: cargo dev gate slice | cargo dev gate full | cargo dev fmt";
+const USAGE: &str = "usage: cargo dev gate slice | cargo dev gate full | cargo dev fmt | cargo dev record <scenario id>...";
+
+/// The directory of the recorded scenarios, under the repository root.
+const SCENARIOS: &str = "scenarios";
 
 /// Runs the driver command that `args` names and returns the process exit code.
 ///
 /// `env` looks up one variable of the driver's environment and `root` is the repository root. The commands
 /// are `gate slice`, `gate full`, and `fmt`; each answers 0 when every step it ran passed and 1 otherwise.
+/// `record`, with the arguments after it, is [`record::run`] over the scenarios of the repository.
 /// Arguments that name no command the driver has are unknown and answer 2.
 pub fn main_with(args: &[OsString], env: &dyn Fn(&str) -> Option<OsString>, root: &Path) -> u8 {
     main_to(args, env, root, &mut std::io::stderr())
@@ -31,6 +36,11 @@ fn main_to(
     root: &Path,
     err: &mut dyn Write,
 ) -> u8 {
+    if let Some((command, rest)) = args.split_first()
+        && command == "record"
+    {
+        return record::run(rest, env, &root.join(SCENARIOS), err);
+    }
     let words: Vec<Option<&str>> = args.iter().map(|arg| arg.to_str()).collect();
     let command = match words.as_slice() {
         [Some("gate"), Some("slice")] => Command::Gate(Gate::Slice),
@@ -121,7 +131,7 @@ mod tests {
             &["gate", "nope"],
             &["gate", "slice", "more"],
             &["fmt", "--check"],
-            &["record"],
+            &["recorded"],
         ] {
             let mut err = Vec::new();
 
