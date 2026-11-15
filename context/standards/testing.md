@@ -25,7 +25,10 @@ Choose the lowest tier that can make the claim:
   a fixture workspace with `TempTree`, `Git`, and `WorkspaceBuilder`; the library's manifest declares the support
   package as a dev-dependency once a component test uses it.
 - An executable test starts the binary Cargo built, at `env!("CARGO_BIN_EXE_winter-workspace")`, through `invoke`. It is
-  for a claim about the process and not about the library.
+  for a claim about the process and not about the library. `invoke_with_stdout` starts it with a stdout that cannot be
+  written, one of the three faults of `StdoutFault`: `ClosedPipe`, a pipe whose reader is gone; `Full`, a device with no
+  room; `Closed`, no stdout at all. No other tier gives the binary such a stdout: how it ends under each is held in
+  `crates/cli/tests/closed_stdout.rs`.
 
 Each test file is named for its subject and is its own test target, so one file runs alone.
 
@@ -117,9 +120,10 @@ package. In practice:
 - It creates files only under its own tree, and reaches no workspace or repository that is not a fixture in that tree.
   The one exception is the repository's committed `scenarios/`, which a test may read and never writes: it copies what
   it needs into its tree.
-- It starts a child only through `invoke` or `Git`, by an absolute path and under the pinned environment. No shell
-  stands between a test and its child, and no name is looked up on `PATH`. A test of the support package that needs a
-  child with a behaviour of its own runs `/bin/sh` as that child, with a script the test spells out.
+- It starts a child only through `invoke`, `invoke_with_stdout`, or `Git`, by an absolute path and under the pinned
+  environment. No shell stands between a test and its child, and no name is looked up on `PATH`. A test of the support
+  package that needs a child with a behaviour of its own runs `/bin/sh` as that child, with a script the test spells
+  out.
 - It resolves no host name. Fixture remotes are the tree's own bare repositories.
 - It lets nothing of the developer's environment or home directory reach a child or decide a result. The test process
   reads its own environment only for `WINTER_TEST_` variables and for the directory of the host's git on `PATH`.

@@ -2,6 +2,7 @@
 
 use std::ffi::OsString;
 use std::fmt;
+use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::PathBuf;
@@ -66,8 +67,9 @@ pub struct InvocationFailure {
 pub enum FailureKind {
     /// The executable or the working directory is not an absolute path. Nothing was started.
     InvalidInvocation,
-    /// The executable could not be started. Holds the cause: the executable, the working directory, and the
-    /// error of the operating system.
+    /// The executable could not be started. Holds the cause, one of two. The operating system refused the
+    /// start: `<executable> in <working directory>: <its error>`. Or the stdout a [`StdoutFault`] names could
+    /// not be made, and the start was never tried: `the stdout of <executable>: <its error>`.
     Spawn(String),
     /// The child outran its deadline and its process group was killed.
     Timeout,
@@ -145,11 +147,83 @@ impl fmt::Debug for Text<'_> {
 /// own. However the run ends, every process still in that group is killed and the child is reaped before this
 /// returns.
 pub fn invoke(invocation: Invocation) -> Result<Observation, InvocationFailure> {
+    run(invocation, None)
+}
+
+/// What file descriptor 1 is when the child's program starts, in place of a pipe that is read.
+///
+/// What a write to it does depends on the child. A Rust program's runtime ignores the signal of a broken
+/// pipe and opens the null device on a missing standard descriptor, both at start; another child, `/bin/sh`
+/// included, has neither.
+///
+/// The runner sets neither a signal disposition nor a signal mask for the child, which inherits the mask of the
+/// thread that starts it: where that mask blocks the signal of a broken pipe, the signal ends no child, and the
+/// write fails in every one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StdoutFault {
+    /// A pipe whose read end is closed before the child starts. A write fails as a broken pipe in a child
+    /// that ignores the signal of one, a Rust program among them, and the signal ends any other child.
+    ClosedPipe,
+    /// `/dev/full`. A write fails in every child: the device has no room.
+    Full,
+    /// No file descriptor 1 at all. A write of a Rust program succeeds and is dropped, its runtime having
+    /// opened the null device there; a write of another child is refused, there being no descriptor.
+    Closed,
+}
+
+/// [`invoke`] with one difference: the child's stdout is the one `stdout` names and not a pipe that is read.
+///
+/// The stdout of the observation, and of a failure, is empty: nothing can be read of a stdout that takes
+/// nothing. The environment, the process group, the deadline, the capture of stderr, and the reaping are those
+/// of [`invoke`].
+pub fn invoke_with_stdout(
+    invocation: Invocation,
+    stdout: StdoutFault,
+) -> Result<Observation, InvocationFailure> {
+    run(invocation, Some(stdout))
+}
+
+/// The child's stdout under `fault`, and whether its file descriptor 1 is closed before the program starts.
+///
+/// The read end of the pipe is closed here, before the child exists, so no write of the child can come first.
+/// A child another thread forks between the two calls holds a copy of that end until it executes its program,
+/// which closes it; a write of this child within that span would succeed. Nothing guards against it: the other
+/// thread's fork has to fall between two adjacent calls, and its child then has to be slower to its program
+/// than this one is to its first write.
+fn faulted_stdout(fault: StdoutFault) -> io::Result<(Stdio, bool)> {
+    Ok(match fault {
+        StdoutFault::ClosedPipe => {
+            let (reader, writer) = io::pipe()?;
+            drop(reader);
+            (Stdio::from(writer), false)
+        }
+        StdoutFault::Full => (
+            Stdio::from(OpenOptions::new().write(true).open("/dev/full")?),
+            false,
+        ),
+        StdoutFault::Closed => (Stdio::null(), true),
+    })
+}
+
+/// Runs `invocation` with a stdout that is read, or with the one `fault` names.
+fn run(
+    invocation: Invocation,
+    fault: Option<StdoutFault>,
+) -> Result<Observation, InvocationFailure> {
     if !invocation.executable.is_absolute() || !invocation.cwd.is_absolute() {
         return Err(InvocationFailure::before_output(
             FailureKind::InvalidInvocation,
         ));
     }
+    let (stdout, close_stdout) = match fault {
+        None => (Stdio::piped(), false),
+        Some(fault) => faulted_stdout(fault).map_err(|error| {
+            InvocationFailure::before_output(FailureKind::Spawn(format!(
+                "the stdout of {}: {error}",
+                invocation.executable.display()
+            )))
+        })?,
+    };
 
     let mut command = Command::new(&invocation.executable);
     command
@@ -158,14 +232,18 @@ pub fn invoke(invocation: Invocation) -> Result<Observation, InvocationFailure> 
         .env_clear()
         .envs(invocation.env.variables())
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
+        .stdout(stdout)
         .stderr(Stdio::piped())
         .process_group(0);
     // SAFETY: the closure runs in the forked child before it executes the program, where only
-    // async-signal-safe calls are allowed. `umask` is one, takes an integer, and touches no memory.
+    // async-signal-safe calls are allowed. `umask` and `close` are two; each takes integers and touches no
+    // memory. The descriptor closed is the child's own stdout, which nothing else in the child holds.
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             libc::umask(0o022);
+            if close_stdout {
+                libc::close(libc::STDOUT_FILENO);
+            }
             Ok(())
         });
     }

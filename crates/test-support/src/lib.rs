@@ -9,6 +9,9 @@ mod workspace;
 
 pub use env::PinnedEnv;
 pub use git::{CommitSpec, Git, GitError};
-pub use process::{Exit, FailureKind, Invocation, InvocationFailure, Observation, invoke};
+pub use process::{
+    Exit, FailureKind, Invocation, InvocationFailure, Observation, StdoutFault, invoke,
+    invoke_with_stdout,
+};
 pub use tree::TempTree;
 pub use workspace::{Workspace, WorkspaceBuilder};

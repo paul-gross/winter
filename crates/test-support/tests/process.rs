@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use winter_workspace_test_support::{
-    Exit, FailureKind, Invocation, InvocationFailure, Observation, TempTree, invoke,
+    Exit, FailureKind, Invocation, InvocationFailure, Observation, StdoutFault, TempTree, invoke,
+    invoke_with_stdout,
 };
 
 /// An invocation of `/bin/sh -c <script>` in `tree`; `arguments` are the script's `$1`, `$2`, ….
@@ -440,4 +441,67 @@ fn a_working_directory_that_does_not_exist_is_a_spawn_failure_that_names_it() {
         "{said}"
     );
     assert!(said.contains("No such file or directory"), "{said}");
+}
+
+/// A script that says on stderr what its file descriptor 1 is, in one word on the first line, then writes one
+/// line to stdout and exits 0 when the write succeeded and 7 when it failed. Whatever the shell says of a
+/// failed write follows that first line.
+const WRITE_ONE_LINE: &str = "\
+if [ -p /proc/$$/fd/1 ]; then echo pipe >&2
+elif [ -c /proc/$$/fd/1 ]; then echo device >&2
+elif [ -e /proc/$$/fd/1 ]; then echo other >&2
+else echo none >&2
+fi
+if echo line; then exit 0; else exit 7; fi";
+
+/// What `/bin/sh` gives under `fault` when it runs [`WRITE_ONE_LINE`] after `opening`, having ended within the
+/// deadline: the word for its file descriptor 1, and its exit.
+fn written_under(fault: StdoutFault, opening: &str) -> (String, Exit) {
+    let tree = TempTree::new().expect("an isolated tree");
+    let script = format!("{opening}{WRITE_ONE_LINE}");
+
+    let observation = invoke_with_stdout(shell(&tree, &script, &[]), fault)
+        .expect("the child ends within its deadline and is reaped");
+
+    assert_eq!(text(&observation.stdout), "", "{fault:?}");
+    let descriptor = text(&observation.stderr)
+        .lines()
+        .next()
+        .expect("the word for file descriptor 1")
+        .to_owned();
+    (descriptor, observation.exit)
+}
+
+/// The shell ignores the signal of a broken pipe first, so the write fails and does not end it.
+#[test]
+fn a_write_to_a_pipe_whose_reader_is_gone_fails_in_a_child_that_ignores_the_signal() {
+    let (descriptor, exit) = written_under(StdoutFault::ClosedPipe, "trap '' PIPE\n");
+
+    assert_eq!(descriptor, "pipe");
+    assert_eq!(exit, Exit::Code(7));
+}
+
+#[test]
+fn a_write_to_a_pipe_whose_reader_is_gone_ends_a_child_that_left_the_signal_at_its_default() {
+    let (descriptor, exit) = written_under(StdoutFault::ClosedPipe, "");
+
+    assert_eq!(descriptor, "pipe");
+    assert_eq!(exit, Exit::Signal(libc::SIGPIPE));
+}
+
+#[test]
+fn a_write_to_a_full_device_fails() {
+    let (descriptor, exit) = written_under(StdoutFault::Full, "");
+
+    assert_eq!(descriptor, "device");
+    assert_eq!(exit, Exit::Code(7));
+}
+
+/// The null device in place of the missing descriptor would have accepted the write.
+#[test]
+fn a_write_to_no_stdout_at_all_is_refused() {
+    let (descriptor, exit) = written_under(StdoutFault::Closed, "");
+
+    assert_eq!(descriptor, "none");
+    assert_eq!(exit, Exit::Code(7));
 }
