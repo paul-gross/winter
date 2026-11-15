@@ -1,8 +1,5 @@
 //! `repo remove`: removes one repository block from a configuration file of the workspace.
 
-use std::backtrace::Backtrace;
-use std::error::Error;
-use std::io::Write;
 use std::path::Path;
 
 use clap::{Arg, ArgAction, ArgMatches};
@@ -10,10 +7,10 @@ use clap::{Arg, ArgAction, ArgMatches};
 use crate::config_edit::{self, BlockRemoval, CatalogError, RepositoryKind};
 use crate::context::Context;
 use crate::files::WriteFiles;
+use crate::output;
 use crate::registry::Registration;
 use crate::termination::{
-    CommandError, ConfigError, FileCause, InternalError, ParseFault, Termination, TomlParseError,
-    UsageError,
+    CommandError, ConfigError, FileCause, ParseFault, Termination, TomlParseError, UsageError,
 };
 use crate::workspace_root::{self, CONFIG_FILE};
 
@@ -111,17 +108,10 @@ fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
         }
         Err(cause) => return Termination::Config(ConfigError::FileRead { path: file, cause }),
     }
-    let written = if params.json {
-        write_document(cx.out, kind, name)
+    if params.json {
+        output::document(cx.out, &document(kind, name))
     } else {
-        write_line(cx.out, kind, name)
-    };
-    match written {
-        Ok(()) => Termination::Success,
-        Err(source) => Termination::Internal(InternalError::Unexpected {
-            source,
-            backtrace: Backtrace::capture(),
-        }),
+        output::line(cx.out, &line(kind, name))
     }
 }
 
@@ -211,27 +201,8 @@ fn document(kind: &str, name: &str) -> serde_json::Value {
     })
 }
 
-fn write_document(
-    out: &mut dyn Write,
-    kind: &str,
-    name: &str,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    serde_json::to_writer(&mut *out, &document(kind, name))?;
-    writeln!(out)?;
-    Ok(())
-}
-
 fn line(kind: &str, name: &str) -> String {
     format!("Removed {kind} repository {name}")
-}
-
-fn write_line(
-    out: &mut dyn Write,
-    kind: &str,
-    name: &str,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    writeln!(out, "{}", line(kind, name))?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -317,22 +288,6 @@ mod tests {
         assert_eq!(
             document("project", "a/b"),
             serde_json::json!({"removed": true, "kind": "project", "name": "a/b"})
-        );
-    }
-
-    #[test]
-    fn the_written_document_is_one_line_that_parses_back() {
-        let mut out = Vec::new();
-
-        write_document(&mut out, "standalone", "quo\"te\\slash").expect("an in-memory write");
-
-        let text = String::from_utf8(out).expect("UTF-8");
-        assert!(text.ends_with('\n'), "{text:?}");
-        assert_eq!(text.lines().count(), 1, "{text:?}");
-        let parsed: serde_json::Value = serde_json::from_str(&text).expect("a JSON document");
-        assert_eq!(
-            parsed,
-            serde_json::json!({"removed": true, "kind": "standalone", "name": "quo\"te\\slash"})
         );
     }
 

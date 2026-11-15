@@ -77,6 +77,24 @@ each of them explicitly, so they are checked and rewritten like every other sour
 The verifiability matrix has a manual method for a change to discovery itself:
 [`workspace:manual-registration`](../verification/matrix.md#workspacemanual-registration).
 
+### Writing the result
+
+`run` ends by writing its result through `crates/core/src/output.rs`, and returns what that call returns:
+`output::document` with the document under `--json`, and `output::line` with the human line otherwise. The command file
+builds the value and the text, and never writes to a handle itself or inspects a write error. The parser's help and
+version path writes through the same module, with `output::text` and `output::line`.
+
+Each of the three functions hands its result to the handle whole, in one write. A line-buffered handle then keeps
+nothing of a write that fails, so the diagnostic of that failure is still written after it.
+
+`output.rs` alone decides how a failed write ends:
+
+| The write                                        | Ending                                                                              |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| Succeeds                                         | `Termination::Success`                                                              |
+| Fails with `std::io::ErrorKind::BrokenPipe`      | `Termination::BrokenPipe`: exit 1 and no diagnostic, since the reader closed stdout |
+| Fails with any other error, or cannot be encoded | `Termination::Internal(InternalError::Unexpected { .. })`, with the error as source |
+
 ## A domain module
 
 A domain module is a file `crates/core/src/<domain>.rs`, with its children in `crates/core/src/<domain>/`, declared by

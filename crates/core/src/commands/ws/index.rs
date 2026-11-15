@@ -1,17 +1,14 @@
 //! `ws index`: the index of a feature env name, looked up and never recorded.
 
-use std::backtrace::Backtrace;
-use std::error::Error;
-use std::io::Write;
-
 use clap::{Arg, ArgAction, ArgMatches};
 
 use crate::config_raw;
 use crate::context::Context;
 use crate::env_index::{self, IndexAnswer, IndexSource};
+use crate::output;
 use crate::registry::Registration;
 use crate::state_registry;
-use crate::termination::{ConfigError, InternalError, ParseFault, Termination, UsageError};
+use crate::termination::{ConfigError, ParseFault, Termination, UsageError};
 use crate::workspace_root;
 
 pub(crate) const REGISTRATION: Registration = Registration::Command {
@@ -66,17 +63,10 @@ fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
         Ok(answer) => answer,
         Err(error) => return Termination::Config(error),
     };
-    let written = if params.json {
-        write_document(cx.out, params.name, &answer)
+    if params.json {
+        output::document(cx.out, &document(params.name, &answer))
     } else {
-        write_line(cx.out, &answer)
-    };
-    match written {
-        Ok(()) => Termination::Success,
-        Err(source) => Termination::Internal(InternalError::Unexpected {
-            source,
-            backtrace: Backtrace::capture(),
-        }),
+        output::line(cx.out, &line(&answer))
     }
 }
 
@@ -111,16 +101,6 @@ fn document(name: &str, answer: &IndexAnswer) -> serde_json::Value {
     })
 }
 
-fn write_document(
-    out: &mut dyn Write,
-    name: &str,
-    answer: &IndexAnswer,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    serde_json::to_writer(&mut *out, &document(name, answer))?;
-    writeln!(out)?;
-    Ok(())
-}
-
 /// The integer first on the line. A mark follows it only for the hash slot of a name that nothing records
 /// and that is no alias.
 fn line(answer: &IndexAnswer) -> String {
@@ -128,14 +108,6 @@ fn line(answer: &IndexAnswer) -> String {
         (IndexSource::Suggested, false) => format!("{} (suggested)", answer.index),
         _ => answer.index.to_string(),
     }
-}
-
-fn write_line(
-    out: &mut dyn Write,
-    answer: &IndexAnswer,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    writeln!(out, "{}", line(answer))?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -214,27 +186,6 @@ mod tests {
         assert_eq!(
             document("far", &answer(5_000_000_000, IndexSource::Registry, false)),
             serde_json::json!({"name": "far", "index": 5_000_000_000_i64, "source": "registry"})
-        );
-    }
-
-    #[test]
-    fn the_written_document_is_one_line_that_parses_back() {
-        let mut out = Vec::new();
-
-        write_document(
-            &mut out,
-            "quo\"te\\slash",
-            &answer(-3, IndexSource::Registry, false),
-        )
-        .expect("an in-memory write");
-
-        let text = String::from_utf8(out).expect("UTF-8");
-        assert!(text.ends_with('\n'), "{text:?}");
-        assert_eq!(text.lines().count(), 1, "{text:?}");
-        let parsed: serde_json::Value = serde_json::from_str(&text).expect("a JSON document");
-        assert_eq!(
-            parsed,
-            serde_json::json!({"name": "quo\"te\\slash", "index": -3, "source": "registry"})
         );
     }
 

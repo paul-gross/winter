@@ -23,6 +23,8 @@ pub enum Termination {
     },
     Command(CommandError),
     Config(ConfigError),
+    /// The reader closed stdout before the result was written; nothing more is written.
+    BrokenPipe,
     Internal(InternalError),
 }
 
@@ -31,7 +33,11 @@ impl Termination {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Success => 0,
-            Self::Reported | Self::Command(_) | Self::Config(_) | Self::Internal(_) => 1,
+            Self::Reported
+            | Self::Command(_)
+            | Self::Config(_)
+            | Self::BrokenPipe
+            | Self::Internal(_) => 1,
             Self::Usage(_) | Self::BareGroup { .. } => 2,
         }
     }
@@ -39,7 +45,7 @@ impl Termination {
     /// The text the process boundary writes to its error stream, or `None` when nothing more is written.
     pub fn diagnostic(&self) -> Option<String> {
         match self {
-            Self::Success | Self::Reported => None,
+            Self::Success | Self::Reported | Self::BrokenPipe => None,
             Self::Usage(error) => Some(error.to_string()),
             Self::BareGroup { help } => Some(help.clone()),
             Self::Command(error) => Some(error.to_string()),
@@ -200,6 +206,12 @@ mod tests {
     fn success_and_reported_have_no_diagnostic() {
         assert_eq!(Termination::Success.diagnostic(), None);
         assert_eq!(Termination::Reported.diagnostic(), None);
+    }
+
+    #[test]
+    fn a_broken_pipe_exits_1_and_has_no_diagnostic() {
+        assert_eq!(Termination::BrokenPipe.exit_code(), 1);
+        assert_eq!(Termination::BrokenPipe.diagnostic(), None);
     }
 
     #[test]

@@ -3,13 +3,13 @@
 use std::backtrace::Backtrace;
 use std::error::Error;
 use std::ffi::OsString;
-use std::io;
 
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgAction, ArgMatches};
 
 use crate::context::Context;
 use crate::groups;
+use crate::output;
 use crate::process::Identity;
 use crate::registry::{Entry, Registration};
 use crate::termination::{InternalError, ParseFault, Termination, UsageError};
@@ -117,12 +117,11 @@ impl Parser {
     /// Ends an invocation the parser stopped: the help or version a flag asked for, or a usage error.
     fn answer(&self, error: &clap::Error, args: &[OsString], cx: &mut Context<'_>) -> Termination {
         match error.kind() {
-            ErrorKind::DisplayHelp => written(write!(cx.out, "{}", error.render())),
-            ErrorKind::DisplayVersion => written(writeln!(
+            ErrorKind::DisplayHelp => output::text(cx.out, &error.render().to_string()),
+            ErrorKind::DisplayVersion => output::line(
                 cx.out,
-                "{} {}",
-                cx.identity.program, cx.identity.version
-            )),
+                &format!("{} {}", cx.identity.program, cx.identity.version),
+            ),
             _ => {
                 let command_path = parsed_path(&self.command, args);
                 let at_leaf = self.route(&command_path).is_some();
@@ -324,13 +323,6 @@ fn fault(error: &clap::Error, at_leaf: bool) -> ParseFault {
                 .filter(|value| !value.is_empty())
                 .collect(),
         },
-    }
-}
-
-fn written(result: io::Result<()>) -> Termination {
-    match result {
-        Ok(()) => Termination::Success,
-        Err(error) => internal(error),
     }
 }
 

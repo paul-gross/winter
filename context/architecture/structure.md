@@ -82,6 +82,7 @@ under a lock, which replaces the file through a temporary file beside it.
 | `registry.rs`                   | `Registration` and `Entry`, and the registry the build script generates                                           |
 | `groups.rs`                     | The groups of the command tree and their descriptions                                                             |
 | `parse.rs`                      | The argument parser, built from the registry, and the dispatch to a command                                       |
+| `output.rs`                     | The writing of a result and the ending of a failed write; see [changes.md](./changes.md#writing-the-result)       |
 | `commands/`                     | One file per command; see [changes.md](./changes.md#a-command)                                                    |
 | `files.rs`                      | The file port `ReadFiles` and `WriteFiles`, and its adapter `OsFiles`; the only source that names the file system |
 | `config_edit.rs`                | The removal of one repository block from the text of a configuration file, and `CatalogError`                     |

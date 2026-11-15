@@ -17,7 +17,9 @@ may contain any of these tokens:
 | Environment      | `std::env::var`, `std::env::vars`, `std::env::args`, `std::env::current_dir`             |
 | File system      | `std::fs`, in every source except `crates/core/src/files.rs`, the place of the file port |
 
-A command writes through the handles of its `Context` and reads the environment and the working directory from it.
+A command writes its result to the stdout handle of its `Context` through `crates/core/src/output.rs`, as
+[changes.md](../architecture/changes.md#writing-the-result) describes, and reads the environment and the working
+directory from the `Context`.
 
 The architecture test checks this by scanning each source as text. Nothing is exempt: a test module inside the library
 is checked like the rest, and so is a comment. A failure names the file, the line, and the token.

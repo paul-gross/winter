@@ -13,6 +13,7 @@ mod discover;
 mod env_index;
 mod files;
 mod groups;
+mod output;
 mod parse;
 mod process;
 mod registry;
