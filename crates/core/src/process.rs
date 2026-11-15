@@ -1,13 +1,14 @@
 //! The entry of the library: what the binary hands over, and `run`.
 
-use std::backtrace::Backtrace;
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use crate::context::Context;
-use crate::termination::{InternalError, ParseFault, Termination, UsageError};
+use crate::parse;
+use crate::registry::REGISTRY;
+use crate::termination::Termination;
 
 /// The name and version the binary reports.
 pub struct Identity {
@@ -48,8 +49,9 @@ pub struct Invocation<'a> {
 
 /// Parses, dispatches, and returns how the invocation ends.
 ///
-/// Writes results to the handles of `invocation`. Never writes the final diagnostic and never exits: the caller
-/// renders the returned [`Termination`] and maps its exit code.
+/// Writes results, and the help or version line a flag asks for, to the handles of `invocation`. Never writes
+/// the final diagnostic and never exits: the caller renders the returned [`Termination`] and maps its exit
+/// code.
 pub fn run(invocation: Invocation<'_>) -> Termination {
     let Invocation {
         args,
@@ -62,7 +64,7 @@ pub fn run(invocation: Invocation<'_>) -> Termination {
         stdout_is_terminal,
         stderr_is_terminal,
     } = invocation;
-    let cx = Context {
+    let mut cx = Context {
         cwd: &cwd,
         env: &env,
         identity: &identity,
@@ -73,88 +75,12 @@ pub fn run(invocation: Invocation<'_>) -> Termination {
         err_is_terminal: stderr_is_terminal,
     };
 
-    if let [only] = args.as_slice()
-        && only == "--version"
-    {
-        return match writeln!(cx.out, "{} {}", cx.identity.program, cx.identity.version) {
-            Ok(()) => Termination::Success,
-            Err(error) => Termination::Internal(InternalError::Unexpected {
-                source: Box::new(error),
-                backtrace: Backtrace::capture(),
-            }),
-        };
-    }
-
-    Termination::Usage(UsageError::Parse {
-        command_path: Vec::new(),
-        fault: ParseFault::UnexpectedArgument {
-            values: args
-                .iter()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect(),
-        },
-    })
+    parse::run(REGISTRY, &args, &mut cx)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn run_with(args: &[&str]) -> (Termination, Vec<u8>, Vec<u8>) {
-        let mut stdin: &[u8] = &[];
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let termination = run(Invocation {
-            args: args.iter().map(OsString::from).collect(),
-            cwd: PathBuf::from("/"),
-            env: ProcessEnv::from_vars([]),
-            identity: Identity {
-                program: "winter-workspace",
-                version: "0.1.0",
-            },
-            stdin: &mut stdin,
-            stdout: &mut stdout,
-            stderr: &mut stderr,
-            stdout_is_terminal: false,
-            stderr_is_terminal: false,
-        });
-        (termination, stdout, stderr)
-    }
-
-    #[test]
-    fn version_is_written_to_stdout() {
-        let (termination, stdout, stderr) = run_with(&["--version"]);
-
-        assert!(matches!(termination, Termination::Success));
-        assert_eq!(stdout, b"winter-workspace 0.1.0\n");
-        assert!(stderr.is_empty());
-    }
-
-    #[test]
-    fn unrecognised_argument_is_a_usage_error_and_writes_nothing() {
-        let (termination, stdout, stderr) = run_with(&["--nope"]);
-
-        let Termination::Usage(UsageError::Parse {
-            command_path,
-            fault,
-        }) = termination
-        else {
-            panic!("expected a usage termination, got {termination:?}");
-        };
-        assert!(command_path.is_empty());
-        assert!(matches!(fault, ParseFault::UnexpectedArgument { values } if values == ["--nope"]));
-        assert!(stdout.is_empty());
-        assert!(stderr.is_empty());
-    }
-
-    #[test]
-    fn no_argument_is_a_usage_error() {
-        let (termination, stdout, stderr) = run_with(&[]);
-
-        assert!(matches!(termination, Termination::Usage(_)));
-        assert!(stdout.is_empty());
-        assert!(stderr.is_empty());
-    }
 
     #[test]
     fn process_env_returns_the_value_of_a_present_key_only() {

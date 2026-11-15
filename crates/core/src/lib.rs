@@ -5,7 +5,13 @@
 //! returned [`Termination`] to an exit code.
 
 mod context;
+#[cfg(test)]
+#[path = "../build/discover.rs"]
+mod discover;
+mod groups;
+mod parse;
 mod process;
+mod registry;
 mod termination;
 
 pub use process::{Identity, Invocation, ProcessEnv, run};
