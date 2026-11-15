@@ -1,53 +1,25 @@
 //! `ws index`: the index of a feature env name, looked up in a fixture workspace and never recorded.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use winter_workspace_core::{
-    ConfigError, FileCause, Identity, Invocation, ParseFault, ProcessEnv, Termination, UsageError,
-    run,
-};
+use winter_workspace_core::{ConfigError, FileCause, ParseFault, Termination, UsageError};
 use winter_workspace_test_support::{TempTree, WorkspaceBuilder};
+
+#[path = "support/in_process.rs"]
+mod in_process;
+
+use in_process::InProcess;
 
 /// A configuration file that declares nothing, so both keys take their defaults.
 const DEFAULTS: &str = "# workspace\n";
 
-struct Ended {
-    termination: Termination,
-    stdout: String,
-    stderr: String,
-}
-
-fn run_in(cwd: &Path, args: &[&str]) -> Ended {
-    let mut stdin: &[u8] = &[];
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let termination = run(Invocation {
-        args: args.iter().map(OsString::from).collect(),
-        cwd: cwd.to_path_buf(),
-        env: ProcessEnv::from_vars([]),
-        identity: Identity {
-            program: "winter-workspace",
-            version: "0.1.0",
-        },
-        stdin: &mut stdin,
-        stdout: &mut stdout,
-        stderr: &mut stderr,
-        stdout_is_terminal: false,
-        stderr_is_terminal: false,
-    });
-    Ended {
-        termination,
-        stdout: String::from_utf8(stdout).expect("UTF-8 on stdout"),
-        stderr: String::from_utf8(stderr).expect("UTF-8 on stderr"),
-    }
-}
-
 /// The document a successful `ws index NAME --json` in `cwd` writes, which is all it writes.
 fn document(cwd: &Path, name: &str) -> Value {
-    let ended = run_in(cwd, &["ws", "index", name, "--json"]);
+    let ended = InProcess::new(&["ws", "index", name, "--json"])
+        .cwd(cwd)
+        .run();
     assert!(
         matches!(ended.termination, Termination::Success),
         "{name}: {:?}",
@@ -60,7 +32,9 @@ fn document(cwd: &Path, name: &str) -> Value {
 
 /// The configuration error `ws index feature-x --json` in `cwd` ends with, having written nothing.
 fn config_error(cwd: &Path) -> ConfigError {
-    let ended = run_in(cwd, &["ws", "index", "feature-x", "--json"]);
+    let ended = InProcess::new(&["ws", "index", "feature-x", "--json"])
+        .cwd(cwd)
+        .run();
     assert_eq!(ended.stdout, "");
     assert_eq!(ended.stderr, "");
     assert_eq!(ended.termination.exit_code(), 1);
@@ -270,7 +244,9 @@ fn without_the_json_flag_stdout_starts_with_the_integer() {
         ("beta", "2", false),
         ("feature-x", "40", true),
     ] {
-        let ended = run_in(&workspace.root, &["ws", "index", name]);
+        let ended = InProcess::new(&["ws", "index", name])
+            .cwd(&workspace.root)
+            .run();
 
         assert!(
             matches!(ended.termination, Termination::Success),
@@ -324,7 +300,9 @@ fn a_bare_empty_string_of_aliases_leaves_no_alias() {
     // One alias would make the band 3..=48 and put `feature-x` at 46; the default ten put `a` at 42.
     assert_eq!(document(&workspace.root, "feature-x")["index"], json!(40));
     assert_eq!(document(&workspace.root, "a")["index"], json!(8));
-    let ended = run_in(&workspace.root, &["ws", "index", ""]);
+    let ended = InProcess::new(&["ws", "index", ""])
+        .cwd(&workspace.root)
+        .run();
     assert!(ended.stdout.contains(' '), "{:?}", ended.stdout);
 }
 
@@ -352,7 +330,9 @@ fn a_state_file_that_is_not_valid_toml_is_an_empty_registry() {
         .expect("a workspace");
     let before = snapshot(&workspace.root);
 
-    let ended = run_in(&workspace.root, &["ws", "index", "feature-x", "--json"]);
+    let ended = InProcess::new(&["ws", "index", "feature-x", "--json"])
+        .cwd(&workspace.root)
+        .run();
 
     assert!(matches!(ended.termination, Termination::Success));
     assert_eq!(ended.stderr, "");
@@ -535,21 +515,24 @@ fn a_slot_count_smaller_than_the_aliases_allow_is_refused() {
 
 #[test]
 fn the_ws_help_lists_index() {
-    let ended = run_in(Path::new("/"), &["ws", "--help"]);
+    let ended = InProcess::new(&["ws", "--help"]).cwd(Path::new("/")).run();
 
     assert!(matches!(ended.termination, Termination::Success));
     assert!(ended.stdout.contains("index"), "{}", ended.stdout);
     assert_eq!(ended.stderr, "");
 
-    let root = run_in(Path::new("/"), &["--help"]);
+    let root = InProcess::new(&["--help"]).cwd(Path::new("/")).run();
     assert!(root.stdout.contains("ws"), "{}", root.stdout);
 }
 
 #[test]
 fn ws_alone_writes_nothing_and_ends_as_a_bare_group_with_the_ws_help() {
-    let help = run_in(Path::new("/"), &["ws", "--help"]).stdout;
+    let help = InProcess::new(&["ws", "--help"])
+        .cwd(Path::new("/"))
+        .run()
+        .stdout;
 
-    let ended = run_in(Path::new("/"), &["ws"]);
+    let ended = InProcess::new(&["ws"]).cwd(Path::new("/")).run();
 
     assert_eq!(ended.stdout, "");
     assert_eq!(ended.stderr, "");
@@ -568,7 +551,7 @@ fn ws_alone_writes_nothing_and_ends_as_a_bare_group_with_the_ws_help() {
 #[test]
 fn ws_index_without_a_name_is_a_missing_argument() {
     for args in [&["ws", "index"][..], &["ws", "index", "--json"][..]] {
-        let ended = run_in(Path::new("/"), args);
+        let ended = InProcess::new(args).cwd(Path::new("/")).run();
 
         assert_eq!(ended.stdout, "", "{args:?}");
         assert_eq!(ended.stderr, "", "{args:?}");
@@ -593,10 +576,9 @@ fn a_repeated_json_flag_is_refused_as_a_usage_error() {
         .build()
         .expect("a workspace");
 
-    let ended = run_in(
-        &workspace.root,
-        &["ws", "index", "feature-x", "--json", "--json"],
-    );
+    let ended = InProcess::new(&["ws", "index", "feature-x", "--json", "--json"])
+        .cwd(&workspace.root)
+        .run();
 
     assert_eq!(ended.stdout, "");
     assert_eq!(ended.stderr, "");
@@ -610,7 +592,9 @@ fn a_repeated_json_flag_is_refused_as_a_usage_error() {
 
 #[test]
 fn a_second_name_is_refused_as_a_usage_error() {
-    let ended = run_in(Path::new("/"), &["ws", "index", "one", "two"]);
+    let ended = InProcess::new(&["ws", "index", "one", "two"])
+        .cwd(Path::new("/"))
+        .run();
 
     assert_eq!(ended.stdout, "");
     assert_eq!(ended.termination.exit_code(), 2);

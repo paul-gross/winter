@@ -9,10 +9,14 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use winter_workspace_core::{
-    CatalogError, CommandError, ConfigError, FileCause, Identity, Invocation, ProcessEnv,
-    RepositoryKind, Termination, UsageError, run,
+    CatalogError, CommandError, ConfigError, FileCause, RepositoryKind, Termination, UsageError,
 };
 use winter_workspace_test_support::{TempTree, WorkspaceBuilder};
+
+#[path = "support/in_process.rs"]
+mod in_process;
+
+use in_process::InProcess;
 
 const SHARED: &str = ".winter/config.toml";
 const LOCAL: &str = ".winter/config.local.toml";
@@ -58,40 +62,11 @@ name = \"mine\"
 url = \"https://fixture.invalid/mine.git\"
 ";
 
-struct Ended {
-    termination: Termination,
-    stdout: String,
-    stderr: String,
-}
-
-fn run_in(cwd: &Path, args: &[&str]) -> Ended {
-    let mut stdin: &[u8] = &[];
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let termination = run(Invocation {
-        args: args.iter().map(OsString::from).collect(),
-        cwd: cwd.to_path_buf(),
-        env: ProcessEnv::from_vars([]),
-        identity: Identity {
-            program: "winter-workspace",
-            version: "0.1.0",
-        },
-        stdin: &mut stdin,
-        stdout: &mut stdout,
-        stderr: &mut stderr,
-        stdout_is_terminal: false,
-        stderr_is_terminal: false,
-    });
-    Ended {
-        termination,
-        stdout: String::from_utf8(stdout).expect("UTF-8 on stdout"),
-        stderr: String::from_utf8(stderr).expect("UTF-8 on stderr"),
-    }
-}
-
 /// The document a successful `repo remove` with `args` in `cwd` writes, which is all it writes.
 fn removed(cwd: &Path, args: &[&str]) -> Value {
-    let ended = run_in(cwd, &[&["repo", "remove"], args].concat());
+    let ended = InProcess::new(&[&["repo", "remove"], args].concat())
+        .cwd(cwd)
+        .run();
     assert!(
         matches!(ended.termination, Termination::Success),
         "{args:?}: {:?}",
@@ -105,7 +80,9 @@ fn removed(cwd: &Path, args: &[&str]) -> Value {
 /// The catalog error `repo remove` with `args` in `cwd` ends with, at exit code 1 and having written nothing
 /// to either stream, beside the diagnostic of that ending.
 fn catalog_error(cwd: &Path, args: &[&str]) -> (CatalogError, String) {
-    let ended = run_in(cwd, &[&["repo", "remove"], args].concat());
+    let ended = InProcess::new(&[&["repo", "remove"], args].concat())
+        .cwd(cwd)
+        .run();
     assert_eq!(ended.stdout, "", "{args:?}");
     assert_eq!(ended.stderr, "", "{args:?}");
     assert_eq!(ended.termination.exit_code(), 1, "{args:?}");
@@ -186,8 +163,8 @@ fn commented_workspace(tree: &TempTree) -> PathBuf {
 fn the_group_and_the_command_are_listed_in_help() {
     let tree = tree();
 
-    let root_help = run_in(tree.root(), &["--help"]);
-    let group_help = run_in(tree.root(), &["repo", "--help"]);
+    let root_help = InProcess::new(&["--help"]).cwd(tree.root()).run();
+    let group_help = InProcess::new(&["repo", "--help"]).cwd(tree.root()).run();
 
     assert!(root_help.stdout.contains("repo"), "{}", root_help.stdout);
     assert!(
@@ -235,7 +212,9 @@ fn without_the_json_flag_one_line_names_the_type_and_the_name() {
     let root = commented_workspace(&tree);
     let before = snapshot(&root);
 
-    let ended = run_in(&root, &["repo", "remove", "project/web"]);
+    let ended = InProcess::new(&["repo", "remove", "project/web"])
+        .cwd(&root)
+        .run();
 
     assert!(
         matches!(ended.termination, Termination::Success),
@@ -301,7 +280,9 @@ fn a_well_formed_target_outside_a_workspace_is_a_root_not_found_error() {
     let tree = tree();
     let outside = tree.root().join("home");
 
-    let ended = run_in(&outside, &["repo", "remove", "other/x", "--json"]);
+    let ended = InProcess::new(&["repo", "remove", "other/x", "--json"])
+        .cwd(&outside)
+        .run();
 
     assert_eq!(ended.stdout, "");
     assert!(
@@ -484,7 +465,7 @@ fn a_file_that_is_not_valid_toml_is_a_file_read_error_and_is_left_byte_equal() {
 
     for (flags, file) in [(&[][..], SHARED), (&["--local"][..], LOCAL)] {
         let args = [&["repo", "remove", "project/api", "--json"], flags].concat();
-        let ended = run_in(&root, &args);
+        let ended = InProcess::new(&args).cwd(&root).run();
 
         assert_eq!(ended.stdout, "", "{file}");
         assert_eq!(ended.termination.exit_code(), 1, "{file}");
@@ -511,7 +492,9 @@ fn a_file_that_is_not_utf_8_is_a_file_read_error_and_is_left_byte_equal() {
         .root;
     let before = snapshot(&root);
 
-    let ended = run_in(&root, &["repo", "remove", "project/api"]);
+    let ended = InProcess::new(&["repo", "remove", "project/api"])
+        .cwd(&root)
+        .run();
 
     assert!(
         matches!(
@@ -534,10 +517,9 @@ fn a_repeated_option_is_a_usage_error_and_changes_no_file() {
     let before = snapshot(&root);
 
     for repeated in ["--json", "--local"] {
-        let ended = run_in(
-            &root,
-            &["repo", "remove", "project/web", repeated, repeated],
-        );
+        let ended = InProcess::new(&["repo", "remove", "project/web", repeated, repeated])
+            .cwd(&root)
+            .run();
 
         assert_eq!(ended.termination.exit_code(), 2, "{repeated}");
         assert!(
@@ -588,7 +570,9 @@ fn the_command_waits_while_another_handle_holds_the_lock_of_the_directory() {
     let command = std::thread::spawn({
         let root = root.clone();
         move || {
-            let ended = run_in(&root, &["repo", "remove", "project/web", "--json"]);
+            let ended = InProcess::new(&["repo", "remove", "project/web", "--json"])
+                .cwd(&root)
+                .run();
             sender.send(ended).expect("a receiver");
         }
     });
@@ -637,7 +621,9 @@ fn the_lock_is_released_after_a_removal_and_after_each_refusal() {
     catalog_error(&root, &["project/nope"]);
     assert!(free(), "after not found");
 
-    let invalid = run_in(&root, &["repo", "remove", "project/api", "--local"]);
+    let invalid = InProcess::new(&["repo", "remove", "project/api", "--local"])
+        .cwd(&root)
+        .run();
     assert_eq!(invalid.termination.exit_code(), 1);
     assert!(free(), "after a file that is not valid TOML");
 
@@ -742,7 +728,9 @@ fn a_file_that_cannot_be_opened_for_writing_is_a_file_read_error_and_is_left_as_
     }
     let before = snapshot(&root);
 
-    let ended = run_in(&root, &["repo", "remove", "project/web", "--json"]);
+    let ended = InProcess::new(&["repo", "remove", "project/web", "--json"])
+        .cwd(&root)
+        .run();
 
     assert_eq!(ended.stdout, "");
     assert_eq!(ended.termination.exit_code(), 1);

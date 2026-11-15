@@ -1,12 +1,16 @@
 //! A stdout the reader closed: every write of a result ends the invocation as a broken pipe, silently.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use winter_workspace_core::{Identity, Invocation, ProcessEnv, Termination, run};
+use winter_workspace_core::Termination;
 use winter_workspace_test_support::{TempTree, WorkspaceBuilder};
+
+#[path = "support/in_process.rs"]
+mod in_process;
+
+use in_process::InProcess;
 
 const SHARED: &str = ".winter/config.toml";
 
@@ -38,38 +42,9 @@ impl Write for Closed {
     }
 }
 
-struct Ended {
-    termination: Termination,
-    stderr: String,
-}
-
-fn run_in(cwd: &Path, args: &[&str]) -> Ended {
-    let mut stdin: &[u8] = &[];
-    let mut stdout = Closed;
-    let mut stderr = Vec::new();
-    let termination = run(Invocation {
-        args: args.iter().map(OsString::from).collect(),
-        cwd: cwd.to_path_buf(),
-        env: ProcessEnv::from_vars([]),
-        identity: Identity {
-            program: "winter-workspace",
-            version: "0.1.0",
-        },
-        stdin: &mut stdin,
-        stdout: &mut stdout,
-        stderr: &mut stderr,
-        stdout_is_terminal: false,
-        stderr_is_terminal: false,
-    });
-    Ended {
-        termination,
-        stderr: String::from_utf8(stderr).expect("UTF-8 on stderr"),
-    }
-}
-
 /// Asserts that `args` in `cwd` end as a broken pipe: exit code 1, no diagnostic, nothing on stderr.
 fn assert_broken_pipe(cwd: &Path, args: &[&str]) {
-    let ended = run_in(cwd, args);
+    let ended = InProcess::new(args).cwd(cwd).run_with_stdout(&mut Closed);
 
     assert!(
         matches!(ended.termination, Termination::BrokenPipe),
@@ -192,7 +167,9 @@ fn a_bare_root_and_a_bare_group_write_nothing_to_stdout_and_stay_bare_groups() {
     let tree = tree();
 
     for args in [&[][..], &["ws"]] {
-        let ended = run_in(tree.root(), args);
+        let ended = InProcess::new(args)
+            .cwd(tree.root())
+            .run_with_stdout(&mut Closed);
 
         assert!(
             matches!(ended.termination, Termination::BareGroup { .. }),

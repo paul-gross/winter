@@ -16,10 +16,14 @@ Choose the lowest tier that can make the claim:
 - A unit test takes no file, git, or process input and uses nothing from the support package. The one exception is the
   file port, `crates/core/src/files.rs`: its unit tests touch the file system, and only inside a `TempTree` of their
   own.
-- A component test calls the library's `run` with handles it owns and asserts on the returned `Termination` and on what
-  was written. When the behaviour reads or writes files or git state, the test builds a fixture workspace with
-  `TempTree`, `Git`, and `WorkspaceBuilder`; the library's manifest declares the support package as a dev-dependency
-  once a component test uses it.
+- A component test runs the library in process and asserts on the returned `Termination` and on what was written. The
+  run is built through the scaffold `crates/core/tests/support/in_process.rs`, a module the test file declares by
+  `#[path]`. `InProcess` takes the arguments, the working directory, the environment, and stdin, calls the library's
+  `run` over in-memory handles, and returns an `Ended` with the `Termination` and both streams as text. A test file
+  never builds an `Invocation` itself. A test that needs a stdout of its own, such as one that fails, keeps that writer
+  in its file and hands it to `run_with_stdout`. When the behaviour reads or writes files or git state, the test builds
+  a fixture workspace with `TempTree`, `Git`, and `WorkspaceBuilder`; the library's manifest declares the support
+  package as a dev-dependency once a component test uses it.
 - An executable test starts the binary Cargo built, at `env!("CARGO_BIN_EXE_winter-workspace")`, through `invoke`. It is
   for a claim about the process and not about the library.
 

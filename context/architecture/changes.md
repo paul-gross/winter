@@ -98,8 +98,8 @@ Those remain a matter of review. A change that adds a module only a domain entry
 `crates/dev/src/architecture.rs`.
 
 Its tests are unit tests of the argument mapping in the file itself, and a component test at
-`crates/core/tests/<group>_<name>.rs` for its behaviour in process. [testing.md](../standards/testing.md) describes the
-tiers.
+`crates/core/tests/<group>_<name>.rs` for its behaviour in process, run through the scaffold
+`crates/core/tests/support/in_process.rs`. [testing.md](../standards/testing.md) describes the tiers.
 
 Command files are declared only in generated code, which `cargo fmt` does not follow. The driver's format step names
 each of them explicitly, so they are checked and rewritten like every other source;

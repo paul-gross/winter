@@ -1,46 +1,15 @@
 //! The root of the command tree: what the binary answers before any command exists.
 
-use std::ffi::OsString;
-use std::path::PathBuf;
+use winter_workspace_core::{ParseFault, Termination, UsageError};
 
-use winter_workspace_core::{
-    Identity, Invocation, ParseFault, ProcessEnv, Termination, UsageError, run,
-};
+#[path = "support/in_process.rs"]
+mod in_process;
 
-struct Ended {
-    termination: Termination,
-    stdout: String,
-    stderr: String,
-}
-
-fn run_with(args: &[&str]) -> Ended {
-    let mut stdin: &[u8] = &[];
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let termination = run(Invocation {
-        args: args.iter().map(OsString::from).collect(),
-        cwd: PathBuf::from("/"),
-        env: ProcessEnv::from_vars([]),
-        identity: Identity {
-            program: "winter-workspace",
-            version: "0.1.0",
-        },
-        stdin: &mut stdin,
-        stdout: &mut stdout,
-        stderr: &mut stderr,
-        stdout_is_terminal: false,
-        stderr_is_terminal: false,
-    });
-    Ended {
-        termination,
-        stdout: String::from_utf8(stdout).expect("UTF-8 on stdout"),
-        stderr: String::from_utf8(stderr).expect("UTF-8 on stderr"),
-    }
-}
+use in_process::InProcess;
 
 /// The fault of a usage error that wrote nothing to either handle.
 fn usage_fault(args: &[&str]) -> ParseFault {
-    let ended = run_with(args);
+    let ended = InProcess::new(args).run();
     assert_eq!(ended.stdout, "", "{args:?}");
     assert_eq!(ended.stderr, "", "{args:?}");
     match ended.termination {
@@ -57,7 +26,7 @@ fn usage_fault(args: &[&str]) -> ParseFault {
 
 #[test]
 fn help_is_written_to_stdout_and_succeeds() {
-    let ended = run_with(&["--help"]);
+    let ended = InProcess::new(&["--help"]).run();
 
     assert!(matches!(ended.termination, Termination::Success));
     assert!(
@@ -72,9 +41,9 @@ fn help_is_written_to_stdout_and_succeeds() {
 
 #[test]
 fn no_argument_writes_nothing_and_returns_the_root_help_as_a_bare_group() {
-    let help = run_with(&["--help"]).stdout;
+    let help = InProcess::new(&["--help"]).run().stdout;
 
-    let ended = run_with(&[]);
+    let ended = InProcess::new(&[]).run();
 
     assert_eq!(ended.stdout, "");
     assert_eq!(ended.stderr, "");
@@ -137,7 +106,7 @@ fn an_abbreviated_long_option_is_a_usage_error() {
 
 #[test]
 fn version_is_written_to_stdout_as_one_line() {
-    let ended = run_with(&["--version"]);
+    let ended = InProcess::new(&["--version"]).run();
 
     assert!(matches!(ended.termination, Termination::Success));
     assert_eq!(ended.stdout, "winter-workspace 0.1.0\n");
@@ -146,7 +115,7 @@ fn version_is_written_to_stdout_as_one_line() {
 
 #[test]
 fn a_usage_error_exits_2_and_its_diagnostic_names_the_fault() {
-    let termination = run_with(&["--nope"]).termination;
+    let termination = InProcess::new(&["--nope"]).run().termination;
 
     assert_eq!(termination.exit_code(), 2);
     let diagnostic = termination.diagnostic().expect("a diagnostic");
