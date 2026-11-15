@@ -369,6 +369,20 @@ impl<'t> Git<'t> {
         Ok(observation.exit == Exit::Code(0))
     }
 
+    /// As [`Git::run`], answering the bytes git wrote as they are, for a caller that must tell output that is
+    /// not UTF-8 from output that is.
+    pub(crate) fn run_bytes(&self, cwd: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
+        let observation = self.observe(self.tree.env(), cwd, args)?;
+        if observation.exit != Exit::Code(0) {
+            return Err(GitError::Failed {
+                args: owned(args),
+                stderr: String::from_utf8_lossy(&observation.stderr).into_owned(),
+                exit: observation.exit,
+            });
+        }
+        Ok(observation.stdout)
+    }
+
     /// As [`Git::run`], under `env` in place of the pinned environment of the tree.
     fn run_under(&self, env: PinnedEnv, cwd: &Path, args: &[&str]) -> Result<String, GitError> {
         let observation = self.observe(env, cwd, args)?;
@@ -434,8 +448,9 @@ impl<'t> Git<'t> {
     }
 
     /// Fails unless the git directory and the common directory of the repository at `repo`, a path that
-    /// stays in the tree, stay in the tree as git names them. Git only reads.
-    fn git_directories(&self, repo: &Path) -> Result<(), GitError> {
+    /// stays in the tree, stay in the tree as git names them, and answers the two, the git directory first.
+    /// Git only reads.
+    pub(crate) fn git_directories(&self, repo: &Path) -> Result<(PathBuf, PathBuf), GitError> {
         let arguments = [
             "rev-parse",
             "--path-format=absolute",
@@ -454,7 +469,7 @@ impl<'t> Git<'t> {
         };
         self.base(git_directory)?;
         self.base(common_directory)?;
-        Ok(())
+        Ok((git_directory.to_path_buf(), common_directory.to_path_buf()))
     }
 
     /// Fails unless `repo`, a path that stays in the tree, is the top of a git work tree below the root of
@@ -463,14 +478,21 @@ impl<'t> Git<'t> {
         let unconfined = || GitError::Unconfined {
             path: repo.to_path_buf(),
         };
-        let resolved = repo.canonicalize().ok();
-        if resolved.as_deref() == Some(self.tree.root()) {
+        if repo.canonicalize().ok().as_deref() == Some(self.tree.root()) {
             return Err(unconfined());
         }
+        self.work_tree_top(repo)
+    }
+
+    /// Fails unless `repo`, a path that stays in the tree, is the top of the work tree git reports for the
+    /// repository there. Git only reads, and of the work tree it reports it resolves the path alone.
+    pub(crate) fn work_tree_top(&self, repo: &Path) -> Result<(), GitError> {
         let answer = self.run(repo, &["rev-parse", "--show-toplevel"])?;
         let top = answer.strip_suffix('\n').unwrap_or(&answer);
-        if resolved.as_deref() != Some(Path::new(top)) {
-            return Err(unconfined());
+        if repo.canonicalize().ok().as_deref() != Some(Path::new(top)) {
+            return Err(GitError::Unconfined {
+                path: repo.to_path_buf(),
+            });
         }
         Ok(())
     }

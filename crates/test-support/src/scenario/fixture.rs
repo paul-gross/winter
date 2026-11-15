@@ -58,7 +58,7 @@ use crate::git::{CommitSpec, Git, GitError};
 use crate::tree::{TempTree, Use};
 
 /// The token a file of `files/` or `dirty/` holds in place of the root of the tree.
-const ROOT_TOKEN: &[u8] = b"<ROOT>";
+pub(super) const ROOT_TOKEN: &[u8] = b"<ROOT>";
 
 /// The message of the one commit of the workspace root repository.
 const ROOT_COMMIT_MESSAGE: &str = "Workspace root";
@@ -70,10 +70,10 @@ const ROOT_BRANCH: &str = "main";
 const FIXTURE_URL: &str = "https://fixture.invalid/";
 
 /// The entry that holds a repository's git directory.
-const GIT_ENTRY: &str = ".git";
+pub(super) const GIT_ENTRY: &str = ".git";
 
 /// The entry of the root of the tree that holds the bare repository `<name>.git` of every remote.
-const REMOTES_DIRECTORY: &str = "remotes";
+pub(super) const REMOTES_DIRECTORY: &str = "remotes";
 
 /// Why the fixture of a scenario was not built.
 #[derive(Debug)]
