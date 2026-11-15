@@ -844,7 +844,7 @@ fn refused_arguments(args: &[String]) -> Option<String> {
 
 /// What may be the value of a short option in `argument`, when it is one or several short options written
 /// together, as `-o<value>` and `-ko<value>` are: every rest of it that follows letters and digits alone.
-fn short_option_values(argument: &str) -> impl Iterator<Item = &str> {
+pub(super) fn short_option_values(argument: &str) -> impl Iterator<Item = &str> {
     let letters = match argument.strip_prefix('-') {
         Some(rest) if !rest.starts_with('-') => rest,
         _ => "",

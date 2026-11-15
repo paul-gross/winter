@@ -14,9 +14,9 @@ const DESCRIPTION: &str = "scenario.toml";
 /// The file of the scenarios root that pins the reference.
 const REFERENCE: &str = "reference.toml";
 /// The directory of a scenario that holds its record.
-const RECORD: &str = "record";
+pub(super) const RECORD: &str = "record";
 /// The file of a record that says what it was made with, relative to the scenario directory.
-const META: &str = "record/meta.toml";
+pub(super) const META: &str = "record/meta.toml";
 /// The directory of a scenario that holds the expectation of a registered deviation.
 const EXPECTED: &str = "expected";
 /// The directories of a scenario whose files the digest covers, in digest order.
@@ -630,9 +630,23 @@ fn refused_git_args(args: &[String]) -> Option<String> {
     })
 }
 
+/// Why `arg` may not be an argument of a step, when it may not: it starts with `/`.
+pub(super) fn refused_step_arg(arg: &str) -> Option<String> {
+    arg.starts_with('/')
+        .then(|| format!("{arg:?} starts with \"/\""))
+}
+
+/// Why `value` may not be the value a step adds to its environment as `name`, when it may not: it starts
+/// with `/`, where a value names a path only through the root token.
+pub(super) fn refused_step_env_value(name: &str, value: &str) -> Option<String> {
+    value.starts_with('/').then(|| {
+        format!("the value {value:?} of {name} starts with \"/\"; a path is named through <ROOT>")
+    })
+}
+
 /// Why `stdin`, a confined relative path, is not a regular file under the scenario directory `dir` once
 /// every link is resolved, when it is not.
-fn refused_stdin(dir: &Path, stdin: &str) -> Option<String> {
+pub(super) fn refused_stdin(dir: &Path, stdin: &str) -> Option<String> {
     let Ok(base) = dir.canonicalize() else {
         return Some("the scenario directory cannot be resolved".to_owned());
     };
@@ -844,8 +858,8 @@ fn parse_fixture(section: &Section<'_>) -> Result<Fixture, InvalidKey> {
 
 fn parse_step(section: &Section<'_>, dir: &Path) -> Result<Step, InvalidKey> {
     let args = section.required_strs("args")?;
-    if let Some(arg) = args.iter().find(|arg| arg.starts_with('/')) {
-        return Err(section.invalid("args", format!("{arg:?} starts with \"/\"")));
+    if let Some(reason) = args.iter().find_map(|arg| refused_step_arg(arg)) {
+        return Err(section.invalid("args", reason));
     }
     let cwd = section.str("cwd")?.unwrap_or(".").to_owned();
     section.confined("cwd", &cwd)?;
@@ -868,13 +882,9 @@ fn parse_step(section: &Section<'_>, dir: &Path) -> Result<Step, InvalidKey> {
         }
     };
     let env = section.str_table("env")?;
-    if let Some((name, value)) = env.iter().find(|(_, value)| value.starts_with('/')) {
-        return Err(section.invalid(
-            "env",
-            format!(
-                "the value {value:?} of {name} starts with \"/\"; a path is named through <ROOT>"
-            ),
-        ));
+    let refused = |(name, value): (&String, &String)| refused_step_env_value(name, value);
+    if let Some(reason) = env.iter().find_map(refused) {
+        return Err(section.invalid("env", reason));
     }
     Ok(Step {
         args,
