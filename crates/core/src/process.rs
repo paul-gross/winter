@@ -6,6 +6,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use crate::context::Context;
+use crate::files::OsFiles;
 use crate::parse;
 use crate::registry::REGISTRY;
 use crate::termination::Termination;
@@ -73,6 +74,7 @@ pub fn run(invocation: Invocation<'_>) -> Termination {
         err: stderr,
         out_is_terminal: stdout_is_terminal,
         err_is_terminal: stderr_is_terminal,
+        files: &OsFiles,
     };
 
     parse::run(REGISTRY, &args, &mut cx)

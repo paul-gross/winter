@@ -3,6 +3,7 @@
 use std::io::{BufRead, Write};
 use std::path::Path;
 
+use crate::files::ReadFiles;
 use crate::process::{Identity, ProcessEnv};
 
 /// The working directory, environment, identity, and stream handles of one invocation.
@@ -19,4 +20,5 @@ pub(crate) struct Context<'a> {
     pub err: &'a mut dyn Write,
     pub out_is_terminal: bool,
     pub err_is_terminal: bool,
+    pub files: &'a dyn ReadFiles,
 }

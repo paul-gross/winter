@@ -69,17 +69,24 @@ the process exit, which is why a test can call `run` with in-memory handles and 
 ## Modules
 
 `crates/core/src/lib.rs` is a facade: its modules are private, and the public surface is the named re-exports it lists.
-A command receives a `Context`, built by `run` from the invocation, and reaches the outside only through it.
+A command receives a `Context`, built by `run` from the invocation, and reaches the outside only through it. Its `files`
+field is the file port: a domain module that reads a file takes `&dyn ReadFiles` and never names the file system itself.
 
-| Module                          | Holds                                                                       |
-| ------------------------------- | --------------------------------------------------------------------------- |
-| `process.rs`                    | `run`, `Invocation`, `Identity`, `ProcessEnv`                               |
-| `termination.rs`                | `Termination` and the error enums it carries                                |
-| `context.rs`                    | `Context`, what a command receives                                          |
-| `registry.rs`                   | `Registration` and `Entry`, and the registry the build script generates     |
-| `groups.rs`                     | The groups of the command tree and their descriptions                       |
-| `parse.rs`                      | The argument parser, built from the registry, and the dispatch to a command |
-| `build.rs`, `build/discover.rs` | Command discovery at build time; see [changes.md](./changes.md#a-command)   |
+| Module                          | Holds                                                                                           |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `process.rs`                    | `run`, `Invocation`, `Identity`, `ProcessEnv`                                                   |
+| `termination.rs`                | `Termination` and the error enums it carries                                                    |
+| `context.rs`                    | `Context`, what a command receives                                                              |
+| `registry.rs`                   | `Registration` and `Entry`, and the registry the build script generates                         |
+| `groups.rs`                     | The groups of the command tree and their descriptions                                           |
+| `parse.rs`                      | The argument parser, built from the registry, and the dispatch to a command                     |
+| `commands/`                     | One file per command; see [changes.md](./changes.md#a-command)                                  |
+| `files.rs`                      | The file port `ReadFiles` and its adapter `OsFiles`; the only source that names the file system |
+| `workspace_root.rs`             | The workspace root of a directory                                                               |
+| `config_raw.rs`                 | `env_aliases` and `envs_per_workspace`, layered from the two configuration files                |
+| `state_registry.rs`             | The env index registry of the state file, read only                                             |
+| `env_index.rs`                  | The index layout, the hash slot of a name, and `lookup`                                         |
+| `build.rs`, `build/discover.rs` | Command discovery at build time; see [changes.md](./changes.md#a-command)                       |
 
 A module `x` is the file `x.rs`, with its children in `x/`. No module is spelled `mod.rs`.
 

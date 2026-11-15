@@ -4,15 +4,20 @@
 //! names a process stream, the process environment, or a process exit; the binary binds those and maps the
 //! returned [`Termination`] to an exit code.
 
+mod config_raw;
 mod context;
 #[cfg(test)]
 #[path = "../build/discover.rs"]
 mod discover;
+mod env_index;
+mod files;
 mod groups;
 mod parse;
 mod process;
 mod registry;
+mod state_registry;
 mod termination;
+mod workspace_root;
 
 pub use process::{Identity, Invocation, ProcessEnv, run};
 pub use termination::{

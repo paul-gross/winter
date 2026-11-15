@@ -347,6 +347,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use crate::files::OsFiles;
     use crate::process::ProcessEnv;
     use crate::registry::REGISTRY;
 
@@ -469,6 +470,7 @@ mod tests {
                 err: &mut stderr,
                 out_is_terminal: false,
                 err_is_terminal: false,
+                files: &OsFiles,
             },
         );
         Ended {

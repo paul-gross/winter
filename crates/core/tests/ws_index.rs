@@ -1,0 +1,622 @@
+//! `ws index`: the index of a feature env name, looked up in a fixture workspace and never recorded.
+
+use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
+use serde_json::{Value, json};
+use winter_workspace_core::{
+    ConfigError, FileCause, Identity, Invocation, ParseFault, ProcessEnv, Termination, UsageError,
+    run,
+};
+use winter_workspace_test_support::{TempTree, WorkspaceBuilder};
+
+/// A configuration file that declares nothing, so both keys take their defaults.
+const DEFAULTS: &str = "# workspace\n";
+
+struct Ended {
+    termination: Termination,
+    stdout: String,
+    stderr: String,
+}
+
+fn run_in(cwd: &Path, args: &[&str]) -> Ended {
+    let mut stdin: &[u8] = &[];
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let termination = run(Invocation {
+        args: args.iter().map(OsString::from).collect(),
+        cwd: cwd.to_path_buf(),
+        env: ProcessEnv::from_vars([]),
+        identity: Identity {
+            program: "winter-workspace",
+            version: "0.1.0",
+        },
+        stdin: &mut stdin,
+        stdout: &mut stdout,
+        stderr: &mut stderr,
+        stdout_is_terminal: false,
+        stderr_is_terminal: false,
+    });
+    Ended {
+        termination,
+        stdout: String::from_utf8(stdout).expect("UTF-8 on stdout"),
+        stderr: String::from_utf8(stderr).expect("UTF-8 on stderr"),
+    }
+}
+
+/// The document a successful `ws index NAME --json` in `cwd` writes, which is all it writes.
+fn document(cwd: &Path, name: &str) -> Value {
+    let ended = run_in(cwd, &["ws", "index", name, "--json"]);
+    assert!(
+        matches!(ended.termination, Termination::Success),
+        "{name}: {:?}",
+        ended.termination
+    );
+    assert_eq!(ended.stderr, "", "{name}");
+    serde_json::from_str(&ended.stdout)
+        .unwrap_or_else(|error| panic!("{name}: {error}: {:?}", ended.stdout))
+}
+
+/// The configuration error `ws index feature-x --json` in `cwd` ends with, having written nothing.
+fn config_error(cwd: &Path) -> ConfigError {
+    let ended = run_in(cwd, &["ws", "index", "feature-x", "--json"]);
+    assert_eq!(ended.stdout, "");
+    assert_eq!(ended.stderr, "");
+    assert_eq!(ended.termination.exit_code(), 1);
+    match ended.termination {
+        Termination::Config(error) => error,
+        other => panic!("expected a configuration error, got {other:?}"),
+    }
+}
+
+/// What an entry below a directory is, with the content of a file and the target of a link.
+#[derive(Debug, PartialEq, Eq)]
+enum Found {
+    Directory,
+    File(Vec<u8>),
+    Link(PathBuf),
+}
+
+/// Every entry below `directory`, by its path from there.
+fn snapshot(directory: &Path) -> BTreeMap<PathBuf, Found> {
+    fn walk(root: &Path, directory: &Path, found: &mut BTreeMap<PathBuf, Found>) {
+        for entry in std::fs::read_dir(directory).expect("a readable directory") {
+            let path = entry.expect("a directory entry").path();
+            let relative = path
+                .strip_prefix(root)
+                .expect("a path below the root")
+                .to_path_buf();
+            let kind = std::fs::symlink_metadata(&path)
+                .expect("an entry")
+                .file_type();
+            if kind.is_symlink() {
+                let target = std::fs::read_link(&path).expect("a link");
+                found.insert(relative, Found::Link(target));
+            } else if kind.is_dir() {
+                found.insert(relative, Found::Directory);
+                walk(root, &path, found);
+            } else {
+                let content = std::fs::read(&path).expect("a readable file");
+                found.insert(relative, Found::File(content));
+            }
+        }
+    }
+
+    let mut found = BTreeMap::new();
+    walk(directory, directory, &mut found);
+    found
+}
+
+fn tree() -> TempTree {
+    TempTree::new().expect("an isolated tree")
+}
+
+#[test]
+fn a_recorded_name_gives_its_recorded_index_from_the_registry_and_changes_nothing() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .state("[env_index]\nfeature-x = 15\n")
+        .build()
+        .expect("a workspace");
+    let before = snapshot(&workspace.root);
+
+    let document = document(&workspace.root, "feature-x");
+
+    assert_eq!(
+        document,
+        json!({"name": "feature-x", "index": 15, "source": "registry"})
+    );
+    assert_eq!(snapshot(&workspace.root), before);
+}
+
+#[test]
+fn an_unrecorded_name_gives_its_hash_slot_as_suggested_and_changes_nothing() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .build()
+        .expect("a workspace");
+    let before = snapshot(&workspace.root);
+
+    let document = document(&workspace.root, "feature-x");
+
+    assert_eq!(
+        document,
+        json!({"name": "feature-x", "index": 40, "source": "suggested"})
+    );
+    assert_eq!(snapshot(&workspace.root), before);
+    assert!(!workspace.root.join(".winter/state.toml").exists());
+}
+
+#[test]
+fn a_hash_slot_the_registry_records_for_another_name_is_still_suggested() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .state("[env_index]\nother = 40\n")
+        .build()
+        .expect("a workspace");
+    let before = snapshot(&workspace.root);
+
+    let document = document(&workspace.root, "feature-x");
+
+    assert_eq!(
+        document,
+        json!({"name": "feature-x", "index": 40, "source": "suggested"})
+    );
+    assert_eq!(snapshot(&workspace.root), before);
+}
+
+#[test]
+fn a_recorded_index_outside_the_layout_comes_back_as_recorded() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .state("[env_index]\nbelow = -3\nfar = 5000000000\n")
+        .build()
+        .expect("a workspace");
+
+    assert_eq!(
+        document(&workspace.root, "below"),
+        json!({"name": "below", "index": -3, "source": "registry"})
+    );
+    assert_eq!(
+        document(&workspace.root, "far"),
+        json!({"name": "far", "index": 5_000_000_000_i64, "source": "registry"})
+    );
+}
+
+#[test]
+fn a_name_with_a_double_quote_and_a_backslash_comes_back_equal() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .build()
+        .expect("a workspace");
+    let name = "fe\"at\\ure";
+
+    let document = document(&workspace.root, name);
+
+    assert_eq!(document["name"], json!(name));
+    assert_eq!(document["source"], json!("suggested"));
+}
+
+#[test]
+fn the_aliases_and_the_slot_count_of_the_configuration_are_read() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config("env_aliases = [\"one\", \"two\"]\nenvs_per_workspace = 12\n")
+        .build()
+        .expect("a workspace");
+
+    assert_eq!(
+        document(&workspace.root, "two"),
+        json!({"name": "two", "index": 2, "source": "suggested"})
+    );
+    // The first two bytes of the SHA-1 of `feature-x` are 0xcbc1, 52161; the band 4..=12 has 9 slots.
+    assert_eq!(
+        document(&workspace.root, "feature-x"),
+        json!({"name": "feature-x", "index": 4 + 52161 % 9, "source": "suggested"})
+    );
+}
+
+#[test]
+fn a_recorded_alias_gives_the_recorded_index_whatever_its_position() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .state("[env_index]\ngamma = 31\n")
+        .build()
+        .expect("a workspace");
+
+    assert_eq!(
+        document(&workspace.root, "gamma"),
+        json!({"name": "gamma", "index": 31, "source": "registry"})
+    );
+}
+
+#[test]
+fn an_alias_listed_more_than_once_gives_its_last_position() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config("env_aliases = [\"a\", \"b\", \"a\"]\n")
+        .build()
+        .expect("a workspace");
+
+    assert_eq!(
+        document(&workspace.root, "a"),
+        json!({"name": "a", "index": 3, "source": "suggested"})
+    );
+    assert_eq!(
+        document(&workspace.root, "b"),
+        json!({"name": "b", "index": 2, "source": "suggested"})
+    );
+}
+
+#[test]
+fn without_the_json_flag_stdout_starts_with_the_integer() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .state("[env_index]\nrecorded = 15\n")
+        .build()
+        .expect("a workspace");
+
+    // The name, its index, and whether anything follows the integer on the line.
+    for (name, index, marked) in [
+        ("recorded", "15", false),
+        ("beta", "2", false),
+        ("feature-x", "40", true),
+    ] {
+        let ended = run_in(&workspace.root, &["ws", "index", name]);
+
+        assert!(
+            matches!(ended.termination, Termination::Success),
+            "{name}: {:?}",
+            ended.termination
+        );
+        assert_eq!(ended.stderr, "", "{name}");
+        assert_eq!(
+            ended.stdout.lines().count(),
+            1,
+            "{name}: {:?}",
+            ended.stdout
+        );
+        let line = ended.stdout.trim_end_matches('\n');
+        let (first, rest) = line.split_once(' ').unwrap_or((line, ""));
+        assert_eq!(first, index, "{name}: {line:?}");
+        assert_eq!(!rest.is_empty(), marked, "{name}: {line:?}");
+    }
+}
+
+#[test]
+fn the_local_alias_list_replaces_the_shared_one() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config("env_aliases = [\"one\", \"two\"]\n")
+        .local_config("env_aliases = [\"three\"]\n")
+        .build()
+        .expect("a workspace");
+
+    assert_eq!(
+        document(&workspace.root, "three"),
+        json!({"name": "three", "index": 1, "source": "suggested"})
+    );
+    // With one alias the band is 3..=48, so no shared alias keeps a position.
+    for shared in ["one", "two"] {
+        let document = document(&workspace.root, shared);
+
+        assert!(document["index"].as_i64() >= Some(3), "{document}");
+    }
+}
+
+#[test]
+fn a_bare_empty_string_of_aliases_leaves_no_alias() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config("env_aliases = \"\"\n")
+        .build()
+        .expect("a workspace");
+
+    // The band is 2..=48, 47 slots: 52161 % 47 is 38, and the two bytes of `a`, 0x86f7, give 34551 % 47, 6.
+    // One alias would make the band 3..=48 and put `feature-x` at 46; the default ten put `a` at 42.
+    assert_eq!(document(&workspace.root, "feature-x")["index"], json!(40));
+    assert_eq!(document(&workspace.root, "a")["index"], json!(8));
+    let ended = run_in(&workspace.root, &["ws", "index", ""]);
+    assert!(ended.stdout.contains(' '), "{:?}", ended.stdout);
+}
+
+#[test]
+fn a_slot_count_beyond_32_bits_gives_the_hash_itself_past_the_band_start() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config("envs_per_workspace = 5000000000\n")
+        .build()
+        .expect("a workspace");
+
+    assert_eq!(
+        document(&workspace.root, "feature-x"),
+        json!({"name": "feature-x", "index": 12 + 52161, "source": "suggested"})
+    );
+}
+
+#[test]
+fn a_state_file_that_is_not_valid_toml_is_an_empty_registry() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .state("[env_index\nfeature-x = 15\n")
+        .build()
+        .expect("a workspace");
+    let before = snapshot(&workspace.root);
+
+    let ended = run_in(&workspace.root, &["ws", "index", "feature-x", "--json"]);
+
+    assert!(matches!(ended.termination, Termination::Success));
+    assert_eq!(ended.stderr, "");
+    let document: Value = serde_json::from_str(&ended.stdout).expect("a JSON document");
+    assert_eq!(
+        document,
+        json!({"name": "feature-x", "index": 40, "source": "suggested"})
+    );
+    assert_eq!(snapshot(&workspace.root), before);
+}
+
+#[test]
+fn a_state_file_that_cannot_be_read_is_an_empty_registry() {
+    let tree = tree();
+    // A directory in the place of the state file: it exists, and reading it fails.
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .file(".winter/state.toml/keep", b"")
+        .build()
+        .expect("a workspace");
+
+    assert_eq!(
+        document(&workspace.root, "feature-x"),
+        json!({"name": "feature-x", "index": 40, "source": "suggested"})
+    );
+}
+
+#[test]
+fn a_working_directory_two_levels_below_the_root_finds_the_workspace() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config("env_aliases = [\"one\", \"two\"]\nenvs_per_workspace = 12\n")
+        .file("alpha/project/keep", b"")
+        .build()
+        .expect("a workspace");
+
+    let document = document(&workspace.root.join("alpha/project"), "two");
+
+    assert_eq!(
+        document,
+        json!({"name": "two", "index": 2, "source": "suggested"})
+    );
+}
+
+#[test]
+fn a_directory_with_no_workspace_above_is_a_root_not_found_error() {
+    let tree = tree();
+    let outside = tree.root().join("home");
+
+    let error = config_error(&outside);
+
+    assert!(
+        matches!(&error, ConfigError::RootNotFound { start } if *start == outside),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_bare_winter_directory_is_no_workspace() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .file(".winter/state.toml", b"[env_index]\nfeature-x = 15\n")
+        .build()
+        .expect("a workspace directory");
+
+    let error = config_error(&workspace.root);
+
+    assert!(
+        matches!(&error, ConfigError::RootNotFound { start } if *start == workspace.root),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_configuration_file_that_is_not_valid_toml_is_a_file_read_error() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config("env_aliases = [\n")
+        .build()
+        .expect("a workspace");
+
+    let error = config_error(&workspace.root);
+
+    assert!(
+        matches!(
+            &error,
+            ConfigError::FileRead { path, cause: FileCause::Toml(_) }
+                if *path == workspace.root.join(".winter/config.toml")
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_local_configuration_file_that_is_not_valid_toml_is_a_file_read_error() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .local_config("envs_per_workspace = = 3\n")
+        .build()
+        .expect("a workspace");
+
+    let error = config_error(&workspace.root);
+
+    assert!(
+        matches!(
+            &error,
+            ConfigError::FileRead { path, cause: FileCause::Toml(_) }
+                if *path == workspace.root.join(".winter/config.local.toml")
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_configuration_file_that_is_not_utf_8_is_a_file_read_error_with_the_toml_cause() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .file(".winter/config.toml", &[0xff, 0xfe, b'\n'])
+        .build()
+        .expect("a workspace");
+
+    let error = config_error(&workspace.root);
+
+    assert!(
+        matches!(
+            &error,
+            ConfigError::FileRead {
+                cause: FileCause::Toml(_),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_local_configuration_file_that_cannot_be_read_is_a_file_read_error_with_the_io_cause() {
+    let tree = tree();
+    // A directory in the place of the local file: it exists, and reading it fails.
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .file(".winter/config.local.toml/keep", b"")
+        .build()
+        .expect("a workspace");
+
+    let error = config_error(&workspace.root);
+
+    assert!(
+        matches!(
+            &error,
+            ConfigError::FileRead { path, cause: FileCause::Io(_) }
+                if *path == workspace.root.join(".winter/config.local.toml")
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_slot_count_smaller_than_the_aliases_allow_is_refused() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config("env_aliases = [\"one\", \"two\"]\nenvs_per_workspace = 3\n")
+        .build()
+        .expect("a workspace");
+
+    let error = config_error(&workspace.root);
+
+    assert!(
+        matches!(
+            error,
+            ConfigError::EnvsPerWorkspaceTooSmall {
+                envs_per_workspace: 3,
+                aliases: 2
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn the_ws_help_lists_index() {
+    let ended = run_in(Path::new("/"), &["ws", "--help"]);
+
+    assert!(matches!(ended.termination, Termination::Success));
+    assert!(ended.stdout.contains("index"), "{}", ended.stdout);
+    assert_eq!(ended.stderr, "");
+
+    let root = run_in(Path::new("/"), &["--help"]);
+    assert!(root.stdout.contains("ws"), "{}", root.stdout);
+}
+
+#[test]
+fn ws_alone_writes_nothing_and_ends_as_a_bare_group_with_the_ws_help() {
+    let help = run_in(Path::new("/"), &["ws", "--help"]).stdout;
+
+    let ended = run_in(Path::new("/"), &["ws"]);
+
+    assert_eq!(ended.stdout, "");
+    assert_eq!(ended.stderr, "");
+    assert_eq!(ended.termination.exit_code(), 2);
+    assert_eq!(
+        ended.termination.diagnostic().as_deref(),
+        Some(help.as_str())
+    );
+    assert!(
+        matches!(ended.termination, Termination::BareGroup { .. }),
+        "{:?}",
+        ended.termination
+    );
+}
+
+#[test]
+fn ws_index_without_a_name_is_a_missing_argument() {
+    for args in [&["ws", "index"][..], &["ws", "index", "--json"][..]] {
+        let ended = run_in(Path::new("/"), args);
+
+        assert_eq!(ended.stdout, "", "{args:?}");
+        assert_eq!(ended.stderr, "", "{args:?}");
+        assert_eq!(ended.termination.exit_code(), 2, "{args:?}");
+        assert!(
+            matches!(
+                &ended.termination,
+                Termination::Usage(UsageError::Parse { command_path, fault: ParseFault::MissingArgument { .. } })
+                    if command_path == &["ws", "index"]
+            ),
+            "{args:?}: {:?}",
+            ended.termination
+        );
+    }
+}
+
+#[test]
+fn a_repeated_json_flag_is_refused_as_a_usage_error() {
+    let tree = tree();
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .build()
+        .expect("a workspace");
+
+    let ended = run_in(
+        &workspace.root,
+        &["ws", "index", "feature-x", "--json", "--json"],
+    );
+
+    assert_eq!(ended.stdout, "");
+    assert_eq!(ended.stderr, "");
+    assert_eq!(ended.termination.exit_code(), 2);
+    assert!(
+        matches!(ended.termination, Termination::Usage(_)),
+        "{:?}",
+        ended.termination
+    );
+}
+
+#[test]
+fn a_second_name_is_refused_as_a_usage_error() {
+    let ended = run_in(Path::new("/"), &["ws", "index", "one", "two"]);
+
+    assert_eq!(ended.stdout, "");
+    assert_eq!(ended.termination.exit_code(), 2);
+    assert!(
+        matches!(ended.termination, Termination::Usage(_)),
+        "{:?}",
+        ended.termination
+    );
+}
