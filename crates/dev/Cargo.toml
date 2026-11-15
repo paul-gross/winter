@@ -1,0 +1,8 @@
+[package]
+name = "winter-workspace-dev"
+description = "The development driver of the winter-workspace repository."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false

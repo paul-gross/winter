@@ -1,0 +1,8 @@
+[package]
+name = "winter-workspace-test-support"
+description = "Test support for the winter-workspace packages."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false

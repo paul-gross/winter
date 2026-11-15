@@ -1,0 +1,19 @@
+[workspace]
+members = ["crates/cli", "crates/core", "crates/dev", "crates/test-support"]
+default-members = ["crates/cli", "crates/core"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "FSL-1.1-ALv2"
+
+[workspace.dependencies]
+winter-workspace-core = { path = "crates/core" }
+winter-workspace-test-support = { path = "crates/test-support" }
+
+[profile.dev]
+panic = "unwind"
+[profile.release]
+panic = "unwind"

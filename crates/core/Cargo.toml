@@ -1,0 +1,11 @@
+[package]
+name = "winter-workspace-core"
+description = "Parsing, commands, domain, and adapters of the winter-workspace binary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = "2"
+toml = "1.2"
