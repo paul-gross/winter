@@ -6,11 +6,11 @@ use std::path::Path;
 
 use crate::files::{ReadFiles, WriteFiles};
 use crate::logging::Log;
-use crate::process::{Identity, ProcessEnv};
+use crate::process::{Identity, Interrupts, ProcessEnv};
 use crate::termination::Usage;
 
 /// The working directory, environment, identity, and stream handles of one invocation, the node being run, the
-/// root option values, and what is logged.
+/// root option values, what is logged, and the interrupt state of the process.
 #[allow(
     dead_code,
     reason = "the command contract: a field stays whether or not a present command reads it"
@@ -29,6 +29,7 @@ pub(crate) struct Context<'a> {
     pub invoked: &'a Invoked,
     pub root: &'a RootOptions,
     pub log: Log,
+    pub interrupts: &'a Interrupts,
 }
 
 /// The node being run, as the user typed it. For an alias the path holds the alias name.

@@ -61,7 +61,10 @@ a test module included.
 
 ## Unsafe
 
-`unsafe` appears only with a comment that states why it is sound. This is checked in review.
+In the library and the binary, `unsafe` appears in `crates/cli/src/interrupt.rs` alone: where the disposition of SIGINT
+is read and the handler is installed, where the handler reads its state, writes its notice, and ends the process, and
+where its tests set the disposition and raise the signal. Each block carries a comment that states why it is sound. This
+is checked in review.
 
 ## Lint attributes
 

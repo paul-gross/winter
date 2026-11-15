@@ -463,6 +463,7 @@ dependencies = [
 name = "winter-workspace"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "winter-workspace-core",
  "winter-workspace-test-support",
 ]

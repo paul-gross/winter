@@ -52,22 +52,35 @@ package uses it, and is resolved in the committed `Cargo.lock`. The toolchain is
 The library returns values. Its one entry is `run`, which takes an `Invocation` and returns a `Termination`:
 
 - The `Invocation` carries everything the process would otherwise supply: the arguments, the working directory or the
-  error of asking for it, a snapshot of the environment, the program's name and version, the three stream handles, and
-  whether each output is a terminal.
+  error of asking for it, a snapshot of the environment, the program's name and version, the three stream handles,
+  whether each output is a terminal, and the `Interrupts` value the handler of the binary shares.
 - `run` parses, dispatches, and writes to those handles: results, and the help or version a flag asks for, to the stdout
   handle, and log records to the stderr handle. It never writes the final diagnostic and never exits.
 - The `Termination` says how the invocation ended. It answers its exit code and the diagnostic the process boundary
   writes for it, if any.
 
-`crates/cli/src/main.rs` is the process boundary and the whole binary. Its `main` installs the panic hook, snapshots the
-arguments, the working directory, and the environment, and hands `conclude` three things: a closure that locks the three
-streams and calls `run`, a closure that flushes stdout, and stderr. `conclude` calls `run` inside an unwind catch,
-flushes stdout, writes the diagnostic of the ending to stderr, with the backtrace of an internal failure when one was
-captured, and answers the exit code, which `main` exits with. The hook writes nothing for a panic of the thread
-`conclude` runs on: it stores the message and a backtrace for `conclude`, which ends the invocation as an internal
-failure. A panic of any other thread goes to the hook that was installed before. `main.rs` is the only file that names
-the process streams, the process environment, or the process exit, which is why a test can call `run` with in-memory
-handles and observe everything a command does.
+The binary is two files. `crates/cli/src/main.rs` is the process boundary. Its `main` calls the interrupt installer,
+installs the panic hook, snapshots the arguments, the working directory, and the environment, and hands `conclude` three
+things: a closure that locks the three streams and calls `run`, a closure that flushes stdout, and stderr. `conclude`
+calls `run` inside an unwind catch, flushes stdout, writes the diagnostic of the ending to stderr, with the backtrace of
+an internal failure when one was captured, and answers the exit code, which `main` exits with. The hook writes nothing
+for a panic of the thread `conclude` runs on: it stores the message and a backtrace for `conclude`, which ends the
+invocation as an internal failure. A panic of any other thread goes to the hook that was installed before.
+
+`crates/cli/src/interrupt.rs` holds the SIGINT handler and the one `Interrupts` value of the process, which every
+invocation is handed. `main` calls its installer first. A process that starts with SIGINT ignored keeps it ignored: the
+installer reads the disposition and installs nothing, and an interrupt does nothing for the whole run. Otherwise the
+handler is installed. It notes every interrupt in that value, first. When a command defers the interrupt, the handler
+then returns. Any other interrupt ends the process in the handler: it writes the aborted notice to file descriptor 2 and
+exits with code 1, flushing nothing and returning no `Termination`. The binary installs no handler for any other signal.
+
+Outside their test modules, no other file names what these two name. `main.rs` alone names the process streams and the
+process environment, and answers the exit code of an ending. `interrupt.rs` alone reads or changes the disposition of a
+signal, writes to a file descriptor by its number, and ends the process without returning. That is why a test can call
+`run` with in-memory handles and observe everything a command does. The test module of `interrupt.rs` is the one
+exception: a test of the handler reads the path of its own test executable to start its fixture, and the fixture reads
+the variable that names it and writes its lines to the process stdout, because the test that started it reads them
+there.
 
 [rust.md](../standards/rust.md) lists what this boundary forbids a library source to name.
 
@@ -79,29 +92,30 @@ field is the read side of the file port: a domain module that reads a file takes
 file system itself. Its `file_writer` field is the write side, `&dyn WriteFiles`: one read-modify-write of one file
 under a lock, which replaces the file through a temporary file beside it.
 
-| Module                          | Holds                                                                                                                                                    |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `process.rs`                    | `run`, `Invocation`, `Identity`, `ProcessEnv`; after the parse: help or version written, the debug record, the one `Context` built, the command called   |
-| `termination.rs`                | `Termination` and the error enums it carries                                                                                                             |
-| `context.rs`                    | `Context`, what a command receives, with `Invoked`, the node being run, and `RootOptions`, the root option values a command can read                     |
-| `logging.rs`                    | `Level` and `Log`, and the resolution of `-v` and `WINTER_LOG_LEVEL` into what an invocation logs                                                        |
-| `registry.rs`                   | `Registration` and `Entry`, and the registry the build script generates                                                                                  |
-| `groups.rs`                     | The groups of the command tree and their descriptions                                                                                                    |
-| `parse.rs`                      | The argument parser, built from the registry, and what it answers: `Parsed`, with the usage of the node at fault. It writes nothing and calls no command |
-| `arguments.rs`                  | The reading of a parsed argument that the parser guarantees                                                                                              |
-| `output.rs`                     | The writing of a result and the ending of a failed write; see [changes.md](./changes.md#writing-the-result)                                              |
-| `diagnostics.rs`                | The writing of a log record to the stderr handle: the threshold, the two record formats, and a failed write ignored                                      |
-| `commands/`                     | One file per command; see [changes.md](./changes.md#a-command)                                                                                           |
-| `files.rs`                      | The file port `ReadFiles` and `WriteFiles`, and its adapter `OsFiles`; the only source that names the file system                                        |
-| `config_edit.rs`                | The removal of one repository block from the text of a configuration file, and `CatalogError`                                                            |
-| `workspace_files.rs`            | The names of the configuration files and the state file, each relative to a workspace root                                                               |
-| `workspace_root.rs`             | The workspace root of a directory                                                                                                                        |
-| `config_raw.rs`                 | `env_aliases` and `envs_per_workspace`, layered from the two configuration files                                                                         |
-| `state_registry.rs`             | The env index registry of the state file, read only                                                                                                      |
-| `env_index.rs`                  | The index layout, the hash slot of a name, and `lookup`                                                                                                  |
-| `repository_catalog.rs`         | The removal of one repository from a configuration file: the order of its checks and the replacement of the file                                         |
-| `index_lookup.rs`               | The lookup of an env name in a workspace: its root, its configuration, its registry, and `lookup`                                                        |
-| `build.rs`, `build/discover.rs` | Command discovery at build time; see [changes.md](./changes.md#a-command)                                                                                |
+| Module                          | Holds                                                                                                                                                                |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `process.rs`                    | `run`, `Invocation`, `Identity`, `ProcessEnv`, `Interrupts`; after the parse: help or version written, the debug record, the one `Context` built, the command called |
+| `termination.rs`                | `Termination` and the error enums it carries                                                                                                                         |
+| `context.rs`                    | `Context`, what a command receives, with `Invoked`, the node being run, and `RootOptions`, the root option values a command can read                                 |
+| `logging.rs`                    | `Level` and `Log`, and the resolution of `-v` and `WINTER_LOG_LEVEL` into what an invocation logs                                                                    |
+| `registry.rs`                   | `Registration` and `Entry`, and the registry the build script generates                                                                                              |
+| `groups.rs`                     | The groups of the command tree and their descriptions                                                                                                                |
+| `parse.rs`                      | The argument parser, built from the registry, and what it answers: `Parsed`, with the usage of the node at fault. It writes nothing and calls no command             |
+| `arguments.rs`                  | The reading of a parsed argument that the parser guarantees                                                                                                          |
+| `output.rs`                     | The writing of a result and the ending of a failed write; see [changes.md](./changes.md#writing-the-result)                                                          |
+| `diagnostics.rs`                | The writing of a log record to the stderr handle: the threshold, the two record formats, and a failed write ignored                                                  |
+| `commands/`                     | One file per command; see [changes.md](./changes.md#a-command)                                                                                                       |
+| `files.rs`                      | The file port `ReadFiles` and `WriteFiles`, and its adapter `OsFiles`; the only source that names the file system                                                    |
+| `config_edit.rs`                | The removal of one repository block from the text of a configuration file, and `CatalogError`                                                                        |
+| `workspace_files.rs`            | The names of the configuration files and the state file, each relative to a workspace root                                                                           |
+| `workspace_root.rs`             | The workspace root of a directory                                                                                                                                    |
+| `config_raw.rs`                 | `env_aliases` and `envs_per_workspace`, layered from the two configuration files                                                                                     |
+| `state_registry.rs`             | The env index registry of the state file, read only                                                                                                                  |
+| `env_index.rs`                  | The index layout, the hash slot of a name, and `lookup`                                                                                                              |
+| `repository_catalog.rs`         | The removal of one repository from a configuration file: the order of its checks and the replacement of the file                                                     |
+| `index_lookup.rs`               | The lookup of an env name in a workspace: its root, its configuration, its registry, and `lookup`                                                                    |
+| `build.rs`, `build/discover.rs` | Command discovery at build time; see [changes.md](./changes.md#a-command)                                                                                            |
+| `crates/cli/src/interrupt.rs`   | In the binary, not the library: the SIGINT handler and the one `Interrupts` value of the process                                                                     |
 
 A module `x` is the file `x.rs`, with its children in `x/`. No module is spelled `mod.rs`.
 

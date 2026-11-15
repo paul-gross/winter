@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use winter_workspace_core::{Identity, Invocation, ProcessEnv, Termination, run};
+use winter_workspace_core::{Identity, Interrupts, Invocation, ProcessEnv, Termination, run};
 
 /// One invocation of the library, over handles the scaffold owns.
 pub struct InProcess {
@@ -19,11 +19,12 @@ pub struct InProcess {
     stdin: Vec<u8>,
     stdout_is_terminal: bool,
     stderr_is_terminal: bool,
+    interrupts: Interrupts,
 }
 
 impl InProcess {
-    /// An invocation of `args` in the directory `/`, with an empty environment, an empty stdin, and neither
-    /// output stream a terminal.
+    /// An invocation of `args` in the directory `/`, with an empty environment, an empty stdin, neither
+    /// output stream a terminal, and no interrupt pending.
     pub fn new(args: &[&str]) -> Self {
         Self {
             args: args.iter().map(OsString::from).collect(),
@@ -32,6 +33,7 @@ impl InProcess {
             stdin: Vec::new(),
             stdout_is_terminal: false,
             stderr_is_terminal: false,
+            interrupts: Interrupts::new(),
         }
     }
 
@@ -68,6 +70,14 @@ impl InProcess {
         self
     }
 
+    /// Makes an interrupt pending: the invocation runs as one whose command deferred the interrupt and whose
+    /// handler then noted one.
+    pub fn interrupt_pending(self) -> Self {
+        self.interrupts.defer();
+        self.interrupts.note();
+        self
+    }
+
     /// Runs the invocation with an in-memory stdout and stderr, and returns both as text.
     pub fn run(self) -> Ended {
         let mut stdout = Vec::new();
@@ -98,6 +108,7 @@ impl InProcess {
             stderr: &mut stderr,
             stdout_is_terminal: self.stdout_is_terminal,
             stderr_is_terminal: self.stderr_is_terminal,
+            interrupts: &self.interrupts,
         });
         Ended {
             termination,

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::context::Context;
 use crate::diagnostics::{self, Record};
@@ -51,6 +52,76 @@ pub struct Invocation<'a> {
     pub stderr: &'a mut dyn Write,
     pub stdout_is_terminal: bool,
     pub stderr_is_terminal: bool,
+    /// The interrupt state of the process, shared with the handler the host installed.
+    pub interrupts: &'a Interrupts,
+}
+
+/// Whether a command has taken the interrupt over, and whether an interrupt arrived.
+///
+/// A process holds one value, which its interrupt handler and the library share. The handler calls
+/// [`Interrupts::note`] for every interrupt, before anything else. Until a command defers, the handler then ends
+/// the process itself. While one defers, the handler returns, and the command, once it has called
+/// [`Interrupts::release`], reads [`Interrupts::pending`] and ends the invocation when that is true.
+///
+/// Every method is lock-free: it takes no lock and waits for nothing, so each may be called from a signal
+/// handler.
+pub struct Interrupts {
+    /// How many calls of `defer` no `release` has answered yet.
+    deferred: AtomicUsize,
+    pending: AtomicBool,
+}
+
+impl Interrupts {
+    /// A value that is not deferred and has no interrupt pending.
+    pub const fn new() -> Self {
+        Self {
+            deferred: AtomicUsize::new(0),
+            pending: AtomicBool::new(false),
+        }
+    }
+
+    /// Whether a command holds the interrupt: some `defer` is not yet answered by a `release`.
+    pub fn is_deferred(&self) -> bool {
+        self.deferred.load(Ordering::SeqCst) > 0
+    }
+
+    /// Records that an interrupt arrived. The handler calls it for every interrupt, before it tests whether a
+    /// command defers: with the test first, an interrupt that lands on another thread could be noted only after
+    /// the command had released and read [`Interrupts::pending`], and would be lost.
+    pub fn note(&self) {
+        self.pending.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether an interrupt was noted. Nothing clears it within an invocation: a `release` does not.
+    ///
+    /// A command that deferred reads it after its [`Interrupts::release`], never before: an interrupt that
+    /// arrives after an earlier reading and before the release would end nothing. When it is true the command
+    /// ends the invocation: a pending interrupt always does.
+    pub fn pending(&self) -> bool {
+        self.pending.load(Ordering::SeqCst)
+    }
+
+    /// Takes the interrupt over, until the matching [`Interrupts::release`]. Calls nest.
+    pub fn defer(&self) {
+        self.deferred.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Answers one `defer`. The interrupt is back with the handler once every `defer` is answered; a call
+    /// that answers none changes nothing. The command that deferred then reads [`Interrupts::pending`].
+    pub fn release(&self) {
+        // An `Err` is the count already at zero, which stays.
+        let _ = self
+            .deferred
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |held| {
+                held.checked_sub(1)
+            });
+    }
+}
+
+impl Default for Interrupts {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Parses, dispatches, and returns how the invocation ends.
@@ -85,6 +156,7 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
         stderr,
         stdout_is_terminal,
         stderr_is_terminal,
+        interrupts,
     } = invocation;
 
     let Parsed { stage, outcome } = parse::parse(entries, &identity, &args);
@@ -135,6 +207,7 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
                 invoked: &invoked,
                 root: &options,
                 log,
+                interrupts,
             };
             run(&matches, &mut cx)
         }
@@ -144,12 +217,14 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
 /// Runs `args` over the commands of `entries` with in-memory handles, and returns the ending with what was
 /// written to stdout and to stderr.
 ///
-/// The working directory is `/`, the environment and stdin are empty, and neither stream is a terminal.
+/// The working directory is `/`, the environment and stdin are empty, neither stream is a terminal, and the
+/// interrupt state is one of the run's own.
 #[cfg(test)]
 pub(crate) fn run_in_memory(entries: &[Entry], args: &[&str]) -> (Termination, String, String) {
     let mut stdin: &[u8] = &[];
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
+    let interrupts = Interrupts::new();
     let termination = run_with(
         entries,
         Invocation {
@@ -165,6 +240,7 @@ pub(crate) fn run_in_memory(entries: &[Entry], args: &[&str]) -> (Termination, S
             stderr: &mut stderr,
             stdout_is_terminal: false,
             stderr_is_terminal: false,
+            interrupts: &interrupts,
         },
     );
     (
@@ -235,6 +311,62 @@ mod tests {
             registration: &SHOW,
         },
     ];
+
+    #[test]
+    fn a_fresh_interrupts_is_neither_deferred_nor_pending() {
+        let interrupts = Interrupts::new();
+
+        assert!(!interrupts.is_deferred());
+        assert!(!interrupts.pending());
+        assert!(!Interrupts::default().is_deferred());
+        assert!(!Interrupts::default().pending());
+    }
+
+    #[test]
+    fn an_interrupt_that_was_noted_is_pending() {
+        let interrupts = Interrupts::new();
+
+        interrupts.note();
+
+        assert!(interrupts.pending());
+        assert!(!interrupts.is_deferred());
+    }
+
+    #[test]
+    fn defer_and_release_nest() {
+        let interrupts = Interrupts::new();
+
+        interrupts.defer();
+        assert!(interrupts.is_deferred());
+        interrupts.defer();
+        interrupts.release();
+        assert!(interrupts.is_deferred(), "one defer is not yet answered");
+        interrupts.release();
+        assert!(!interrupts.is_deferred());
+        assert!(!interrupts.pending());
+    }
+
+    #[test]
+    fn a_release_that_answers_no_defer_changes_nothing() {
+        let interrupts = Interrupts::new();
+
+        interrupts.release();
+        assert!(!interrupts.is_deferred());
+        interrupts.defer();
+        assert!(interrupts.is_deferred(), "the release before left no debt");
+    }
+
+    #[test]
+    fn a_release_leaves_a_noted_interrupt_pending() {
+        let interrupts = Interrupts::new();
+
+        interrupts.defer();
+        interrupts.note();
+        interrupts.release();
+
+        assert!(interrupts.pending());
+        assert!(!interrupts.is_deferred());
+    }
 
     #[test]
     fn process_env_returns_the_value_of_a_present_key_only() {

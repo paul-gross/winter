@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+libc = "0.2"
 winter-workspace-core = { workspace = true }
 
 [dev-dependencies]

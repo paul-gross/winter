@@ -28,8 +28,9 @@ A test file narrower than a row is selected with `--test <subject>` in place of 
 
 ## Manual testing
 
-Two behaviours cannot be tests of the tree they change, and are exercised by hand. Both run in a scratch copy of the
-checkout under a temporary directory, never in the checkout itself.
+Three behaviours are exercised by hand. Two cannot be tests of the tree they change, and the third needs a signal sent
+to the running binary, which no test sends. All run in a scratch copy of the checkout under a temporary directory, never
+in the checkout itself.
 
 The scratch copy needs a git directory of its own, since each method ends by reading its `git status`. A clone of the
 checkout with the change under test applied has one. A plain copy does not when the checkout is a git worktree: its
@@ -89,6 +90,41 @@ order.
 
 Everything else about discovery is automatic: the path rules, the message of each, and the generated registry are unit
 tests of the library, under `workspace:unit-test`.
+
+### `workspace:manual-interrupt`
+
+Exercises what the built binary does with SIGINT: that `main` calls the installer of `crates/cli/src/interrupt.rs`, and
+what an interrupt then does to the process. Use it when a change touches that file or the start of `main`.
+
+Nothing automatic shows this. The unit tests of `interrupt.rs` prove the installer and the handler in a test process
+that raises the signal on itself, no test sends a signal to another process, and no command runs long enough to be
+interrupted.
+
+**Setup.** Make a scratch copy of the checkout under a temporary directory and work only there, in bash on Linux. Run
+`cargo build --workspace --locked`. Then make a pipe and fill it, so that the binary waits in its first write of the
+help text until it is signalled or the pipe is read:
+
+```sh
+mkfifo full
+exec 3<>full
+head -c 65536 /dev/zero >&3
+```
+
+Run the two cases in order. In each, start the binary as the table says and keep the process id `$!`. Send `kill -INT`
+to that id alone, and only once the process is waiting in its write, which `State: S (sleeping)` in `/proc/<id>/status`
+shows: a signal that lands before `main` has called the installer meets the default disposition and ends the process by
+the signal, with no notice. Read the exit code from `wait` on the id.
+
+| Started                                                                               | Then                                                            | Expected                                                                |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `set -m`, then `target/debug/winter-workspace --help >full 2>notice 3>&- &`, `set +m` | `kill -INT`                                                     | Exit 1; `notice` holds `aborted` and a newline, once.                   |
+| `trap '' INT`, then `target/debug/winter-workspace --help >full 2>notice 3>&- &`      | `kill -INT`; then read the pipe: `head -c 65536 <&3 >/dev/null` | The process is still there after the signal. Exit 0; `notice` is empty. |
+
+A script starts a background command with SIGINT ignored unless job control is on, which is why the first case turns it
+on. A binary left waiting ends when the shell that holds descriptor 3 ends, since its write then fails.
+
+**Success.** Each case ends as stated, and `git status` of the scratch copy shows only `notice`: git does not list a
+pipe.
 
 ## Tools
 

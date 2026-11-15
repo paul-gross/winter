@@ -245,7 +245,11 @@ fn the_matrix_declares_its_manual_methods_each_with_its_setup_its_success_and_wh
     let ids: Vec<&str> = methods.iter().map(|(id, _)| id.as_str()).collect();
     assert_eq!(
         ids,
-        ["workspace:manual-gates", "workspace:manual-registration"]
+        [
+            "workspace:manual-gates",
+            "workspace:manual-registration",
+            "workspace:manual-interrupt"
+        ]
     );
     for (id, text) in &methods {
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");

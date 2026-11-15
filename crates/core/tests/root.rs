@@ -562,6 +562,41 @@ fn the_record_is_written_for_a_command_stage_ending_under_the_variable_alone() {
     }
 }
 
+/// No present command defers the interrupt, so none reads whether one is pending.
+#[test]
+fn a_pending_interrupt_leaves_the_index_of_a_name_ending_as_it_does_without_one() {
+    let tree = TempTree::new().expect("an isolated tree");
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config("# workspace\n")
+        .state("[env_index]\nfeature-x = 15\n")
+        .build()
+        .expect("a workspace");
+    for args in [
+        &["ws", "index", "feature-x"][..],
+        &["ws", "index", "feature-x", "--json"],
+    ] {
+        let plain = InProcess::new(args).cwd(&workspace.root).run();
+        let pending = InProcess::new(args)
+            .cwd(&workspace.root)
+            .interrupt_pending()
+            .run();
+
+        assert!(
+            matches!(plain.termination, Termination::Success),
+            "{args:?}: {:?}",
+            plain.termination
+        );
+        assert!(
+            matches!(pending.termination, Termination::Success),
+            "{args:?}: {:?}",
+            pending.termination
+        );
+        assert!(plain.stdout.contains("15"), "{args:?}: {:?}", plain.stdout);
+        assert_eq!(pending.stdout, plain.stdout, "{args:?}");
+        assert_eq!(pending.stderr, plain.stderr, "{args:?}");
+    }
+}
+
 /// The error a process meets when its working directory was removed.
 fn no_working_directory() -> std::io::Error {
     std::io::Error::new(

@@ -1,4 +1,8 @@
-//! The process boundary: the one file that names the process streams, the process environment, and the exit.
+//! The process boundary: the file that names the process streams and the process environment, and that ends
+//! every invocation an interrupt does not, which the handler of `interrupt.rs` ends itself. Outside a test
+//! module no other file of the binary names a stream or the environment; a test of the handler reads the path
+//! of its own test executable to start its fixture, and the fixture reads the variable that names it and writes
+//! its lines to stdout.
 //!
 //! `main` snapshots what the process supplies and hands it over; [`conclude`] turns what the run answers, a
 //! panic included, into the last bytes on stderr and the exit code.
@@ -13,7 +17,10 @@ use std::thread::{self, ThreadId};
 
 use winter_workspace_core::{Identity, InternalError, Invocation, ProcessEnv, Termination, run};
 
+mod interrupt;
+
 fn main() -> ExitCode {
+    interrupt::install(&interrupt::INTERRUPTS);
     install_panic_hook();
 
     let args = std::env::args_os().skip(1).collect();
@@ -40,6 +47,7 @@ fn main() -> ExitCode {
                 stderr: &mut stderr,
                 stdout_is_terminal,
                 stderr_is_terminal,
+                interrupts: &interrupt::INTERRUPTS,
             })
         },
         || io::stdout().flush(),

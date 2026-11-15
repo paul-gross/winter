@@ -89,6 +89,13 @@ Logic that two commands share lives in a domain module, never under `commands/`.
 A command file does not spell its own command path as a string literal. The path follows from where the file is, and
 reaches `run` as `cx.invoked`, with the usage of the node.
 
+A command defers the interrupt, with `cx.interrupts.defer()`, only around a child process it must outlive, and calls
+`release` once that child has ended. While it defers, an interrupt ends nothing and is only noted. The command reads
+`cx.interrupts.pending()` after its `release`, never before, and when it is true ends the invocation: a pending
+interrupt always ends the invocation, and nothing clears `pending` within one. Every other command leaves the interrupt
+alone, and the handler of the binary ends the process at once. A process that started with SIGINT ignored has no
+handler, and there `pending` stays false.
+
 A command file names none of these:
 
 | Area                                 | Names a command file may not hold                                                  |

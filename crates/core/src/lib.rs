@@ -28,7 +28,7 @@ mod workspace_files;
 mod workspace_root;
 
 pub use config_edit::{CatalogError, RepositoryKind};
-pub use process::{Identity, Invocation, ProcessEnv, run};
+pub use process::{Identity, Interrupts, Invocation, ProcessEnv, run};
 pub use termination::{
     CommandError, ConfigError, FileCause, InternalError, ParseFault, Termination, TomlParseError,
     Usage, UsageError,

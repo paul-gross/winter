@@ -7,15 +7,18 @@ command that runs each tier is in [the verifiability matrix](../verification/mat
 
 | Tier       | Lives in                         | Starts a process | Proves                                                             |
 | ---------- | -------------------------------- | ---------------- | ------------------------------------------------------------------ |
-| Unit       | `#[cfg(test)]` beside the code   | No               | A pure rule: parsing, derivation, ordering, classification.        |
+| Unit       | `#[cfg(test)]` beside the code   | No, except below | A pure rule: parsing, derivation, ordering, classification.        |
 | Component  | `crates/core/tests/<subject>.rs` | Git only         | A behaviour of the library, run in process with in-memory handles. |
 | Executable | `crates/cli/tests/<subject>.rs`  | The built binary | The process-level contract: streams, exit code, environment.       |
 
 Choose the lowest tier that can make the claim:
 
-- A unit test takes no file, git, or process input and uses nothing from the support package. The one exception is the
-  file port, `crates/core/src/files.rs`: its unit tests touch the file system, and only inside a `TempTree` of their
-  own.
+- A unit test takes no file, git, or process input and uses nothing from the support package. There are two exceptions.
+  The unit tests of the file port, `crates/core/src/files.rs`, touch the file system, and only inside a `TempTree` of
+  their own. In the binary package, a unit test whose subject ends its own process, the SIGINT handler of
+  `crates/cli/src/interrupt.rs`, starts a child test of its own test binary through `invoke`, as
+  [Tests that must fail](#tests-that-must-fail) describes; the child raises the signal on itself, and the test sends
+  none.
 - A component test runs the library in process and asserts on the returned `Termination` and on what was written. The
   run is built through the scaffold `crates/core/tests/support/in_process.rs`, a module the test file declares by
   `#[path]`. `InProcess` takes the arguments, the working directory, the environment, and stdin, calls the library's
@@ -149,3 +152,9 @@ marked `#[ignore]` that runs only as a child test process of the test that asser
 `invoke` under its own tree's pinned environment, with `WINTER_TEST_TMPDIR` naming a directory inside that tree and
 `WINTER_TEST_FIXTURE` set to the fixture's name. A fixture that does not find its own name in that variable returns at
 once, having created nothing.
+
+The unit tests of the SIGINT handler, in `crates/cli/src/interrupt.rs`, use the same pattern for a subject that ends its
+own process. Each starts its fixture as a child test of its own test binary, at `std::env::current_exe()` and by the
+exact name of the fixture. The fixture sets the disposition of SIGINT it is to start with, default or ignore, calls the
+installer, writes a line to stdout, and raises SIGINT on itself, and the test reads the exit and both streams of the
+child once it has ended. No test sends a signal to another process.
