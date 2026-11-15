@@ -1,0 +1,8 @@
+summary = "Removing the last block of a configuration without comments beside a repository header takes the header to the end of the file and leaves that one file modified in the root repository."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "remove", "project/docs", "--json"]
+stdout = "json"

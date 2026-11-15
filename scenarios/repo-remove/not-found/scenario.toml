@@ -1,0 +1,8 @@
+summary = "Removing a repository no block names exits 1 and leaves every file unchanged."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "remove", "project/nope", "--json"]
+stdout = "json"

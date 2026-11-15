@@ -1,0 +1,8 @@
+# workspace repositories
+
+[[project_repository]]
+url = "https://fixture.invalid/api.git"
+
+[[project_repository]]
+name = "docs"
+url = "https://fixture.invalid/docs.git"

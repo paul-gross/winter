@@ -1,0 +1,11 @@
+summary = "Removing a middle block matched by the name its URL gives takes the comment directly above it and the lines after it up to the comment directly above the next block, which stays."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "remove", "project/web", "--json"]
+stdout = "json"
+
+[deviation]
+decision = "decision:parallel-workspaces/repository-catalog/removal-comment-extent"

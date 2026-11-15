@@ -1,0 +1,8 @@
+summary = "Removing from a local configuration file that does not exist exits 1 and creates no such file."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "remove", "project/api", "--local", "--json"]
+stdout = "json"
