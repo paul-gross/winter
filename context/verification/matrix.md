@@ -18,6 +18,7 @@ Run from the repository root, after the bootstrap of [development.md](../tooling
 | `workspace:architecture`    | `cargo test -p winter-workspace-dev`             | Package edges, library output rules, context-tree rules, workflow and aliases.  | The change adds a package, an edge, or a context document. |
 | `workspace:slice-gate`      | `cargo dev gate slice`                           | The change is mergeable.                                                        | Always, before handing a change over.                      |
 | `workspace:full-gate`       | `cargo dev gate full`                            | The branch agrees with every recorded scenario.                                 | Before a merge and before a release.                       |
+| `workspace:scenario`        | `cargo scenarios`                                | Equality with the recorded reference in exit code, JSON, and state.             | The behaviour exists in the reference tool.                |
 
 A test file narrower than a row is selected with `--test <subject>` in place of `--test '*'`, or of `--tests` in the
 `workspace:executable-test` row. That row does not select the recorded-scenario target, which belongs to the full gate.
@@ -91,7 +92,8 @@ tests of the library, under `workspace:unit-test`.
 
 ## Tools
 
-| Tool             | Use                                                                                         |
-| ---------------- | ------------------------------------------------------------------------------------------- |
-| `tool:format`    | `cargo dev fmt` — rewrites formatting; run before the slice gate when its `fmt` step fails. |
-| `tool:keep-tree` | `WINTER_TEST_KEEP=1` on any test command — keeps the isolated tree and prints its path.     |
+| Tool             | Use                                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `tool:format`    | `cargo dev fmt` — rewrites formatting; run before the slice gate when its `fmt` step fails.                        |
+| `tool:keep-tree` | `WINTER_TEST_KEEP=1` on any test command — keeps the isolated tree and prints its path.                            |
+| `tool:record`    | `cargo dev record` — records a scenario with the reference tool; [scenarios.md](./scenarios.md) says when and how. |

@@ -228,11 +228,12 @@ fn the_matrix_declares_its_command_methods_and_its_tools() {
             "workspace:architecture",
             "workspace:slice-gate",
             "workspace:full-gate",
+            "workspace:scenario",
         ]
     );
     assert_eq!(
         architecture::matrix_tool_ids(&matrix),
-        ["tool:format", "tool:keep-tree"]
+        ["tool:format", "tool:keep-tree", "tool:record"]
     );
 }
 

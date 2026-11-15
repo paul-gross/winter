@@ -23,9 +23,9 @@ workspace.
 [context/index.md](./context/index.md) is the root of the context tree. Follow the row that matches the task to its area
 index, and from there to one document.
 
-| Area index                                                       | Read when                                                                                    |
-| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| [context/architecture/index.md](./context/architecture/index.md) | You add a command, a module, an error kind, or a dependency, or ask what may depend on what. |
-| [context/standards/index.md](./context/standards/index.md)       | You write or review Rust, or write a test.                                                   |
-| [context/tooling/index.md](./context/tooling/index.md)           | You set up a checkout, run a gate, or read a gate failure.                                   |
-| [context/verification/index.md](./context/verification/index.md) | You state how a change is verified, or check that its verification is complete.              |
+| Area index                                                       | Read when                                                                                                    |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| [context/architecture/index.md](./context/architecture/index.md) | You add a command, a module, an error kind, or a dependency, or ask what may depend on what.                 |
+| [context/standards/index.md](./context/standards/index.md)       | You write or review Rust, or write a test.                                                                   |
+| [context/tooling/index.md](./context/tooling/index.md)           | You set up a checkout, run a gate, or read a gate failure.                                                   |
+| [context/verification/index.md](./context/verification/index.md) | You state how a change is verified, check that its verification is complete, or work on a recorded scenario. |

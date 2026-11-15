@@ -115,11 +115,12 @@ const WITHOUT_REFERENCE_LANGUAGE: (&str, &str) =
     ("crates/test-support/", "crates/cli/tests/scenarios.rs");
 
 /// The commands a contributor document may tell a reader to run, beside a `cargo test -p` call on a workspace
-/// package. `cargo scenarios` also takes one filter.
-const DOCUMENTED_COMMANDS: [&str; 5] = [
+/// package. `cargo scenarios` also takes one filter, and `cargo dev record` is named without its arguments.
+const DOCUMENTED_COMMANDS: [&str; 6] = [
     "cargo dev gate slice",
     "cargo dev gate full",
     "cargo dev fmt",
+    "cargo dev record",
     "cargo scenarios",
     "cargo fetch --locked",
 ];
@@ -872,8 +873,9 @@ pub fn matrix_manual_methods(text: &str) -> Vec<(String, String)> {
     methods
 }
 
-/// Whether `command` is one a contributor document may tell a reader to run: a gate command, `cargo scenarios`
-/// with one filter, or a `cargo test -p` call that names a workspace package.
+/// Whether `command` is one a contributor document may tell a reader to run: a gate command, the record command
+/// without arguments, `cargo scenarios` with or without one filter, or a `cargo test -p` call that names a
+/// workspace package.
 fn is_documented_command(command: &str) -> bool {
     let words: Vec<&str> = command.split_whitespace().collect();
     DOCUMENTED_COMMANDS.contains(&words.join(" ").as_str())
@@ -1844,6 +1846,7 @@ Runs in a scratch copy of the checkout.
             "cargo dev gate slice",
             "cargo dev gate full",
             "cargo dev fmt",
+            "cargo dev record",
             "cargo scenarios",
             "cargo scenarios some-filter",
             "cargo fetch --locked",
@@ -1867,7 +1870,8 @@ Runs in a scratch copy of the checkout.
             "cargo test --workspace",
             "cargo test -p winter-workspace-extra",
             "cargo dev gate",
-            "cargo dev record",
+            "cargo dev record ws-index/alias-suggested",
+            "cargo dev record --all-missing",
             "cargo dev fmt --check",
             "cargo scenarios --list",
             "cargo fetch",
