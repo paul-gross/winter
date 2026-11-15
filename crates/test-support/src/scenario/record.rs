@@ -47,13 +47,13 @@ use crate::git::{Git, GitError};
 use crate::tree::TempTree;
 
 /// The directory of a record that holds its steps.
-const STEPS_DIRECTORY: &str = "steps";
+pub(super) const STEPS_DIRECTORY: &str = "steps";
 
 /// What `git --version` writes before the version.
 const GIT_VERSION_PREFIX: &str = "git version ";
 
 /// The key of a description that declares a stubbed program.
-const STUB_KEY: &str = "stub";
+pub(super) const STUB_KEY: &str = "stub";
 
 /// What a record is made with.
 #[derive(Clone, Debug)]

@@ -208,11 +208,24 @@ impl TempTree {
         *made += 1;
         Ok(outcome)
     }
+
+    /// Whether a tree is kept when it is dropped.
+    pub(crate) fn kept_on_drop() -> bool {
+        std::env::var_os(KEEP_VARIABLE).is_some_and(|keep| keep == "1")
+    }
+
+    /// Removes the tree now, also where trees are kept when they are dropped. A tree that cannot be removed
+    /// is answered as the error and left as it is.
+    pub(crate) fn discard(self) -> io::Result<()> {
+        let removed = std::fs::remove_dir_all(&self.root);
+        std::mem::forget(self);
+        removed
+    }
 }
 
 impl Drop for TempTree {
     fn drop(&mut self) {
-        if std::env::var_os(KEEP_VARIABLE).is_some_and(|keep| keep == "1") {
+        if Self::kept_on_drop() {
             let _ = writeln!(io::stderr(), "kept the isolated tree {}", self.root);
         } else if let Err(error) = std::fs::remove_dir_all(&self.root) {
             // Written directly as well as raised: during an unwind nothing is raised, and a test runner may

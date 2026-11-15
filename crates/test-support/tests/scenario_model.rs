@@ -646,18 +646,53 @@ fn discovery_reports_what_is_not_where_a_scenario_may_be() {
     let tree = TempTree::new().expect("a tree is created");
     let root = scenarios_root(&tree);
     std::fs::create_dir(root.join("empty")).expect("the directory is created");
-    write_file(&root, "only-a-file/scenario.toml", MINIMAL);
     write_file(&root, "notes.txt", "stray\n");
 
     let found = discover(&root).expect("the root is read");
 
     let ids: Vec<&str> = found.iter().map(|entry| entry.id.as_str()).collect();
-    assert_eq!(ids, ["empty", "notes.txt", "only-a-file"]);
+    assert_eq!(ids, ["empty", "notes.txt"]);
     for entry in &found {
         let State::Malformed(malformed) = &entry.state else {
             panic!("malformed: {entry:?}")
         };
         assert_names(malformed, &entry.id, &entry.id);
+    }
+}
+
+#[test]
+fn discovery_reports_an_entry_of_a_command_directory_that_is_no_directory() {
+    let tree = TempTree::new().expect("a tree is created");
+    let root = scenarios_root(&tree);
+    write_scenario(&root, "ws-index/lists", MINIMAL);
+    write_file(&root, "ws-index/notes.txt", "stray\n");
+    std::os::unix::fs::symlink("lists", root.join("ws-index/linked")).expect("the link is made");
+    write_file(&root, "only-a-file/scenario.toml", MINIMAL);
+
+    let found = discover(&root).expect("the root is read");
+
+    let ids: Vec<&str> = found.iter().map(|entry| entry.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "only-a-file",
+            "only-a-file/scenario.toml",
+            "ws-index/linked",
+            "ws-index/lists",
+            "ws-index/notes.txt"
+        ]
+    );
+    assert_eq!(found[3].state, State::Unrecorded);
+    for (entry, key) in [
+        (&found[1], "scenario.toml"),
+        (&found[2], "linked"),
+        (&found[4], "notes.txt"),
+    ] {
+        let State::Malformed(malformed) = &entry.state else {
+            panic!("malformed: {entry:?}")
+        };
+        assert_names(malformed, &entry.id, key);
+        assert_eq!(entry.scenario, None);
     }
 }
 

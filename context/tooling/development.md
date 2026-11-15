@@ -45,8 +45,21 @@ What holds for every step:
 - No step uses the network.
 
 The `scenarios` step runs the target that replays recorded scenarios from a `scenarios/` directory at the repository
-root. The target holds no replay yet: without a scenario directory it reports zero scenarios and passes, and it fails on
-any scenario directory it finds.
+root. A scenario whose description reads and that needs a facility the runner lacks is deferred: it is listed as
+deferred, is not run, and does not fail the step, even where it has no record or a stale one. The target replays every
+other scenario directory it finds with the binary Cargo built, each in an isolated tree of its own, and prints one line
+per scenario, its differences under a scenario that failed, and a last line with the counts of those that passed,
+failed, and were deferred. Without a scenario directory it reports zero scenarios and passes. It fails when a scenario
+that is not deferred differs from its record, runs past its deadline, or has no record or one that is stale or does not
+read whole, when a scenario is malformed, and when `scenarios/` holds anything else that is no scenario directory: only
+`reference.toml` and command directories at the root, and only scenario directories in a command directory.
+
+The target is run alone with `cargo scenarios [FILTER]... [--list]`. A filter keeps the entries whose id contains it.
+Every other entry is left out of the report, a malformed one included: it is not replayed and not counted, so it does
+not fail a filtered run. The whole root is read all the same, so a root or a command directory that cannot be read fails
+a filtered run too. A filter that matches nothing reports zero scenarios and passes. `--list` prints each id with its
+state and replays nothing. `WINTER_SCENARIO_JOBS` sets how many scenarios run at once, and with `WINTER_TEST_KEEP=1` the
+tree of each failed scenario is kept and its path printed.
 
 The CI workflow, `.github/workflows/check.yml`, installs the toolchain, runs the bootstrap, and runs the full gate. It
 runs nothing a contributor cannot run locally.

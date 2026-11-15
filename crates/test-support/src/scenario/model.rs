@@ -18,7 +18,7 @@ pub(super) const RECORD: &str = "record";
 /// The file of a record that says what it was made with, relative to the scenario directory.
 pub(super) const META: &str = "record/meta.toml";
 /// The directory of a scenario that holds the expectation of a registered deviation.
-const EXPECTED: &str = "expected";
+pub(super) const EXPECTED: &str = "expected";
 /// The directories of a scenario whose files the digest covers, in digest order.
 const CONTENT_DIRECTORIES: [&str; 2] = ["files", "dirty"];
 /// The one record format.
@@ -380,11 +380,14 @@ pub struct Discovered {
     pub id: String,
     pub dir: PathBuf,
     pub state: State,
+    /// The description as it was parsed to tell the state; `None` for a malformed entry.
+    pub scenario: Option<Scenario>,
 }
 
 /// Every scenario under `root`, sorted by the bytes of its id: each directory exactly two levels under the
 /// root, with its state. `reference.toml` is no scenario. A directory one level down that holds no directory,
-/// any other file of the root, and a directory whose name is outside the pattern are reported as malformed.
+/// any other file of the root, a directory whose name is outside the pattern, and an entry of a command
+/// directory that is no directory, a link to one included, are reported as malformed.
 pub fn discover(root: &Path) -> io::Result<Vec<Discovered>> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir(root)? {
@@ -399,6 +402,7 @@ pub fn discover(root: &Path) -> io::Result<Vec<Discovered>> {
                 key: command.clone(),
                 reason: reason.to_owned(),
             }),
+            scenario: None,
         };
         if !entry.file_type()?.is_dir() {
             if command != REFERENCE {
@@ -415,27 +419,45 @@ pub fn discover(root: &Path) -> io::Result<Vec<Discovered>> {
         let mut scenarios = 0;
         for entry in std::fs::read_dir(&command_dir)? {
             let entry = entry?;
-            if !entry.file_type()?.is_dir() {
-                continue;
-            }
-            scenarios += 1;
             let name = entry.file_name().to_string_lossy().into_owned();
             let id = format!("{command}/{name}");
             let dir = entry.path();
-            let state = if !is_directory_name(&name) {
-                State::Malformed(Malformed {
+            if !entry.file_type()?.is_dir() {
+                found.push(Discovered {
+                    id: id.clone(),
+                    dir,
+                    state: State::Malformed(Malformed {
+                        scenario: id,
+                        key: name,
+                        reason: "a command directory holds scenario directories alone".to_owned(),
+                    }),
+                    scenario: None,
+                });
+                continue;
+            }
+            scenarios += 1;
+            let malformed = |malformed| (State::Malformed(malformed), None);
+            let (state, scenario) = if !is_directory_name(&name) {
+                malformed(Malformed {
                     scenario: id.clone(),
                     key: name,
                     reason: DIRECTORY_NAME_RULE.to_owned(),
                 })
             } else {
                 match Scenario::load_as(id.clone(), &dir) {
-                    Err(malformed) => State::Malformed(malformed),
-                    Ok(_) if is_directory(&dir.join(RECORD)) => State::Recorded,
-                    Ok(_) => State::Unrecorded,
+                    Err(error) => malformed(error),
+                    Ok(scenario) if is_directory(&dir.join(RECORD)) => {
+                        (State::Recorded, Some(scenario))
+                    }
+                    Ok(scenario) => (State::Unrecorded, Some(scenario)),
                 }
             };
-            found.push(Discovered { id, dir, state });
+            found.push(Discovered {
+                id,
+                dir,
+                state,
+                scenario,
+            });
         }
         if scenarios == 0 {
             found.push(not_a_scenario(
