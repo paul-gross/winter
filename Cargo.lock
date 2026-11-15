@@ -477,6 +477,7 @@ dependencies = [
  "libc",
  "sha1",
  "tempfile",
+ "toml",
 ]
 
 [[package]]

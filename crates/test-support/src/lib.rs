@@ -3,6 +3,7 @@
 mod env;
 mod git;
 mod process;
+pub mod scenario;
 mod tree;
 mod workspace;
 
