@@ -1,0 +1,13 @@
+name: check
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install          # reads rust-toolchain.toml
+      - run: cargo fetch --locked
+      - run: cargo dev gate full

@@ -57,6 +57,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "libc"
+version = "0.2.191"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -210,6 +216,9 @@ dependencies = [
 [[package]]
 name = "winter-workspace-dev"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "winter-workspace-test-support"
