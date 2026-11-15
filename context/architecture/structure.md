@@ -74,26 +74,27 @@ field is the read side of the file port: a domain module that reads a file takes
 file system itself. Its `file_writer` field is the write side, `&dyn WriteFiles`: one read-modify-write of one file
 under a lock, which replaces the file through a temporary file beside it.
 
-| Module                          | Holds                                                                                                             |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `process.rs`                    | `run`, `Invocation`, `Identity`, `ProcessEnv`                                                                     |
-| `termination.rs`                | `Termination` and the error enums it carries                                                                      |
-| `context.rs`                    | `Context`, what a command receives                                                                                |
-| `registry.rs`                   | `Registration` and `Entry`, and the registry the build script generates                                           |
-| `groups.rs`                     | The groups of the command tree and their descriptions                                                             |
-| `parse.rs`                      | The argument parser, built from the registry, and the dispatch to a command                                       |
-| `output.rs`                     | The writing of a result and the ending of a failed write; see [changes.md](./changes.md#writing-the-result)       |
-| `commands/`                     | One file per command; see [changes.md](./changes.md#a-command)                                                    |
-| `files.rs`                      | The file port `ReadFiles` and `WriteFiles`, and its adapter `OsFiles`; the only source that names the file system |
-| `config_edit.rs`                | The removal of one repository block from the text of a configuration file, and `CatalogError`                     |
-| `workspace_files.rs`            | The names of the configuration files and the state file, each relative to a workspace root                        |
-| `workspace_root.rs`             | The workspace root of a directory                                                                                 |
-| `config_raw.rs`                 | `env_aliases` and `envs_per_workspace`, layered from the two configuration files                                  |
-| `state_registry.rs`             | The env index registry of the state file, read only                                                               |
-| `env_index.rs`                  | The index layout, the hash slot of a name, and `lookup`                                                           |
-| `repository_catalog.rs`         | The removal of one repository from a configuration file: the order of its checks and the replacement of the file  |
-| `index_lookup.rs`               | The lookup of an env name in a workspace: its root, its configuration, its registry, and `lookup`                 |
-| `build.rs`, `build/discover.rs` | Command discovery at build time; see [changes.md](./changes.md#a-command)                                         |
+| Module                          | Holds                                                                                                                                                    |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `process.rs`                    | `run`, `Invocation`, `Identity`, `ProcessEnv`; what follows the parse: the help or version line written, the one `Context` built, the command called     |
+| `termination.rs`                | `Termination` and the error enums it carries                                                                                                             |
+| `context.rs`                    | `Context`, what a command receives                                                                                                                       |
+| `registry.rs`                   | `Registration` and `Entry`, and the registry the build script generates                                                                                  |
+| `groups.rs`                     | The groups of the command tree and their descriptions                                                                                                    |
+| `parse.rs`                      | The argument parser, built from the registry, and what it answers: `Parsed`, with the usage of the node at fault. It writes nothing and calls no command |
+| `arguments.rs`                  | The reading of a parsed argument that the parser guarantees                                                                                              |
+| `output.rs`                     | The writing of a result and the ending of a failed write; see [changes.md](./changes.md#writing-the-result)                                              |
+| `commands/`                     | One file per command; see [changes.md](./changes.md#a-command)                                                                                           |
+| `files.rs`                      | The file port `ReadFiles` and `WriteFiles`, and its adapter `OsFiles`; the only source that names the file system                                        |
+| `config_edit.rs`                | The removal of one repository block from the text of a configuration file, and `CatalogError`                                                            |
+| `workspace_files.rs`            | The names of the configuration files and the state file, each relative to a workspace root                                                               |
+| `workspace_root.rs`             | The workspace root of a directory                                                                                                                        |
+| `config_raw.rs`                 | `env_aliases` and `envs_per_workspace`, layered from the two configuration files                                                                         |
+| `state_registry.rs`             | The env index registry of the state file, read only                                                                                                      |
+| `env_index.rs`                  | The index layout, the hash slot of a name, and `lookup`                                                                                                  |
+| `repository_catalog.rs`         | The removal of one repository from a configuration file: the order of its checks and the replacement of the file                                         |
+| `index_lookup.rs`               | The lookup of an env name in a workspace: its root, its configuration, its registry, and `lookup`                                                        |
+| `build.rs`, `build/discover.rs` | Command discovery at build time; see [changes.md](./changes.md#a-command)                                                                                |
 
 A module `x` is the file `x.rs`, with its children in `x/`. No module is spelled `mod.rs`.
 

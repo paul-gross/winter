@@ -1,0 +1,4 @@
+summary = "ws index with a second name is a usage error: exit 2, and nothing is looked up."
+
+[[step]]
+args = ["ws", "index", "one", "two"]

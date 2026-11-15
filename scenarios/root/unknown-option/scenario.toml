@@ -1,0 +1,4 @@
+summary = "An option the root does not have is a usage error: exit 2, and nothing is started."
+
+[[step]]
+args = ["--bogus"]

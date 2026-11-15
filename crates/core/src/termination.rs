@@ -16,16 +16,16 @@ pub enum Termination {
     Success,
     /// The command's own result already carries the failure; nothing more is written.
     Reported,
-    Usage(UsageError),
+    Usage(Box<UsageError>),
     /// No command was given at the root or in a group; the diagnostic is that node's help.
     BareGroup {
         help: String,
     },
-    Command(CommandError),
-    Config(ConfigError),
+    Command(Box<CommandError>),
+    Config(Box<ConfigError>),
     /// The reader closed stdout before the result was written; nothing more is written.
     BrokenPipe,
-    Internal(InternalError),
+    Internal(Box<InternalError>),
 }
 
 impl Termination {
@@ -43,25 +43,45 @@ impl Termination {
     }
 
     /// The text the process boundary writes to its error stream, or `None` when nothing more is written.
+    ///
+    /// A bare group's text is its help. Every other text opens with a line that starts with the error marker
+    /// and carries the message; a usage error adds its usage line and the command that prints its help.
     pub fn diagnostic(&self) -> Option<String> {
         match self {
             Self::Success | Self::Reported | Self::BrokenPipe => None,
             Self::Usage(error) => Some(error.to_string()),
             Self::BareGroup { help } => Some(help.clone()),
-            Self::Command(error) => Some(error.to_string()),
-            Self::Config(error) => Some(error.to_string()),
-            Self::Internal(error) => Some(error.to_string()),
+            Self::Command(error) => Some(format!("{ERROR_MARKER}{error}")),
+            Self::Config(error) => Some(format!("{ERROR_MARKER}{error}")),
+            Self::Internal(error) => Some(format!("{ERROR_MARKER}{error}")),
         }
     }
 }
 
+/// What opens the first line of every error diagnostic.
+const ERROR_MARKER: &str = "error: ";
+
+/// What a usage diagnostic shows of the command at fault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Usage {
+    /// The usage line of the node, as its `--help` prints it.
+    pub line: String,
+    /// The command line that prints the node's help: the program, the node's path, and `--help`.
+    pub help_command: String,
+}
+
 /// A fault in how the command line was written.
+///
+/// Its text is the whole usage diagnostic, one part per line: the error line with the fault, the usage line of
+/// the node at fault, and where to ask for that node's help.
 #[derive(Debug, thiserror::Error)]
 pub enum UsageError {
-    /// Raised by the argument parser. `command_path` is the path parsed before the fault.
-    #[error("{fault}")]
+    /// Raised by the argument parser. `command_path` is the path parsed before the fault, and `usage` is that
+    /// of the node at that path.
+    #[error("{}{fault}\n{}\nFor help, run '{}'.", ERROR_MARKER, .usage.line, .usage.help_command)]
     Parse {
         command_path: Vec<String>,
+        usage: Usage,
         fault: ParseFault,
     },
 }
@@ -83,8 +103,18 @@ pub enum ParseFault {
         value: String,
         expected: String,
     },
-    #[error("unexpected argument: {}", .values.join(" "))]
+    #[error("unexpected argument: {}", quoted(.values))]
     UnexpectedArgument { values: Vec<String> },
+}
+
+/// Each value in quotes with its control characters escaped, so that an empty value shows and a value that
+/// holds a line break stays on the error line.
+fn quoted(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| format!("{value:?}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A rule of a command that the invocation violates. Each variant wraps the error of the module that owns the
@@ -142,6 +172,16 @@ pub enum InternalError {
     },
 }
 
+impl InternalError {
+    /// The one constructor of an unexpected failure: it captures the backtrace.
+    pub(crate) fn unexpected(source: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
+        Self::Unexpected {
+            source: source.into(),
+            backtrace: Backtrace::capture(),
+        }
+    }
+}
+
 impl fmt::Display for InternalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -164,13 +204,69 @@ impl Error for InternalError {
 mod tests {
     use super::*;
 
-    fn usage() -> UsageError {
-        UsageError::Parse {
-            command_path: Vec::new(),
-            fault: ParseFault::UnknownOption {
-                name: "--nope".to_owned(),
-            },
+    fn usage_of_index() -> Usage {
+        Usage {
+            line: "Usage: winter-workspace ws index [OPTIONS] <NAME>".to_owned(),
+            help_command: "winter-workspace ws index --help".to_owned(),
         }
+    }
+
+    fn usage_with(fault: ParseFault) -> UsageError {
+        UsageError::Parse {
+            command_path: vec!["ws".to_owned(), "index".to_owned()],
+            usage: usage_of_index(),
+            fault,
+        }
+    }
+
+    fn usage() -> UsageError {
+        usage_with(ParseFault::UnknownOption {
+            name: "--nope".to_owned(),
+        })
+    }
+
+    /// One fault of each variant, with a text its error line has to carry.
+    fn faults() -> Vec<(ParseFault, &'static str)> {
+        vec![
+            (
+                ParseFault::UnknownCommand {
+                    name: "nope".to_owned(),
+                },
+                "nope",
+            ),
+            (
+                ParseFault::UnknownOption {
+                    name: "--nope".to_owned(),
+                },
+                "--nope",
+            ),
+            (
+                ParseFault::MissingArgument {
+                    metavar: "<NAME>".to_owned(),
+                },
+                "<NAME>",
+            ),
+            (
+                ParseFault::MissingOptionValue {
+                    option: "--tail".to_owned(),
+                },
+                "--tail",
+            ),
+            (
+                ParseFault::InvalidValue {
+                    param: "--tail".to_owned(),
+                    value: "many".to_owned(),
+                    expected: "a number".to_owned(),
+                },
+                "many",
+            ),
+            (
+                ParseFault::UnexpectedArgument {
+                    values: vec!["extra".to_owned()],
+                },
+                "\"extra\"",
+            ),
+        ]
     }
 
     fn root_not_found() -> ConfigError {
@@ -187,10 +283,19 @@ mod tests {
     }
 
     #[test]
+    fn a_termination_is_at_most_four_words_wide() {
+        assert!(
+            std::mem::size_of::<Termination>() <= 4 * std::mem::size_of::<usize>(),
+            "{} bytes",
+            std::mem::size_of::<Termination>()
+        );
+    }
+
+    #[test]
     fn exit_codes_follow_the_class_of_the_ending() {
         assert_eq!(Termination::Success.exit_code(), 0);
         assert_eq!(Termination::Reported.exit_code(), 1);
-        assert_eq!(Termination::Usage(usage()).exit_code(), 2);
+        assert_eq!(Termination::Usage(Box::new(usage())).exit_code(), 2);
         assert_eq!(
             Termination::BareGroup {
                 help: "help".to_owned()
@@ -198,8 +303,11 @@ mod tests {
             .exit_code(),
             2
         );
-        assert_eq!(Termination::Config(root_not_found()).exit_code(), 1);
-        assert_eq!(Termination::Internal(panic()).exit_code(), 1);
+        assert_eq!(
+            Termination::Config(Box::new(root_not_found())).exit_code(),
+            1
+        );
+        assert_eq!(Termination::Internal(Box::new(panic())).exit_code(), 1);
     }
 
     #[test]
@@ -226,7 +334,7 @@ mod tests {
 
     #[test]
     fn root_not_found_diagnostic_names_the_start_path() {
-        let diagnostic = Termination::Config(root_not_found())
+        let diagnostic = Termination::Config(Box::new(root_not_found()))
             .diagnostic()
             .expect("a diagnostic");
 
@@ -234,12 +342,76 @@ mod tests {
     }
 
     #[test]
-    fn usage_diagnostic_names_the_fault() {
-        let diagnostic = Termination::Usage(usage())
-            .diagnostic()
-            .expect("a diagnostic");
+    fn a_usage_diagnostic_is_the_error_line_the_usage_line_and_the_help_command_in_that_order() {
+        for (fault, carried) in faults() {
+            let name = format!("{fault:?}");
+            let usage = usage_of_index();
 
-        assert!(diagnostic.contains("--nope"), "{diagnostic}");
+            let diagnostic = Termination::Usage(Box::new(usage_with(fault)))
+                .diagnostic()
+                .expect("a diagnostic");
+
+            let lines: Vec<&str> = diagnostic.lines().collect();
+            let [error_line, usage_line, help_line] = lines.as_slice() else {
+                panic!("{name}: expected three lines, got {diagnostic:?}");
+            };
+            assert!(error_line.starts_with(ERROR_MARKER), "{name}: {diagnostic}");
+            assert!(error_line.contains(carried), "{name}: {diagnostic}");
+            assert_eq!(*usage_line, usage.line, "{name}");
+            assert!(
+                help_line.contains("winter-workspace ws index --help"),
+                "{name}: {diagnostic}"
+            );
+        }
+    }
+
+    #[test]
+    fn unexpected_arguments_are_each_quoted_and_stay_on_the_error_line() {
+        let diagnostic = Termination::Usage(Box::new(usage_with(ParseFault::UnexpectedArgument {
+            values: vec!["two".to_owned(), String::new(), "a\nb".to_owned()],
+        })))
+        .diagnostic()
+        .expect("a diagnostic");
+
+        let lines: Vec<&str> = diagnostic.lines().collect();
+        assert_eq!(lines.len(), 3, "{diagnostic:?}");
+        assert!(lines[0].ends_with(r#""two" "" "a\nb""#), "{diagnostic}");
+    }
+
+    #[test]
+    fn every_other_error_ending_starts_with_the_error_marker() {
+        let command =
+            Termination::Command(Box::new(CommandError::Catalog(CatalogError::NotFound {
+                kind: crate::RepositoryKind::Project,
+                name: "docs".to_owned(),
+            })));
+        let config = Termination::Config(Box::new(root_not_found()));
+        let unexpected = Termination::Internal(Box::new(InternalError::unexpected(
+            std::io::Error::other("disk on fire"),
+        )));
+        let panicked = Termination::Internal(Box::new(panic()));
+
+        for (termination, carried) in [
+            (command, "docs"),
+            (config, "/somewhere/below"),
+            (unexpected, "disk on fire"),
+            (panicked, "index out of range"),
+        ] {
+            let diagnostic = termination.diagnostic().expect("a diagnostic");
+
+            assert!(diagnostic.starts_with(ERROR_MARKER), "{diagnostic}");
+            assert!(diagnostic.contains(carried), "{diagnostic}");
+            assert_eq!(diagnostic.lines().count(), 1, "{diagnostic}");
+        }
+    }
+
+    #[test]
+    fn the_constructor_of_an_unexpected_failure_keeps_its_source() {
+        let error = InternalError::unexpected(std::io::Error::other("disk on fire"));
+
+        assert!(matches!(error, InternalError::Unexpected { .. }));
+        assert_eq!(error.to_string(), "disk on fire");
+        assert!(error.source().is_some());
     }
 
     #[test]

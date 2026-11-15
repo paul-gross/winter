@@ -59,3 +59,14 @@ fn an_unknown_option_exits_2_and_names_the_option_on_stderr_alone() {
     assert!(stderr.contains("--nope"), "{stderr}");
     assert_eq!(exit, Exit::Code(2));
 }
+
+#[test]
+fn an_unknown_command_exits_2_with_a_diagnostic_of_at_least_three_lines_on_stderr_alone() {
+    let (stdout, stderr, exit) = run(&["nope"]);
+
+    assert_eq!(stdout, "");
+    assert!(stderr.lines().count() >= 3, "{stderr}");
+    assert!(stderr.contains("nope"), "{stderr}");
+    assert!(stderr.contains("winter-workspace --help"), "{stderr}");
+    assert_eq!(exit, Exit::Code(2));
+}

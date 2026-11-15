@@ -2,12 +2,13 @@
 
 use clap::{Arg, ArgAction, ArgMatches};
 
+use crate::arguments;
 use crate::context::Context;
 use crate::env_index::{IndexAnswer, IndexSource};
 use crate::index_lookup;
 use crate::output;
 use crate::registry::Registration;
-use crate::termination::{ParseFault, Termination, UsageError};
+use crate::termination::Termination;
 
 pub(crate) const REGISTRATION: Registration = Registration::Command {
     args,
@@ -41,25 +42,21 @@ fn args(command: clap::Command) -> clap::Command {
         )
 }
 
-fn params(matches: &ArgMatches) -> Option<Params<'_>> {
-    Some(Params {
-        name: matches.get_one::<String>("name")?,
+fn params(matches: &ArgMatches) -> Result<Params<'_>, Termination> {
+    Ok(Params {
+        name: arguments::required::<String>(matches, "name")?,
         json: matches.get_flag("json"),
     })
 }
 
 fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
-    let Some(params) = params(matches) else {
-        return Termination::Usage(UsageError::Parse {
-            command_path: vec!["ws".to_owned(), "index".to_owned()],
-            fault: ParseFault::MissingArgument {
-                metavar: NAME.to_owned(),
-            },
-        });
+    let params = match params(matches) {
+        Ok(params) => params,
+        Err(ended) => return ended,
     };
     let answer = match index_lookup::answer(cx.files, cx.cwd, params.name) {
         Ok(answer) => answer,
-        Err(error) => return Termination::Config(error),
+        Err(error) => return Termination::Config(Box::new(error)),
     };
     if params.json {
         output::document(cx.out, &document(params.name, &answer))
@@ -118,11 +115,11 @@ mod tests {
         let matches = parsed(&["feature-x"]).expect("accepted arguments");
 
         assert_eq!(
-            params(&matches),
-            Some(Params {
+            params(&matches).expect("parameters"),
+            Params {
                 name: "feature-x",
                 json: false
-            })
+            }
         );
     }
 
@@ -132,11 +129,11 @@ mod tests {
             let matches = parsed(&arguments).expect("accepted arguments");
 
             assert_eq!(
-                params(&matches),
-                Some(Params {
+                params(&matches).expect("parameters"),
+                Params {
                     name: "feature-x",
                     json: true
-                }),
+                },
                 "{arguments:?}"
             );
         }
@@ -147,7 +144,7 @@ mod tests {
         for name in ["", "with space", "quo\"te\\slash", "UPPER/slash"] {
             let matches = parsed(&[name]).expect("accepted arguments");
 
-            assert_eq!(params(&matches).map(|params| params.name), Some(name));
+            assert_eq!(params(&matches).expect("parameters").name, name);
         }
     }
 

@@ -2,11 +2,12 @@
 
 use clap::{Arg, ArgAction, ArgMatches};
 
+use crate::arguments;
 use crate::context::Context;
 use crate::output;
 use crate::registry::Registration;
 use crate::repository_catalog::{self, RemoveError, Removed};
-use crate::termination::{CommandError, ParseFault, Termination, UsageError};
+use crate::termination::{CommandError, Termination};
 
 pub(crate) const REGISTRATION: Registration = Registration::Command {
     args,
@@ -47,22 +48,18 @@ fn args(command: clap::Command) -> clap::Command {
         )
 }
 
-fn params(matches: &ArgMatches) -> Option<Params<'_>> {
-    Some(Params {
-        target: matches.get_one::<String>("target")?,
+fn params(matches: &ArgMatches) -> Result<Params<'_>, Termination> {
+    Ok(Params {
+        target: arguments::required::<String>(matches, "target")?,
         local: matches.get_flag("local"),
         json: matches.get_flag("json"),
     })
 }
 
 fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
-    let Some(params) = params(matches) else {
-        return Termination::Usage(UsageError::Parse {
-            command_path: vec!["repo".to_owned(), "remove".to_owned()],
-            fault: ParseFault::MissingArgument {
-                metavar: TARGET.to_owned(),
-            },
-        });
+    let params = match params(matches) {
+        Ok(params) => params,
+        Err(ended) => return ended,
     };
     let removed = match repository_catalog::remove(
         cx.files,
@@ -73,9 +70,9 @@ fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
     ) {
         Ok(removed) => removed,
         Err(RemoveError::Catalog(error)) => {
-            return Termination::Command(CommandError::Catalog(error));
+            return Termination::Command(Box::new(CommandError::Catalog(error)));
         }
-        Err(RemoveError::Config(error)) => return Termination::Config(error),
+        Err(RemoveError::Config(error)) => return Termination::Config(Box::new(error)),
     };
     if params.json {
         output::document(cx.out, &document(&removed))
@@ -122,12 +119,12 @@ mod tests {
         let matches = parsed(&["project/docs"]).expect("accepted arguments");
 
         assert_eq!(
-            params(&matches),
-            Some(Params {
+            params(&matches).expect("parameters"),
+            Params {
                 target: "project/docs",
                 local: false,
                 json: false
-            })
+            }
         );
     }
 
@@ -141,12 +138,12 @@ mod tests {
             let matches = parsed(&arguments).expect("accepted arguments");
 
             assert_eq!(
-                params(&matches),
-                Some(Params {
+                params(&matches).expect("parameters"),
+                Params {
                     target: "project/docs",
                     local: true,
                     json: true
-                }),
+                },
                 "{arguments:?}"
             );
         }
@@ -157,7 +154,7 @@ mod tests {
         for target in ["", "nope", "project/a/b", "other/x", "project/"] {
             let matches = parsed(&[target]).expect("accepted arguments");
 
-            assert_eq!(params(&matches).map(|params| params.target), Some(target));
+            assert_eq!(params(&matches).expect("parameters").target, target);
         }
     }
 

@@ -88,7 +88,10 @@ fn catalog_error(cwd: &Path, args: &[&str]) -> (CatalogError, String) {
     assert_eq!(ended.termination.exit_code(), 1, "{args:?}");
     let diagnostic = ended.termination.diagnostic().expect("a diagnostic");
     match ended.termination {
-        Termination::Command(CommandError::Catalog(error)) => (error, diagnostic),
+        Termination::Command(error) => {
+            let CommandError::Catalog(error) = *error;
+            (error, diagnostic)
+        }
         other => panic!("{args:?}: expected a catalog error, got {other:?}"),
     }
 }
@@ -288,7 +291,8 @@ fn a_well_formed_target_outside_a_workspace_is_a_root_not_found_error() {
     assert!(
         matches!(
             &ended.termination,
-            Termination::Config(ConfigError::RootNotFound { start }) if *start == outside
+            Termination::Config(error)
+                if matches!(&**error, ConfigError::RootNotFound { start } if *start == outside)
         ),
         "{:?}",
         ended.termination
@@ -472,8 +476,8 @@ fn a_file_that_is_not_valid_toml_is_a_file_read_error_and_is_left_byte_equal() {
         assert!(
             matches!(
                 &ended.termination,
-                Termination::Config(ConfigError::FileRead { path, cause: FileCause::Toml(_) })
-                    if *path == root.join(file)
+                Termination::Config(error)
+                    if matches!(&**error, ConfigError::FileRead { path, cause: FileCause::Toml(_) } if *path == root.join(file))
             ),
             "{file}: {:?}",
             ended.termination
@@ -499,10 +503,8 @@ fn a_file_that_is_not_utf_8_is_a_file_read_error_and_is_left_byte_equal() {
     assert!(
         matches!(
             &ended.termination,
-            Termination::Config(ConfigError::FileRead {
-                cause: FileCause::Toml(_),
-                ..
-            })
+            Termination::Config(error)
+                if matches!(**error, ConfigError::FileRead { cause: FileCause::Toml(_), .. })
         ),
         "{:?}",
         ended.termination
@@ -525,7 +527,7 @@ fn a_repeated_option_is_a_usage_error_and_changes_no_file() {
         assert!(
             matches!(
                 &ended.termination,
-                Termination::Usage(UsageError::Parse { .. })
+                Termination::Usage(error) if matches!(**error, UsageError::Parse { .. })
             ),
             "{repeated}: {:?}",
             ended.termination
@@ -737,8 +739,9 @@ fn a_file_that_cannot_be_opened_for_writing_is_a_file_read_error_and_is_left_as_
     assert!(
         matches!(
             &ended.termination,
-            Termination::Config(ConfigError::FileRead { path, cause: FileCause::Io(error) })
-                if *path == file && error.kind() == std::io::ErrorKind::PermissionDenied
+            Termination::Config(error)
+                if matches!(&**error, ConfigError::FileRead { path, cause: FileCause::Io(error) }
+                    if *path == file && error.kind() == std::io::ErrorKind::PermissionDenied)
         ),
         "{:?}",
         ended.termination
@@ -787,5 +790,29 @@ x = 1
 [[project_repository]]
 url = \"https://fixture.invalid/web.git\"
 "
+    );
+}
+
+#[test]
+fn a_missing_target_is_a_usage_error_that_carries_the_usage_of_repo_remove() {
+    let ended = InProcess::new(&["repo", "remove"]).run();
+
+    assert_eq!(ended.stdout, "");
+    assert_eq!(ended.stderr, "");
+    assert_eq!(ended.termination.exit_code(), 2);
+    let Termination::Usage(error) = ended.termination else {
+        panic!("expected a usage termination, got {:?}", ended.termination);
+    };
+    let UsageError::Parse {
+        command_path,
+        usage,
+        ..
+    } = *error;
+    assert_eq!(command_path, ["repo", "remove"]);
+    assert_eq!(usage.help_command, "winter-workspace repo remove --help");
+    assert!(
+        usage.line.contains("winter-workspace repo remove"),
+        "{}",
+        usage.line
     );
 }

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use winter_workspace_core::{ConfigError, FileCause, ParseFault, Termination, UsageError};
+use winter_workspace_core::{ConfigError, FileCause, ParseFault, Termination, Usage, UsageError};
 use winter_workspace_test_support::{TempTree, WorkspaceBuilder};
 
 #[path = "support/in_process.rs"]
@@ -39,7 +39,7 @@ fn config_error(cwd: &Path) -> ConfigError {
     assert_eq!(ended.stderr, "");
     assert_eq!(ended.termination.exit_code(), 1);
     match ended.termination {
-        Termination::Config(error) => error,
+        Termination::Config(error) => *error,
         other => panic!("expected a configuration error, got {other:?}"),
     }
 }
@@ -548,24 +548,112 @@ fn ws_alone_writes_nothing_and_ends_as_a_bare_group_with_the_ws_help() {
     );
 }
 
+/// The parts of a usage error that wrote nothing to either handle and exits 2.
+fn usage_error(args: &[&str]) -> (Vec<String>, Usage, ParseFault) {
+    let ended = InProcess::new(args).cwd(Path::new("/")).run();
+    assert_eq!(ended.stdout, "", "{args:?}");
+    assert_eq!(ended.stderr, "", "{args:?}");
+    assert_eq!(ended.termination.exit_code(), 2, "{args:?}");
+    match ended.termination {
+        Termination::Usage(error) => {
+            let UsageError::Parse {
+                command_path,
+                usage,
+                fault,
+            } = *error;
+            (command_path, usage, fault)
+        }
+        other => panic!("{args:?}: expected a usage termination, got {other:?}"),
+    }
+}
+
+/// Asserts that `usage` is that of the node `help_args` prints the help of.
+fn assert_usage_of(usage: &Usage, help_args: &[&str]) {
+    let help = InProcess::new(help_args).cwd(Path::new("/")).run().stdout;
+    assert_eq!(
+        usage.help_command,
+        format!("winter-workspace {}", help_args.join(" "))
+    );
+    assert!(
+        help.lines().any(|line| line == usage.line),
+        "{:?} is no line of\n{help}",
+        usage.line
+    );
+}
+
+#[test]
+fn an_unknown_command_under_ws_carries_the_usage_of_ws() {
+    let (command_path, usage, fault) = usage_error(&["ws", "nope"]);
+
+    assert_eq!(command_path, ["ws"]);
+    assert!(
+        matches!(&fault, ParseFault::UnknownCommand { name } if name == "nope"),
+        "{fault:?}"
+    );
+    assert_usage_of(&usage, &["ws", "--help"]);
+}
+
+#[test]
+fn an_unknown_option_of_ws_index_carries_the_usage_of_ws_index() {
+    let (command_path, usage, fault) = usage_error(&["ws", "index", "--bogus"]);
+
+    assert_eq!(command_path, ["ws", "index"]);
+    assert!(
+        matches!(&fault, ParseFault::UnknownOption { name } if name == "--bogus"),
+        "{fault:?}"
+    );
+    assert_usage_of(&usage, &["ws", "index", "--help"]);
+}
+
 #[test]
 fn ws_index_without_a_name_is_a_missing_argument() {
     for args in [&["ws", "index"][..], &["ws", "index", "--json"][..]] {
-        let ended = InProcess::new(args).cwd(Path::new("/")).run();
+        let (command_path, usage, fault) = usage_error(args);
 
-        assert_eq!(ended.stdout, "", "{args:?}");
-        assert_eq!(ended.stderr, "", "{args:?}");
-        assert_eq!(ended.termination.exit_code(), 2, "{args:?}");
+        assert_eq!(command_path, ["ws", "index"], "{args:?}");
         assert!(
-            matches!(
-                &ended.termination,
-                Termination::Usage(UsageError::Parse { command_path, fault: ParseFault::MissingArgument { .. } })
-                    if command_path == &["ws", "index"]
-            ),
-            "{args:?}: {:?}",
-            ended.termination
+            matches!(&fault, ParseFault::MissingArgument { metavar } if metavar.contains("NAME")),
+            "{args:?}: {fault:?}"
         );
+        assert_usage_of(&usage, &["ws", "index", "--help"]);
     }
+}
+
+#[test]
+fn a_second_name_is_an_unexpected_argument() {
+    let (command_path, usage, fault) = usage_error(&["ws", "index", "one", "two"]);
+
+    assert_eq!(command_path, ["ws", "index"]);
+    assert!(
+        matches!(&fault, ParseFault::UnexpectedArgument { values } if values == &["two"]),
+        "{fault:?}"
+    );
+    assert_usage_of(&usage, &["ws", "index", "--help"]);
+}
+
+#[test]
+fn two_names_too_many_are_both_rendered_each_quoted() {
+    let ended = InProcess::new(&["ws", "index", "one", "two", "three"])
+        .cwd(Path::new("/"))
+        .run();
+
+    assert_eq!(ended.termination.exit_code(), 2);
+    let diagnostic = ended.termination.diagnostic().expect("a diagnostic");
+    let lines: Vec<&str> = diagnostic.lines().collect();
+    let [error_line, usage_line, help_line] = lines.as_slice() else {
+        panic!("expected three lines, got {diagnostic:?}");
+    };
+    assert!(error_line.starts_with("error: "), "{diagnostic}");
+    assert!(error_line.ends_with(r#""two" "three""#), "{diagnostic}");
+    assert!(!error_line.contains("one"), "{diagnostic}");
+    assert!(
+        usage_line.contains("winter-workspace ws index"),
+        "{diagnostic}"
+    );
+    assert!(
+        help_line.contains("winter-workspace ws index --help"),
+        "{diagnostic}"
+    );
 }
 
 #[test]
@@ -582,21 +670,6 @@ fn a_repeated_json_flag_is_refused_as_a_usage_error() {
 
     assert_eq!(ended.stdout, "");
     assert_eq!(ended.stderr, "");
-    assert_eq!(ended.termination.exit_code(), 2);
-    assert!(
-        matches!(ended.termination, Termination::Usage(_)),
-        "{:?}",
-        ended.termination
-    );
-}
-
-#[test]
-fn a_second_name_is_refused_as_a_usage_error() {
-    let ended = InProcess::new(&["ws", "index", "one", "two"])
-        .cwd(Path::new("/"))
-        .run();
-
-    assert_eq!(ended.stdout, "");
     assert_eq!(ended.termination.exit_code(), 2);
     assert!(
         matches!(ended.termination, Termination::Usage(_)),

@@ -1,27 +1,34 @@
 //! The root of the command tree: what the binary answers before any command exists.
 
-use winter_workspace_core::{ParseFault, Termination, UsageError};
+use winter_workspace_core::{ParseFault, Termination, Usage, UsageError};
 
 #[path = "support/in_process.rs"]
 mod in_process;
 
 use in_process::InProcess;
 
-/// The fault of a usage error that wrote nothing to either handle.
-fn usage_fault(args: &[&str]) -> ParseFault {
+/// The fault of a usage error at the root that wrote nothing to either handle, with the usage it carries.
+fn usage_error(args: &[&str]) -> (ParseFault, Usage) {
     let ended = InProcess::new(args).run();
     assert_eq!(ended.stdout, "", "{args:?}");
     assert_eq!(ended.stderr, "", "{args:?}");
+    assert_eq!(ended.termination.exit_code(), 2, "{args:?}");
     match ended.termination {
-        Termination::Usage(UsageError::Parse {
-            command_path,
-            fault,
-        }) => {
+        Termination::Usage(error) => {
+            let UsageError::Parse {
+                command_path,
+                usage,
+                fault,
+            } = *error;
             assert!(command_path.is_empty(), "{args:?}: {command_path:?}");
-            fault
+            (fault, usage)
         }
         other => panic!("{args:?}: expected a usage termination, got {other:?}"),
     }
+}
+
+fn usage_fault(args: &[&str]) -> ParseFault {
+    usage_error(args).0
 }
 
 #[test]
@@ -114,10 +121,42 @@ fn version_is_written_to_stdout_as_one_line() {
 }
 
 #[test]
-fn a_usage_error_exits_2_and_its_diagnostic_names_the_fault() {
-    let termination = InProcess::new(&["--nope"]).run().termination;
+fn a_fault_at_the_root_carries_the_usage_of_the_root() {
+    let help = InProcess::new(&["--help"]).run().stdout;
 
-    assert_eq!(termination.exit_code(), 2);
-    let diagnostic = termination.diagnostic().expect("a diagnostic");
-    assert!(diagnostic.contains("--nope"), "{diagnostic}");
+    for args in [&["nope"][..], &["--nope"], &["--nope", "ws", "index"]] {
+        let (_, usage) = usage_error(args);
+
+        assert_eq!(usage.help_command, "winter-workspace --help", "{args:?}");
+        assert!(
+            help.lines().any(|line| line == usage.line),
+            "{args:?}: {:?} is no line of\n{help}",
+            usage.line
+        );
+    }
+}
+
+#[test]
+fn a_usage_diagnostic_is_the_error_line_the_usage_line_and_the_help_command() {
+    for (args, named) in [(&["nope"][..], "nope"), (&["--nope"], "--nope")] {
+        let termination = InProcess::new(args).run().termination;
+
+        assert_eq!(termination.exit_code(), 2, "{args:?}");
+        let diagnostic = termination.diagnostic().expect("a diagnostic");
+        let Termination::Usage(error) = termination else {
+            panic!("{args:?}: expected a usage termination, got {termination:?}");
+        };
+        let UsageError::Parse { usage, .. } = *error;
+        let lines: Vec<&str> = diagnostic.lines().collect();
+        let [error_line, usage_line, help_line] = lines.as_slice() else {
+            panic!("{args:?}: expected three lines, got {diagnostic:?}");
+        };
+        assert!(error_line.starts_with("error: "), "{args:?}: {diagnostic}");
+        assert!(error_line.contains(named), "{args:?}: {diagnostic}");
+        assert_eq!(*usage_line, usage.line, "{args:?}");
+        assert!(
+            help_line.contains(&usage.help_command),
+            "{args:?}: {diagnostic}"
+        );
+    }
 }

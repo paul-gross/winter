@@ -1,0 +1,4 @@
+Usage: winter ws [OPTIONS] COMMAND [ARGS]...
+Try 'winter ws --help' for help.
+
+Error: No such command 'nope'.

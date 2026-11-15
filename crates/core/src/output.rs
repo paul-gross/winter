@@ -51,10 +51,10 @@ fn ended(written: io::Result<()>) -> Termination {
 }
 
 fn internal(error: impl Error + Send + Sync + 'static) -> Termination {
-    Termination::Internal(InternalError::Unexpected {
+    Termination::Internal(Box::new(InternalError::Unexpected {
         source: Box::new(error),
         backtrace: Backtrace::capture(),
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -191,8 +191,8 @@ mod tests {
             for (name, termination) in endings(&mut Failing(kind)) {
                 assert!(
                     matches!(
-                        termination,
-                        Termination::Internal(InternalError::Unexpected { .. })
+                        &termination,
+                        Termination::Internal(error) if matches!(**error, InternalError::Unexpected { .. })
                     ),
                     "{name}, {kind:?}: {termination:?}"
                 );

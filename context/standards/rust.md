@@ -34,9 +34,17 @@ A module `x` is `x.rs`, with its children in `x/`. The architecture test fails o
 - `InternalError` alone implements `Display` and `Error` by hand. Its variants hold a backtrace, and for a field of that
   type the derive generates a method over a standard-library API this repository does not assume to be stable.
 - No `String` error crosses a module boundary.
+- `Termination` stays narrow whatever its error types grow to. A variant that carries an error type holds it in a `Box`,
+  and the fields a variant holds inline are scalars or one `String`. The site that builds such an ending boxes the error
+  there, and the error types themselves hold no box for this purpose. A fallible function of the library returns
+  `Result<_, Termination>` by value. No lint attribute and no lint setting is the answer to an error that is too large.
+  A unit test in `crates/core/src/termination.rs` checks that `Termination` is at most four words wide.
+- A broken invariant of the parser is an internal failure, built through the constructor `InternalError::unexpected`,
+  and never a usage error: a registry the command tree cannot be built with, a parsed value the node's own parser should
+  have supplied, a command selected under an empty command path.
 - No `unwrap`, `expect`, or `panic!` is applied to a value that comes from the user, a file, or a child process.
 
-These are checked in review.
+The width of `Termination` is checked by its unit test, and the rest in review.
 
 ## Unsafe
 
@@ -48,10 +56,10 @@ rustfmt and Clippy run with their defaults: the repository holds no configuratio
 table. Warnings are denied by the gate's `clippy` step, which covers compiler and Clippy warnings of every package,
 target, and feature; [development.md](../tooling/development.md#the-gates) has the step.
 
-Three items of the library carry `#[allow(dead_code, reason = "…")]` permanently: `Context`, `Registration`, and
-`Entry`. They are contracts that command files fill, and command files are discovered at build time, so a tree with no
-command or no alias reads only part of them and must still pass a gate that denies warnings. `#[expect(dead_code)]` is
-never used on them, because the first command would turn the expectation into a failure.
+Four items of the library carry `#[allow(dead_code, reason = "…")]` permanently: `Context`, `Invoked`, `Registration`,
+and `Entry`. They are contracts that command files fill, and command files are discovered at build time, so a tree with
+no command or no alias reads only part of them and must still pass a gate that denies warnings. `#[expect(dead_code)]`
+is never used on them, because the first command would turn the expectation into a failure.
 
 No other item of the library carries a lint attribute for code that nothing uses. Such code is not written until
 something uses it.

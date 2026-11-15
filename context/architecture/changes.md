@@ -67,10 +67,16 @@ with the name of a group.
 A command file holds the node's arguments and the adapter from the parsed arguments to one call into a domain module.
 Logic that two commands share lives in a domain module, never under `commands/`. The file holds:
 
-- the node's arguments, and the typed parameters read from the parsed arguments;
+- the node's arguments, and the typed parameters read from the parsed arguments. Its `params` returns `Result<Params,
+  Termination>` and reads a value the node's parser requires or defaults through `arguments::required`. When the parsed
+  arguments do not hold that value the fault is the node's own parser, so `required` answers an internal failure, which
+  `run` returns; a command file builds no usage error for it;
 - one call into a domain module, which is handed `cx.files`, `cx.file_writer`, and `cx.cwd` as they are;
 - the mapping of that call's typed outcome to a `Termination`;
 - the text of the human line and the fields of the `--json` document, written as [below](#writing-the-result).
+
+A command file does not spell its own command path as a string literal. The path follows from where the file is, and
+reaches `run` as `cx.invoked`, with the usage of the node.
 
 A command file names none of these:
 
@@ -112,8 +118,9 @@ The verifiability matrix has a manual method for a change to discovery itself:
 
 `run` ends by writing its result through `crates/core/src/output.rs`, and returns what that call returns:
 `output::document` with the document under `--json`, and `output::line` with the human line otherwise. The command file
-builds the value and the text, and never writes to a handle itself or inspects a write error. The parser's help and
-version path writes through the same module, with `output::text` and `output::line`.
+builds the value and the text, and never writes to a handle itself or inspects a write error. The parser writes nothing:
+`crates/core/src/process.rs` writes the help and the version line the parser answers through the same module, with
+`output::text` and `output::line`.
 
 Each of the three functions hands its result to the handle whole, in one write. A line-buffered handle then keeps
 nothing of a write that fails, so the diagnostic of that failure is still written after it.
@@ -140,9 +147,11 @@ module's own that the command file takes apart into `Termination::Command` and `
 ## An error
 
 `Termination` has one variant per way an invocation ends, and each error enum it carries has one variant per failure. A
-variant is added by the behaviour that first returns it, in `crates/core/src/termination.rs`. A domain module's own
-error enum lives in the module; `CommandError` gains a variant that wraps it, and `lib.rs` re-exports the enum with the
-types its variants carry. [rust.md](../standards/rust.md#errors) has the rules an error type follows.
+variant is added by the behaviour that first returns it, in `crates/core/src/termination.rs`. A new variant that carries
+an error type holds it in a `Box`, under the rule on the width of `Termination` in
+[rust.md](../standards/rust.md#errors). A domain module's own error enum lives in the module; `CommandError` gains a
+variant that wraps it, and `lib.rs` re-exports the enum with the types its variants carry.
+[rust.md](../standards/rust.md#errors) has the rules an error type follows.
 
 ## A dependency
 

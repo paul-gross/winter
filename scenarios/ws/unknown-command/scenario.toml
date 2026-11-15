@@ -1,0 +1,4 @@
+summary = "A word under ws that names no command is a usage error: exit 2, and nothing is started."
+
+[[step]]
+args = ["ws", "nope"]
