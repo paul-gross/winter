@@ -164,21 +164,37 @@ fn write_whole(mut file: std::fs::File, mode: Option<u32>, content: &[u8]) -> io
 /// Files held in memory, for the unit tests of the modules that read through the port.
 #[cfg(test)]
 #[derive(Default)]
-pub(crate) struct MemoryFiles(
-    std::collections::BTreeMap<std::path::PathBuf, Result<Vec<u8>, io::ErrorKind>>,
-);
+pub(crate) struct MemoryFiles(std::collections::BTreeMap<std::path::PathBuf, MemoryEntry>);
+
+/// One entry of [`MemoryFiles`].
+#[cfg(test)]
+enum MemoryEntry {
+    /// A regular file with its content.
+    File(Vec<u8>),
+    /// A regular file whose every read fails.
+    FailingFile(io::ErrorKind),
+    /// An entry that is no regular file, and whose every read fails.
+    NotAFile(io::ErrorKind),
+}
 
 #[cfg(test)]
 impl MemoryFiles {
     /// Adds the regular file `path` with `content`.
     pub(crate) fn with(mut self, path: &str, content: &[u8]) -> Self {
-        self.0.insert(path.into(), Ok(content.to_vec()));
+        self.0
+            .insert(path.into(), MemoryEntry::File(content.to_vec()));
+        self
+    }
+
+    /// Adds the regular file `path`, which fails every read with `kind`.
+    pub(crate) fn failing(mut self, path: &str, kind: io::ErrorKind) -> Self {
+        self.0.insert(path.into(), MemoryEntry::FailingFile(kind));
         self
     }
 
     /// Adds an entry at `path` that exists, is no regular file, and fails every read with `kind`.
     pub(crate) fn unreadable(mut self, path: &str, kind: io::ErrorKind) -> Self {
-        self.0.insert(path.into(), Err(kind));
+        self.0.insert(path.into(), MemoryEntry::NotAFile(kind));
         self
     }
 }
@@ -187,14 +203,19 @@ impl MemoryFiles {
 impl ReadFiles for MemoryFiles {
     fn read(&self, path: &Path) -> io::Result<Option<Vec<u8>>> {
         match self.0.get(path) {
-            Some(Ok(bytes)) => Ok(Some(bytes.clone())),
-            Some(Err(kind)) => Err(io::Error::from(*kind)),
+            Some(MemoryEntry::File(bytes)) => Ok(Some(bytes.clone())),
+            Some(MemoryEntry::FailingFile(kind) | MemoryEntry::NotAFile(kind)) => {
+                Err(io::Error::from(*kind))
+            }
             None => Ok(None),
         }
     }
 
     fn is_file(&self, path: &Path) -> bool {
-        matches!(self.0.get(path), Some(Ok(_)))
+        matches!(
+            self.0.get(path),
+            Some(MemoryEntry::File(_) | MemoryEntry::FailingFile(_))
+        )
     }
 }
 

@@ -2,6 +2,7 @@
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use serde_json::{Value, json};
@@ -422,22 +423,56 @@ fn a_configuration_file_that_is_not_utf_8_is_a_file_read_error_with_the_toml_cau
 }
 
 #[test]
-fn a_local_configuration_file_that_cannot_be_read_is_a_file_read_error_with_the_io_cause() {
+fn a_directory_at_the_local_configuration_path_gives_the_answer_of_the_shared_file_alone() {
+    let shared = "env_aliases = [\"one\", \"two\"]\nenvs_per_workspace = 12\n";
     let tree = TempTree::new().expect("an isolated tree");
-    // A directory in the place of the local file: it exists, and reading it fails.
     let workspace = WorkspaceBuilder::new(&tree)
-        .config(DEFAULTS)
+        .config(shared)
         .file(".winter/config.local.toml/keep", b"")
         .build()
         .expect("a workspace");
+    let alone_tree = TempTree::new().expect("an isolated tree");
+    let alone = WorkspaceBuilder::new(&alone_tree)
+        .config(shared)
+        .build()
+        .expect("a workspace");
+
+    for name in ["two", "feature-x"] {
+        assert_eq!(
+            document(&workspace.root, name),
+            document(&alone.root, name),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        document(&workspace.root, "two"),
+        json!({"name": "two", "index": 2, "source": "suggested"})
+    );
+}
+
+#[test]
+fn a_regular_local_configuration_file_without_read_permission_is_a_file_read_error_with_the_io_cause()
+ {
+    let tree = TempTree::new().expect("an isolated tree");
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .local_config("envs_per_workspace = 12\n")
+        .build()
+        .expect("a workspace");
+    let local = workspace.root.join(".winter/config.local.toml");
+    std::fs::set_permissions(&local, std::fs::Permissions::from_mode(0o000)).expect("a mode");
+    if std::fs::read(&local).is_ok() {
+        // This user may read any file, and then no mode refuses the read.
+        return;
+    }
 
     let error = config_error(&workspace.root);
 
     assert!(
         matches!(
             &error,
-            ConfigError::FileRead { path, cause: FileCause::Io(_) }
-                if *path == workspace.root.join(".winter/config.local.toml")
+            ConfigError::FileRead { path, cause: FileCause::Io(cause) }
+                if *path == local && cause.kind() == std::io::ErrorKind::PermissionDenied
         ),
         "{error:?}"
     );

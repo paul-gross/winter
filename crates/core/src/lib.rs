@@ -6,7 +6,10 @@
 
 mod arguments;
 mod config_edit;
-mod config_raw;
+mod config_file;
+mod config_load;
+mod config_merge;
+mod config_model;
 mod context;
 mod diagnostics;
 #[cfg(test)]
@@ -29,6 +32,12 @@ mod workspace_files;
 mod workspace_root;
 
 pub use config_edit::{CatalogError, RepositoryKind};
+pub use config_model::{
+    AdoptExtensions, AgentOverride, DashboardLayout, EnvBands, EnvCommand, EnvFormat, EnvValue,
+    EnvVar, FileSizeLimits, GitIdentity, Keybindings, LoadMode, ModelTier, Nested, Ports,
+    ProjectRepository, RawArray, RawTable, RepositoryCommon, Space, StandaloneRepository, Vendor,
+    VendorModel, Workspace, WorkspaceConfig,
+};
 pub use process::{Identity, Interrupts, Invocation, ProcessEnv, run};
 pub use termination::{
     AgentOverrideFault, ChoiceKey, CommandError, ConfigError, ConfigFileName, ConfigValue,
