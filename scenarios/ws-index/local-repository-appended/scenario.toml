@@ -1,0 +1,5 @@
+summary = "A standalone repository of the local file is appended to those of the shared file, so one that takes the name of a shared one fails the load: exit 1."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

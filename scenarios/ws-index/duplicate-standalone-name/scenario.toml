@@ -1,0 +1,5 @@
+summary = "Two standalone repositories that resolve to one name, one by its name and one by its URL, fail the load: exit 1."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

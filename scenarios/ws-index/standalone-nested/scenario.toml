@@ -1,0 +1,5 @@
+summary = "A standalone repository declared as a nested workspace fails the load: exit 1."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

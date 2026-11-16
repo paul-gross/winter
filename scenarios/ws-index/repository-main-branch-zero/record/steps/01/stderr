@@ -1,0 +1,70 @@
+Traceback (most recent call last):
+  File "<REFERENCE>/tools/winter-cli/.venv/bin/winter", line 10, in <module>
+    sys.exit(cli())
+             ~~~^^
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/cli.py", line 431, in cli
+    exit_code = _cli_group.main(standalone_mode=False, obj=CliContext(container_source))
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 1406, in main
+    rv = self.invoke(ctx)
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/cli.py", line 223, in invoke
+    result = super().invoke(ctx)
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 1873, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 1873, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 1269, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/decorators.py", line 34, in new_func
+    return f(get_current_context(), *args, **kwargs)
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/modules/workspace/command.py", line 1228, in ws_index
+    handler = container.workspace_handler()
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 2679, in dependency_injector.providers.Factory._provide
+  File "src/dependency_injector/providers.pxd", line 664, in dependency_injector.providers.__factory_call
+  File "src/dependency_injector/providers.pxd", line 591, in dependency_injector.providers.__call
+  File "src/dependency_injector/providers.pxd", line 459, in dependency_injector.providers.__provide_keyword_args
+  File "src/dependency_injector/providers.pxd", line 379, in dependency_injector.providers.__get_value
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 2679, in dependency_injector.providers.Factory._provide
+  File "src/dependency_injector/providers.pxd", line 664, in dependency_injector.providers.__factory_call
+  File "src/dependency_injector/providers.pxd", line 591, in dependency_injector.providers.__call
+  File "src/dependency_injector/providers.pxd", line 459, in dependency_injector.providers.__provide_keyword_args
+  File "src/dependency_injector/providers.pxd", line 379, in dependency_injector.providers.__get_value
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 2679, in dependency_injector.providers.Factory._provide
+  File "src/dependency_injector/providers.pxd", line 664, in dependency_injector.providers.__factory_call
+  File "src/dependency_injector/providers.pxd", line 591, in dependency_injector.providers.__call
+  File "src/dependency_injector/providers.pxd", line 459, in dependency_injector.providers.__provide_keyword_args
+  File "src/dependency_injector/providers.pxd", line 379, in dependency_injector.providers.__get_value
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 4343, in dependency_injector.providers.AttributeGetter._provide
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 4276, in dependency_injector.providers.ProvidedInstance._provide
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 3039, in dependency_injector.providers.Singleton._provide
+  File "src/dependency_injector/providers.pxd", line 664, in dependency_injector.providers.__factory_call
+  File "src/dependency_injector/providers.pxd", line 622, in dependency_injector.providers.__call
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 4561, in dependency_injector.providers.MethodCaller._provide
+  File "src/dependency_injector/providers.pxd", line 622, in dependency_injector.providers.__call
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/config/workspace.py", line 154, in load
+    ProjectRepositoryConfig(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        name=name,
+        ^^^^^^^^^^
+    ...<8 lines>...
+        },
+        ^^
+    )
+    ^
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/pydantic/main.py", line 263, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for ProjectRepositoryConfig
+main_branch
+  Input should be a valid string [type=string_type, input_value=0, input_type=int]
+    For further information visit https://errors.pydantic.dev/2.13/v/string_type

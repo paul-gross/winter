@@ -1,0 +1,5 @@
+summary = "A project repository that declares envs without nested = true fails the load: exit 1."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

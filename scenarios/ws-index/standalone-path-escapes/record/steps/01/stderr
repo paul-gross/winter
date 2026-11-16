@@ -1,0 +1,1 @@
+error: Invalid path '../tools' for standalone repo 'tools': must be a relative path under the workspace root with no `..` segments.

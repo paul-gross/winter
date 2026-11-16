@@ -1,0 +1,8 @@
+summary = "A project repository whose name is the integer 0, with no URL, fails the load: exit 1."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"
+
+[deviation]
+decision = "decision:parallel-workspaces/workspace-configuration/element-type-validation"

@@ -1,0 +1,5 @@
+[[standalone_repository]]
+name = "tools"
+
+[[standalone_repository]]
+url = "https://fixture.invalid/tools.git"

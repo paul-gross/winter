@@ -1,0 +1,5 @@
+summary = "Two project repositories of one name are accepted, and the index is answered."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

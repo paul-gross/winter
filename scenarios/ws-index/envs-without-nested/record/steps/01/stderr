@@ -1,0 +1,1 @@
+error: Invalid `envs` for project repo 'api': only a `nested = true` repo can set `envs`.

@@ -1,0 +1,5 @@
+summary = "A project repository whose name is the integer 0 beside a URL fails the load: exit 1."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

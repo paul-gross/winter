@@ -1,0 +1,8 @@
+summary = "A repository whose cmd is a string and not an array of strings fails the load: exit 1."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"
+
+[deviation]
+decision = "decision:parallel-workspaces/workspace-configuration/element-type-validation"

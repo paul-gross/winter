@@ -1,0 +1,1 @@
+error: Invalid `nested = true` for standalone repo 'tools': a standalone is one checkout shared by the whole workspace, so only a [[project_repository]] can be a nested workspace.
