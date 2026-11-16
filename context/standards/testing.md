@@ -15,10 +15,12 @@ Choose the lowest tier that can make the claim:
 
 - A unit test takes no file, git, or process input and uses nothing from the support package. There are two exceptions.
   The unit tests of the file port, `crates/core/src/files.rs`, touch the file system, and only inside a `TempTree` of
-  their own. In the binary package, a unit test whose subject ends its own process, the SIGINT handler of
-  `crates/cli/src/interrupt.rs`, starts a child test of its own test binary through `invoke`, as
-  [Tests that must fail](#tests-that-must-fail) describes; the child raises the signal on itself, and the test sends
-  none.
+  their own. In the binary package, a unit test whose subject ends its own process or changes its own environment starts
+  a child test of its own test binary through `invoke`, as [Tests that must fail](#tests-that-must-fail) describes.
+  There are three such subjects: the SIGINT handler of `crates/cli/src/interrupt.rs`; the removal of the generic
+  exporter variables in `crates/cli/src/trace.rs`; and the tracer of that file under the handler, whose test holds the
+  `Collector` its child exports to and writes the certificate file the child reads. A child that takes an interrupt
+  raises the signal on itself, and the test sends none.
 - A component test runs the library in process and asserts on the returned `Termination` and on what was written. The
   run is built through the scaffold `crates/core/tests/support/in_process.rs`, a module the test file declares by
   `#[path]`. `InProcess` takes the arguments, the working directory, the environment, and stdin, calls the library's
@@ -134,8 +136,13 @@ The sockets a test opens or causes are these, each on 127.0.0.1, and no other:
 
 What the collector gives a test:
 
-- `Collector::start` takes the `Answer` every request gets: `Ok`, a success status; `Status`, the status it names; or
-  `Hang`, no answer, with the connection held open until the collector stops.
+- `Collector::start` takes the `Answer` every request gets: `Ok`, a success status; `Status`, the status it names;
+  `Hang`, no answer; `Stall`, the head of a success status that announces a body of 1048576 bytes, and none of that
+  body; or `Drip`, the same head and then one byte of the body every 20 ms. The connection of each of the last three is
+  held open until the collector stops, and no longer.
+- A test of a bound in time holds its peer until the subject has ended, and waits out no stall of a fixed length: it
+  stops the collector only after the child has ended, so a subject that waits for its peer does not end by itself and
+  fails at the deadline of `invoke`.
 - `endpoint` is the address a client is given, `http://127.0.0.1:<port>`.
 - The thread reads one HTTP/1.1 request from each connection: the request line, the headers, and a body of
   `Content-Length` bytes, within five seconds. Anything else, a TLS handshake or a chunked body for one, counts in
@@ -153,6 +160,29 @@ format, which its documentation lists, and the support package depends on no tra
 exporter wrote with what it should have written. It skips every field it does not read, and a message it cannot read
 through is an error.
 
+## A test that wants a span
+
+The pinned environment turns tracing off: it sets the kill switch, `OTEL_SDK_DISABLED`, to `true`. A test that wants the
+binary to trace does three things through `PinnedEnv::set`:
+
+- it sets `OTEL_SDK_DISABLED` to `false`, which clears the kill switch;
+- it sets `WINTER_OTEL_EXPORTER_OTLP_ENDPOINT` to the endpoint of a `Collector` it started, or to an address
+  `Collector::refused_endpoint` gave;
+- it sets `SSL_CERT_FILE` to a certificate file it wrote under `tmp/` of its tree.
+
+The exporter reads its trust store when it is built, for an `http` endpoint as for an `https` one, and with
+`SSL_CERT_FILE` set it reads that file and not the store of the host. The file holds the text of
+`crates/cli/tests/data/trust-root.pem`, which the test compiles in: one self-signed certificate made for the tests,
+whose private key was discarded. No test reads the committed file when it runs, and no test completes a TLS handshake,
+so the certificate judges nothing. A test of a machine without certificates names an empty file of its tree instead, and
+tracing is then unavailable. No test sets the variable that names a directory of certificates.
+
+The real exporter is built only in a child a test starts through `invoke` under the pinned environment, and never in a
+test process, where it would read the proxy, tracing, and certificate variables of the developer. That child is the
+built binary, in `crates/cli/tests/trace.rs`, by preference. The one other is the child test of
+`crates/cli/src/trace.rs` whose subject ends its own process. Every other test of the tracer in that file goes through
+`Tracer::with_exporter` with an exporter of its own that records what it is handed and opens no socket.
+
 ## What a test never does
 
 The standing rule in [AGENTS.md](../../AGENTS.md) holds for every test of the library, the binary, and the support
@@ -168,7 +198,9 @@ package. In practice:
 - It resolves no host name. Fixture remotes are the tree's own bare repositories.
 - It opens no socket but those [The trace collector](#the-trace-collector) lists.
 - It lets nothing of the developer's environment or home directory reach a child or decide a result. The test process
-  reads its own environment only for `WINTER_TEST_` variables and for the directory of the host's git on `PATH`.
+  reads its own environment only for `WINTER_TEST_` variables and for the directory of the host's git on `PATH`. The two
+  fixtures of `crates/cli/src/trace.rs` are the exception: each is a child that reads the whole environment it was
+  started with, which is the pinned one of its parent's tree.
 
 The driver's own tests, in `crates/dev/`, test the tooling and not the product. Those of the gates and of the
 architecture rules do not use the isolated tree: they start Cargo and `/bin/sh` directly, read the checkout, and write
@@ -197,3 +229,9 @@ own process. Each starts its fixture as a child test of its own test binary, at 
 exact name of the fixture. The fixture sets the disposition of SIGINT it is to start with, default or ignore, calls the
 installer, writes a line to stdout, and raises SIGINT on itself, and the test reads the exit and both streams of the
 child once it has ended. No test sends a signal to another process.
+
+The unit tests of `crates/cli/src/trace.rs` have two fixtures of the same pattern. One calls the removal of the generic
+exporter variables on a snapshot of its own environment, which its parent gave two such variables, and asserts that the
+process holds neither afterwards and the snapshot both. The other installs the handler, has the library announce a
+command to a tracer built from its environment, which names the parent's `Collector`, writes a line to stdout, and
+raises SIGINT on itself; its parent asserts the exit code 1 and that the collector read no request.

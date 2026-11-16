@@ -350,10 +350,22 @@ pub enum Answer {
     Status(u16),
     /// No answer: the connection is kept open and silent until the collector is stopped or dropped.
     Hang,
+    /// The head of a status 200 that announces a body of [`ANNOUNCED_BODY`] bytes, and none of that body: the
+    /// connection is kept open and silent after the head until the collector is stopped or dropped.
+    Stall,
+    /// The same head, then one zero byte of the body every 20 ms, until the collector is stopped or dropped or
+    /// the client refuses a byte.
+    Drip,
 }
 
 /// How long the listener waits before it asks again for a connection.
 const ACCEPT_PAUSE: Duration = Duration::from_millis(1);
+/// How long after the head, and after each byte, the next byte of a dripped body is written.
+const DRIP_PAUSE: Duration = Duration::from_millis(20);
+/// The length of the body the head of [`Answer::Stall`] and [`Answer::Drip`] announces: at one byte every
+/// [`DRIP_PAUSE`] it would take over five hours, so no client reads it to its end.
+const ANNOUNCED_BODY: usize = 1024 * 1024;
+
 /// How long one connection is read for, from its acceptance.
 const READ_LIMIT: Duration = Duration::from_secs(5);
 /// How long a stopped collector goes on serving the connections that were made before the stop.
@@ -372,6 +384,10 @@ const HEAD_END: &[u8] = b"\r\n\r\n";
 /// `Content-Length` bytes, within five seconds of accepting the connection. A request it cannot read that
 /// way, a TLS handshake or a chunked body for one, counts as a connection, adds no request, and is closed
 /// unanswered.
+///
+/// What the request is answered is the [`Answer`] the collector was started with. A connection that answer
+/// holds open lasts until the collector is stopped and no longer, so no test waits out a stall of a fixed
+/// length.
 ///
 /// Stopping the collector, through [`Collector::requests`] or a drop, first serves the connections that were
 /// made before the stop, for five seconds at most, then joins the thread, which closes the listener and every
@@ -485,7 +501,9 @@ struct Limits {
 /// Serves connections until `stop` is set and none is waiting, or until `limits.drain` after the stop was
 /// seen, and answers the requests that were read.
 ///
-/// The connections of [`Answer::Hang`] are held until this returns.
+/// The connections of [`Answer::Hang`], [`Answer::Stall`], and [`Answer::Drip`] are held until this returns,
+/// which closes them. Between two looks for a connection, each connection of [`Answer::Drip`] whose next byte
+/// is due is written that byte.
 fn listen(
     listener: &TcpListener,
     answer: Answer,
@@ -495,8 +513,10 @@ fn listen(
 ) -> Vec<ReceivedRequest> {
     let mut requests = Vec::new();
     let mut held = Vec::new();
+    let mut dripping: Vec<Dripping> = Vec::new();
     let mut drained_by = None;
     loop {
+        dripping.retain_mut(Dripping::drip);
         // Read before the listener is asked: a connection made before the stop is then found waiting, and is
         // served unless `limits.drain` has passed since the stop was first seen here.
         let stopping = stop.load(Ordering::SeqCst);
@@ -519,6 +539,14 @@ fn listen(
                     Answer::Ok => respond(&mut stream, 200, "OK"),
                     Answer::Status(status) => respond(&mut stream, status, "Status"),
                     Answer::Hang => held.push(stream),
+                    Answer::Stall => {
+                        announce_body(&mut stream);
+                        held.push(stream);
+                    }
+                    Answer::Drip => {
+                        announce_body(&mut stream);
+                        dripping.extend(Dripping::after_the_head(stream));
+                    }
                 }
             }
             Err(_) if stopping => break,
@@ -526,6 +554,47 @@ fn listen(
         }
     }
     requests
+}
+
+/// A connection whose client is sent the announced body one byte at a time.
+struct Dripping {
+    stream: TcpStream,
+    /// When the next byte is due.
+    next: Instant,
+}
+
+impl Dripping {
+    /// The connection `stream`, whose head was just written and whose first byte is due one pause later, or
+    /// `None` when the connection cannot be set up for it.
+    ///
+    /// Each byte is sent as a segment of its own, and a write never waits for the client: the thread that
+    /// writes is the one that takes the connections.
+    fn after_the_head(stream: TcpStream) -> Option<Self> {
+        stream.set_nodelay(true).ok()?;
+        stream.set_nonblocking(true).ok()?;
+        Some(Self {
+            stream,
+            next: Instant::now() + DRIP_PAUSE,
+        })
+    }
+
+    /// Writes one zero byte when it is due, and answers whether the connection is kept: a byte the client does
+    /// not take, because it is gone or reads nothing, ends the dripping and closes the connection.
+    fn drip(&mut self) -> bool {
+        let now = Instant::now();
+        if now < self.next {
+            return true;
+        }
+        self.next = now + DRIP_PAUSE;
+        matches!(self.stream.write(&[0]), Ok(1))
+    }
+}
+
+/// Writes the head of a response with status 200 that announces a body of [`ANNOUNCED_BODY`] bytes, and nothing
+/// of that body. A client that is gone is no failure of the collector.
+fn announce_body(stream: &mut TcpStream) {
+    let head = format!("HTTP/1.1 200 OK\r\ncontent-length: {ANNOUNCED_BODY}\r\n\r\n");
+    let _ = stream.write_all(head.as_bytes());
 }
 
 /// Writes a response with `status` and no body. A client that is gone is no failure of the collector.

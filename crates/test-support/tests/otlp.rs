@@ -300,3 +300,90 @@ fn a_body_longer_than_the_collector_reads_adds_no_request() {
 
     assert_eq!(collector.requests(), []);
 }
+
+/// The head a collector that stalls or drips answers a request with.
+const ANNOUNCING_HEAD: &[u8] = b"HTTP/1.1 200 OK\r\ncontent-length: 1048576\r\n\r\n";
+/// How long the client of a collector that stalls waits for a byte of the body before it gives up.
+const STALL_DEADLINE: Duration = Duration::from_millis(300);
+/// How long the client of a collector that drips waits for each byte of the body, which is due every 20 ms.
+const DRIP_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Reads the head of an answer that announces a body from `client`, and nothing after it.
+fn announcing_head_on(client: &mut TcpStream) {
+    let mut head = vec![0; ANNOUNCING_HEAD.len()];
+    client.read_exact(&mut head).expect("the head of an answer");
+    assert_eq!(
+        String::from_utf8_lossy(&head),
+        String::from_utf8_lossy(ANNOUNCING_HEAD)
+    );
+}
+
+#[test]
+fn a_collector_that_stalls_records_the_request_and_answers_a_head_and_none_of_the_body_it_announces()
+ {
+    let collector = Collector::start(Answer::Stall).expect("a collector");
+    let mut client = connect(&collector.endpoint());
+
+    client.write_all(&post()).expect("a request sent");
+    announcing_head_on(&mut client);
+    client
+        .set_read_timeout(Some(STALL_DEADLINE))
+        .expect("a read deadline");
+    let mut byte = [0; 1];
+    let read = client.read(&mut byte);
+
+    let error = read.expect_err("no byte of the body and an open connection until the deadline");
+    assert!(
+        matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut),
+        "{error:?}"
+    );
+    assert_eq!(collector.connections(), 1);
+    // The held connection adds no wait to the stop: a stop that waited for it would never return.
+    assert_eq!(collector.requests(), [posted()]);
+}
+
+#[test]
+fn a_collector_that_drips_records_the_request_and_sends_the_body_it_announces_a_byte_at_a_time() {
+    let collector = Collector::start(Answer::Drip).expect("a collector");
+    let mut client = connect(&collector.endpoint());
+
+    client.write_all(&post()).expect("a request sent");
+    announcing_head_on(&mut client);
+    client
+        .set_read_timeout(Some(DRIP_DEADLINE))
+        .expect("a read deadline");
+    // Each read is given room for the whole body and returns what has arrived: two bytes in one of them would
+    // be two bytes the collector wrote less than its pause apart, or a client that did not run for that pause.
+    let mut room = [0xff; 64];
+    for nth in 1..=3 {
+        let count = client.read(&mut room).expect("a byte of the body");
+        assert_eq!(room[..count], [0], "byte {nth} of the body");
+    }
+
+    drop(collector);
+
+    // Bytes that were under way are read first; then the connection is found closed, not silent.
+    let mut rest = Vec::new();
+    client
+        .read_to_end(&mut rest)
+        .expect("the connection closed");
+    assert!(rest.iter().all(|byte| *byte == 0), "{rest:?}");
+}
+
+#[test]
+fn a_collector_that_drips_still_serves_a_client_after_another_left() {
+    let collector = Collector::start(Answer::Drip).expect("a collector");
+    let mut gone = connect(&collector.endpoint());
+    gone.write_all(&post()).expect("a request sent");
+    announcing_head_on(&mut gone);
+    drop(gone);
+
+    let mut client = connect(&collector.endpoint());
+    client.write_all(&post()).expect("a request sent");
+    announcing_head_on(&mut client);
+    let mut byte = [0xff; 1];
+    client.read_exact(&mut byte).expect("a byte of the body");
+
+    assert_eq!(byte, [0]);
+    assert_eq!(collector.requests(), [posted(), posted()]);
+}

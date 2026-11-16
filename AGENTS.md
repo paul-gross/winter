@@ -7,7 +7,7 @@ workspace.
 
 - Run `cargo dev gate slice` before handing a change over; run `cargo dev gate full` before a merge.
 - A command is one file under `crates/core/src/commands/`; no registry is edited.
-- The library returns values; only the binary package touches process streams, environment, and exit.
+- The library returns values; only the binary package touches process streams, environment, sockets, and exit.
 - Tests of the library, the binary, and the support package run in an isolated tree from
   `winter-workspace-test-support`; such a test never touches a real workspace, a real repository, the network, or
   anything else outside its tree; the only host programs it runs are git and the base system utilities on the pinned

@@ -1,11 +1,14 @@
-//! The process boundary: the file that names the process streams and the process environment, and that ends
-//! every invocation an interrupt does not, which the handler of `interrupt.rs` ends itself. Outside a test
-//! module no other file of the binary names a stream or the environment; a test of the handler reads the path
-//! of its own test executable to start its fixture, and the fixture reads the variable that names it and writes
-//! its lines to stdout.
+//! The process boundary: the file that names the process streams and snapshots the process environment, and
+//! that ends every invocation an interrupt does not, which the handler of `interrupt.rs` ends itself. Outside a
+//! test module no other file of the binary names a stream, and one other names the environment: `trace.rs`
+//! removes from it the variables this file tells it to hide. A test of the handler or of the tracer reads the
+//! path of its own test executable to start its fixture, and the fixture reads the variable that names it and
+//! writes its lines to stdout.
 //!
-//! `main` snapshots what the process supplies and hands it over; [`conclude`] turns what the run answers, a
-//! panic included, into the last bytes on stderr and the exit code.
+//! `main` snapshots what the process supplies, builds the tracer, and hands both over; [`conclude`] turns what
+//! the run answers, a panic included, into the last bytes on stderr and the exit code, and has the tracer end
+//! its span in between. `main` returns that exit code and joins no thread: the thread the tracer starts for its
+//! export may still be at work then, and ends with the process.
 
 use std::any::Any;
 use std::backtrace::{Backtrace, BacktraceStatus};
@@ -14,10 +17,14 @@ use std::panic::{self, AssertUnwindSafe, PanicHookInfo};
 use std::process::ExitCode;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread::{self, ThreadId};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use winter_workspace_core::{Identity, InternalError, Invocation, ProcessEnv, Termination, run};
+use winter_workspace_core::{
+    Identity, InternalError, Invocation, ProcessEnv, Termination, TraceSettings, run, settings,
+};
 
 mod interrupt;
+mod trace;
 
 fn main() -> ExitCode {
     interrupt::install(&interrupt::INTERRUPTS);
@@ -28,6 +35,13 @@ fn main() -> ExitCode {
     let env = ProcessEnv::from_vars(std::env::vars_os());
     let stdout_is_terminal = io::stdout().is_terminal();
     let stderr_is_terminal = io::stderr().is_terminal();
+    let trace_settings = settings(&env, now_unix_nano());
+    if matches!(trace_settings, TraceSettings::On(_)) {
+        // The process has one thread here, as the removal requires: nothing above starts one, and the
+        // interrupt handler, which may run at any instant, reads no variable.
+        trace::hide_generic_exporter_variables(&env);
+    }
+    let tracer = trace::Tracer::new(trace_settings);
 
     let code = conclude(
         || {
@@ -48,10 +62,12 @@ fn main() -> ExitCode {
                 stdout_is_terminal,
                 stderr_is_terminal,
                 interrupts: &interrupt::INTERRUPTS,
+                tracer: &tracer,
             })
         },
         || io::stdout().flush(),
         &mut io::stderr(),
+        |error_type, stderr| tracer.finish(error_type, stderr),
     );
     ExitCode::from(code)
 }
@@ -66,12 +82,16 @@ fn main() -> ExitCode {
 /// 3. The diagnostic of the ending, when it has one, is written to `stderr`, with a newline added when the text
 ///    lacks one.
 /// 4. The backtrace of an internal failure is written after it, when one was captured.
+/// 5. `finish` is called with the error type of the ending, which is `None` exactly when the exit code is 0,
+///    and with `stderr`, inside an unwind catch of its own: a panic there is dropped and writes nothing.
 ///
-/// A write to `stderr` that fails is ignored, and nothing further is written: the exit code stands.
+/// A write to `stderr` that fails in step 3 or 4 is ignored, and nothing further of the two is written. Whatever
+/// `finish` does, the exit code is the one of the ending.
 fn conclude(
     run: impl FnOnce() -> Termination,
     flush: impl FnOnce() -> io::Result<()>,
     stderr: &mut dyn Write,
+    finish: impl FnOnce(Option<&'static str>, &mut dyn Write),
 ) -> u8 {
     let thread = thread::current().id();
     arm(thread);
@@ -96,7 +116,22 @@ fn conclude(
 
     // What stderr refuses is lost: the exit code stands.
     let _ = write_diagnostic(stderr, &termination);
+    // A panic of `finish` is dropped, unwritten: the thread is armed so that the hook keeps it from stderr, and
+    // the ending is final by now.
+    let error_type = termination.error_type();
+    arm(thread);
+    let _ = panic::catch_unwind(AssertUnwindSafe(|| finish(error_type, stderr)));
+    disarm(thread);
     termination.exit_code()
+}
+
+/// The instant of the call in nanoseconds since the Unix epoch, or 0 when the clock reads earlier than that.
+fn now_unix_nano() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|since| u64::try_from(since.as_nanos()).ok())
+        .unwrap_or(0)
 }
 
 /// Writes the diagnostic of `termination`, and the backtrace an internal failure captured, each as one
@@ -132,8 +167,10 @@ struct Panicked {
 
 /// One slot per armed thread, keyed by the thread's id. A slot is empty until that thread panics.
 ///
-/// A thread is armed while [`conclude`] runs its `run` on it. The panic hook stores a panic only in the slot of
-/// the thread that panics, so two threads that panic at once each keep their own.
+/// A thread is armed while [`conclude`] runs its `run` or its `finish` on it, and the thread `trace.rs` starts
+/// for the export arms itself for as long as it ends, exports, and drops the span and the provider. The panic
+/// hook stores a panic only in the slot of the thread that panics, so two threads that panic at once each keep
+/// their own.
 static SLOTS: Mutex<Vec<(ThreadId, Option<Panicked>)>> = Mutex::new(Vec::new());
 
 /// The slots. A lock a panicking holder left poisoned is taken all the same: the hook must not panic.
@@ -210,7 +247,7 @@ mod tests {
 
     /// Installs the boundary's hook, once for the test process, over a hook that notes the panicking thread
     /// and then reports the panic as the test harness always does.
-    fn install() {
+    pub(crate) fn install() {
         static INSTALLED: Once = Once::new();
         INSTALLED.call_once(|| {
             let harness = panic::take_hook();
@@ -225,7 +262,7 @@ mod tests {
         });
     }
 
-    fn was_forwarded(thread: ThreadId) -> bool {
+    pub(crate) fn was_forwarded(thread: ThreadId) -> bool {
         FORWARDED
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -271,6 +308,15 @@ mod tests {
                 name: "--nope".to_owned(),
             },
         }))
+    }
+
+    /// [`super::conclude`] with a `finish` that does nothing, for a test that asserts nothing about it.
+    fn conclude(
+        run: impl FnOnce() -> Termination,
+        flush: impl FnOnce() -> io::Result<()>,
+        stderr: &mut dyn Write,
+    ) -> u8 {
+        super::conclude(run, flush, stderr, |_, _| {})
     }
 
     fn flush_failing(kind: io::ErrorKind) -> impl FnOnce() -> io::Result<()> {
@@ -533,5 +579,134 @@ mod tests {
         let mut stderr = Refusing::default();
         assert_eq!(conclude(|| Termination::Success, || Ok(()), &mut stderr), 0);
         assert_eq!(stderr.writes, 0);
+    }
+
+    /// What one call of `finish` was given: the error type, and what stderr held by then.
+    type Finished = (Option<&'static str>, String);
+
+    /// Runs [`super::conclude`] over `run` and `flush` with a `finish` that records each of its calls, and
+    /// returns the exit code with those calls.
+    fn concluded(
+        run: impl FnOnce() -> Termination,
+        flush: impl FnOnce() -> io::Result<()>,
+    ) -> (u8, Vec<Finished>) {
+        install();
+        let mut calls = Vec::new();
+        // The stderr of the boundary is shared with `finish` here, which reads what was written before it.
+        let written = std::cell::RefCell::new(Vec::new());
+        let mut stderr = Shared(&written);
+
+        let code = super::conclude(run, flush, &mut stderr, |error_type, _| {
+            calls.push((error_type, text(written.borrow().clone())));
+        });
+
+        (code, calls)
+    }
+
+    /// A stderr that appends to bytes the test also reads.
+    struct Shared<'a>(&'a std::cell::RefCell<Vec<u8>>);
+
+    impl Write for Shared<'_> {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn finish_is_called_once_with_no_error_type_after_a_success() {
+        let (code, calls) = concluded(|| Termination::Success, || Ok(()));
+
+        assert_eq!(code, 0);
+        assert_eq!(calls, [(None, String::new())]);
+    }
+
+    #[test]
+    fn finish_is_called_once_after_the_diagnostic_of_a_usage_ending_is_written() {
+        let diagnostic = usage().diagnostic().expect("a diagnostic");
+
+        let (code, calls) = concluded(usage, || Ok(()));
+
+        assert_eq!(code, 2);
+        assert_eq!(calls, [(Some("Usage"), format!("{diagnostic}\n"))]);
+    }
+
+    #[test]
+    fn finish_is_given_the_ending_a_flush_that_fails_as_a_broken_pipe_makes_of_a_success() {
+        let (code, calls) = concluded(
+            || Termination::Success,
+            flush_failing(io::ErrorKind::BrokenPipe),
+        );
+
+        assert_eq!(code, 1);
+        assert_eq!(calls, [(Some("BrokenPipe"), String::new())]);
+    }
+
+    #[test]
+    fn finish_is_called_once_after_the_error_line_of_a_panic_is_written() {
+        let (code, calls) = concluded(|| panic!("the index is out of range"), || Ok(()));
+
+        assert_eq!(code, 1);
+        let [(error_type, written)] = calls.as_slice() else {
+            panic!("expected one call, got {calls:?}");
+        };
+        assert_eq!(*error_type, Some("Internal"));
+        assert!(written.starts_with("error: "), "{written}");
+        assert!(written.contains("the index is out of range"), "{written}");
+    }
+
+    #[test]
+    fn a_finish_that_panics_leaves_the_exit_code_of_each_ending_and_writes_nothing() {
+        install();
+        let diagnostic = usage().diagnostic().expect("a diagnostic");
+        let mut stderr = Vec::new();
+
+        let code = super::conclude(
+            || Termination::Success,
+            || Ok(()),
+            &mut stderr,
+            |_, _| panic!("the tracer gave up"),
+        );
+        assert_eq!(code, 0);
+        assert_eq!(text(stderr), "");
+
+        let mut stderr = Vec::new();
+        let code = super::conclude(
+            usage,
+            || Ok(()),
+            &mut stderr,
+            |_, _| panic!("the tracer gave up"),
+        );
+        assert_eq!(code, 2);
+        assert_eq!(text(stderr), format!("{diagnostic}\n"));
+
+        let thread = thread::current().id();
+        assert!(!was_forwarded(thread));
+        assert!(slots().iter().all(|(armed, _)| *armed != thread));
+    }
+
+    #[test]
+    fn a_finish_that_writes_to_a_stderr_that_refuses_leaves_the_exit_code_of_each_ending() {
+        install();
+        fn writing(_: Option<&'static str>, stderr: &mut dyn Write) {
+            // What a tracer does with a record: it writes, and drops the failure.
+            let _ = stderr.write_all(b"ERROR trace: the command span was not exported\n");
+        }
+
+        let mut stderr = Refusing::default();
+        let code = super::conclude(|| Termination::Success, || Ok(()), &mut stderr, writing);
+        assert_eq!(code, 0);
+        assert_eq!(stderr.writes, 1, "the write of `finish` alone");
+
+        let mut stderr = Refusing::default();
+        assert_eq!(super::conclude(usage, || Ok(()), &mut stderr, writing), 2);
+        assert_eq!(
+            stderr.writes, 2,
+            "the diagnostic, then the write of `finish`"
+        );
     }
 }

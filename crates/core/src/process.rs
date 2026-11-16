@@ -14,6 +14,7 @@ use crate::output;
 use crate::parse::{self, Outcome, Parsed, Stage};
 use crate::registry::{Entry, REGISTRY};
 use crate::termination::{InternalError, Termination};
+use crate::trace::{CommandTracer, TraceLog};
 
 /// The name and version the binary reports.
 pub struct Identity {
@@ -36,6 +37,11 @@ impl ProcessEnv {
     pub fn get(&self, key: &str) -> Option<&OsStr> {
         self.0.get(OsStr::new(key)).map(OsString::as_os_str)
     }
+
+    /// Every name the snapshot holds, in no particular order.
+    pub fn names(&self) -> impl Iterator<Item = &OsStr> {
+        self.0.keys().map(OsString::as_os_str)
+    }
 }
 
 /// Everything one invocation is given by the process that hosts it.
@@ -54,6 +60,8 @@ pub struct Invocation<'a> {
     pub stderr_is_terminal: bool,
     /// The interrupt state of the process, shared with the handler the host installed.
     pub interrupts: &'a Interrupts,
+    /// The tracer of the host, which is told once which command the invocation runs.
+    pub tracer: &'a dyn CommandTracer,
 }
 
 /// Whether a command has taken the interrupt over, and whether an interrupt arrived.
@@ -141,10 +149,10 @@ struct DispatchAtRoot;
 /// [`run`] over the commands of `entries`: asks the parser, then acts on its answer.
 ///
 /// The one place that writes the help and the version line, builds the `Context`, and calls a command. Once a
-/// command name was resolved it writes one debug record that names the command path to the stderr handle,
-/// whatever the outcome. The working directory is read only for a command that is dispatched: when the
-/// invocation carries an error in its place, that command is not called and the invocation ends as an internal
-/// failure with the error as its source.
+/// command name was resolved it writes one debug record that names the command path to the stderr handle and
+/// then announces that path to the tracer of the invocation, once and whatever the outcome. The working
+/// directory is read only for a command that is dispatched: when the invocation carries an error in its place,
+/// that command is not called and the invocation ends as an internal failure with the error as its source.
 pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termination {
     let Invocation {
         args,
@@ -157,6 +165,7 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
         stdout_is_terminal,
         stderr_is_terminal,
         interrupts,
+        tracer,
     } = invocation;
 
     let Parsed { stage, outcome } = parse::parse(entries, &identity, &args);
@@ -176,6 +185,7 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
                     only_when_switched: false,
                 },
             );
+            tracer.command_started(&invoked.path, TraceLog::new(log));
             Some((invoked, options, log))
         }
     };
@@ -218,7 +228,7 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
 /// written to stdout and to stderr.
 ///
 /// The working directory is `/`, the environment and stdin are empty, neither stream is a terminal, and the
-/// interrupt state is one of the run's own.
+/// interrupt state is one of the run's own. The tracer is the one that does nothing.
 #[cfg(test)]
 pub(crate) fn run_in_memory(entries: &[Entry], args: &[&str]) -> (Termination, String, String) {
     let mut stdin: &[u8] = &[];
@@ -241,6 +251,7 @@ pub(crate) fn run_in_memory(entries: &[Entry], args: &[&str]) -> (Termination, S
             stdout_is_terminal: false,
             stderr_is_terminal: false,
             interrupts: &interrupts,
+            tracer: &crate::trace::NoTrace,
         },
     );
     (

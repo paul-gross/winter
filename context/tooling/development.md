@@ -8,6 +8,10 @@ repository root.
 The toolchain is pinned in `rust-toolchain.toml`: one Rust release, with rustfmt and Clippy. With `rustup` installed,
 `rustup toolchain install` in the checkout installs it.
 
+The build of the binary also needs a C compiler, and was made with `gcc`: the TLS stack of the trace exporter takes its
+cryptography from the crate `aws-lc-sys`, whose build script compiles C and assembly sources it carries. On x86-64
+Linux, where this was built, that script needed nothing else: no CMake and no other tool.
+
 Dependencies are fetched once per checkout, and again whenever `Cargo.lock` changes:
 
 ```bash

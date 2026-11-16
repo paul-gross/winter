@@ -677,3 +677,41 @@ fn an_invocation_that_dispatches_no_command_ends_the_same_without_a_readable_wor
         assert_eq!(without.stderr, with.stderr, "{args:?}");
     }
 }
+
+fn path(names: &[&str]) -> Option<Vec<String>> {
+    Some(names.iter().map(|name| (*name).to_owned()).collect())
+}
+
+#[test]
+fn a_command_that_runs_is_announced_to_the_tracer_by_its_command_path() {
+    assert_eq!(index_run(&[], None).announced, path(&["ws", "index"]));
+}
+
+#[test]
+fn a_usage_error_and_the_help_of_a_command_stage_are_announced_by_the_path_resolved_so_far() {
+    for (args, announced) in [
+        (&["ws", "index", "--bogus"][..], &["ws", "index"][..]),
+        (&["ws", "--help"], &["ws"]),
+        (&["ws", "nope"], &["ws"]),
+    ] {
+        assert_eq!(
+            InProcess::new(args).run().announced,
+            path(announced),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn an_invocation_that_ends_at_the_root_announces_no_command() {
+    for args in [
+        &["--version"][..],
+        &["--help"],
+        &["--bogus"],
+        &["nope"],
+        &["-v", "-v", "ws", "index", "feature-x"],
+        &[],
+    ] {
+        assert_eq!(InProcess::new(args).run().announced, None, "{args:?}");
+    }
+}

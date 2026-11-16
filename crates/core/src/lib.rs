@@ -34,4 +34,6 @@ pub use termination::{
     CommandError, ConfigError, FileCause, InternalError, ParseFault, Termination, TomlParseError,
     Usage, UsageError,
 };
-pub use trace::{TraceConfig, TraceSettings, settings, span_name};
+pub use trace::{
+    CommandTracer, NoTrace, TraceConfig, TraceLog, TraceSettings, settings, span_name,
+};

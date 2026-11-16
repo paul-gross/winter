@@ -1,10 +1,18 @@
-//! The pure part of tracing: the settings of the command span, read from the environment snapshot, and the
-//! span's name.
+//! The pure part of tracing: the settings of the command span, read from the environment snapshot, the span's
+//! name, the port `run` announces a command to, and the two log records about tracing.
 //!
-//! Nothing here reads a clock, opens a socket, or names a tracing crate: the instant is an argument, and the
-//! environment is the snapshot.
+//! Nothing here reads a clock, opens a socket, or names a tracing crate: the instant is an argument, the
+//! environment is the snapshot, and the host's tracer is behind the port.
 
+use std::fmt::Display;
+use std::io::Write;
+
+use crate::diagnostics::{self, Record};
+use crate::logging::{Level, Log};
 use crate::process::ProcessEnv;
+
+/// The origin of the records about tracing.
+const ORIGIN: &str = "trace";
 
 /// The base address of the collector. Tracing is on only when it is set and not blank.
 const ENDPOINT: &str = "WINTER_OTEL_EXPORTER_OTLP_ENDPOINT";
@@ -93,6 +101,66 @@ pub fn settings(env: &ProcessEnv, now_unix_nano: u64) -> TraceSettings {
 /// The name of the command span: the literal `winter`, then the command path, joined by single spaces.
 pub fn span_name(command_path: &[String]) -> String {
     format!("winter {}", command_path.join(" "))
+}
+
+/// The port [`run`](crate::run) announces the command to: the host's tracer opens the command span there.
+///
+/// It takes `&self` because the host shares its tracer with the process boundary, which ends the span.
+pub trait CommandTracer {
+    /// Called at most once for an invocation, when a command name was resolved and logging is: before the
+    /// command runs, and before a command's help or a usage error of a command alike. An invocation that ends
+    /// at the root never calls it.
+    fn command_started(&self, command_path: &[String], log: TraceLog);
+}
+
+/// The tracer that does nothing: for a host or a test that asserts nothing about tracing.
+pub struct NoTrace;
+
+impl CommandTracer for NoTrace {
+    fn command_started(&self, _: &[String], _: TraceLog) {}
+}
+
+/// The resolved logging of an invocation, as much of it as the host needs to report about tracing.
+#[derive(Clone, Copy)]
+pub struct TraceLog(Log);
+
+impl TraceLog {
+    pub(crate) fn new(log: Log) -> Self {
+        Self(log)
+    }
+
+    /// Reports to `err` that the export of the command span failed, with its `cause`: an error record, written
+    /// only when `-v` or a valid `WINTER_LOG_LEVEL` switched the record format.
+    pub fn export_failed(self, err: &mut dyn Write, cause: &dyn Display) {
+        self.report(
+            err,
+            Level::Error,
+            &format!("the command span was not exported: {cause}"),
+        );
+    }
+
+    /// Reports to `err` that tracing is on and cannot be carried out, with its `cause`: a debug record,
+    /// written only when `-v` or a valid `WINTER_LOG_LEVEL` switched the record format.
+    pub fn unavailable(self, err: &mut dyn Write, cause: &dyn Display) {
+        self.report(
+            err,
+            Level::Debug,
+            &format!("tracing is unavailable: {cause}"),
+        );
+    }
+
+    fn report(self, err: &mut dyn Write, level: Level, message: &str) {
+        diagnostics::record(
+            err,
+            self.0,
+            &Record {
+                level,
+                origin: ORIGIN,
+                message,
+                only_when_switched: true,
+            },
+        );
+    }
 }
 
 /// The value of `key` as text, or `None` when it is unset or not UTF-8.

@@ -29,6 +29,12 @@ the stderr handle and the `Log` of the invocation. That function alone decides w
 which format; no other module formats a log record or writes one to the stderr handle itself. This rule is checked in
 review: the scan for tokens does not see it.
 
+The library opens no socket, reads no clock, and names no tracing crate. What it knows of tracing is in
+`crates/core/src/trace.rs`: the settings, read from the environment snapshot at an instant the binary gives it, and the
+port `CommandTracer`, which `run` announces the command to. The binary implements that port in
+`crates/cli/src/trace.rs`, the one source file that names a tracing crate. No source of the library or of the binary
+names an asynchronous runtime or starts one: the HTTP client of the exporter runs its own. This is checked in review.
+
 ## Module files
 
 A module `x` is `x.rs`, with its children in `x/`. The architecture test fails on any `mod.rs` under `crates/core/src/`.
@@ -50,7 +56,11 @@ A module `x` is `x.rs`, with its children in `x/`. The architecture test fails o
   their own.
 - No `unwrap`, `expect`, or `panic!` is applied to a value that comes from the user, a file, or a child process.
 - A panic ends the invocation as the internal failure: the hook and `conclude` in `crates/cli/src/main.rs` turn it into
-  `Termination::Internal(InternalError::Panic { .. })`, with its error line on stderr and exit code 1. No library code
+  `Termination::Internal(InternalError::Panic { .. })`, with its error line on stderr and exit code 1. Three panics of
+  the binary's tracer are the exception, because tracing never changes how an invocation ends: one raised while
+  `crates/cli/src/trace.rs` builds the exporter and opens the span is caught there and leaves tracing unavailable; one
+  raised on the export thread, which ends and exports the span, is caught on that thread and is a failed export; and one
+  raised on the thread that calls the tracer to end the span is caught by `conclude` and dropped. No library code
   outside a test module catches an unwind. A test module may catch one to turn a panic of the code under test into a
   failure it reports itself, as the registry consistency check of `crates/core/src/parse.rs` does around the parser's
   debug assertions.
@@ -61,10 +71,13 @@ a test module included.
 
 ## Unsafe
 
-In the library and the binary, `unsafe` appears in `crates/cli/src/interrupt.rs` alone: where the disposition of SIGINT
-is read and the handler is installed, where the handler reads its state, writes its notice, and ends the process, and
-where its tests set the disposition and raise the signal. Each block carries a comment that states why it is sound. This
-is checked in review.
+In the library and the binary, `unsafe` appears in `crates/cli/src/interrupt.rs` and `crates/cli/src/trace.rs` alone. In
+`interrupt.rs` it is where the disposition of SIGINT is read and the handler is installed, where the handler reads its
+state, writes its notice, and ends the process, and where its tests set the disposition and raise the signal. In
+`trace.rs` it is the one block that removes the generic exporter variables from the process environment, which is sound
+because `main` calls it while the process has one thread, and in its test module the fixture that sets the disposition
+of SIGINT and raises the signal on itself. Each block carries a comment that states why it is sound. This is checked in
+review.
 
 ## Lint attributes
 
