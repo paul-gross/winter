@@ -276,7 +276,7 @@ fn a_slot_count_beyond_32_bits_gives_the_hash_itself_past_the_band_start() {
 }
 
 #[test]
-fn a_state_file_that_is_not_valid_toml_is_an_empty_registry() {
+fn a_state_file_that_is_not_valid_toml_is_a_file_read_error_and_changes_nothing() {
     let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
@@ -285,20 +285,64 @@ fn a_state_file_that_is_not_valid_toml_is_an_empty_registry() {
         .expect("a workspace");
     let before = snapshot(&workspace.root);
 
-    let ended = InProcess::new(&["ws", "index", "feature-x", "--json"])
-        .cwd(&workspace.root)
-        .run();
+    let error = config_error(&workspace.root);
 
-    let document = ended.document("a state file that is not valid TOML");
-    assert_eq!(
-        document,
-        json!({"name": "feature-x", "index": 40, "source": "suggested"})
+    assert!(
+        matches!(
+            &error,
+            ConfigError::FileRead { path, cause: FileCause::Toml(_) }
+                if *path == workspace.root.join(".winter/state.toml")
+        ),
+        "{error:?}"
     );
     assert_eq!(snapshot(&workspace.root), before);
 }
 
 #[test]
-fn a_state_file_that_cannot_be_read_is_an_empty_registry() {
+fn a_state_file_that_names_an_env_twice_is_a_file_read_error() {
+    let tree = TempTree::new().expect("an isolated tree");
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .state("[env_index]\nfeature-x = 14\nfeature-x = 15\n")
+        .build()
+        .expect("a workspace");
+
+    let error = config_error(&workspace.root);
+
+    assert!(
+        matches!(
+            &error,
+            ConfigError::FileRead { path, cause: FileCause::Toml(_) }
+                if *path == workspace.root.join(".winter/state.toml")
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_state_file_that_is_not_utf_8_is_a_file_read_error_with_an_invalid_data_cause() {
+    let tree = TempTree::new().expect("an isolated tree");
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(DEFAULTS)
+        .file(".winter/state.toml", &[0xff, 0xfe, b'\n'])
+        .build()
+        .expect("a workspace");
+
+    let error = config_error(&workspace.root);
+
+    assert!(
+        matches!(
+            &error,
+            ConfigError::FileRead { path, cause: FileCause::Io(cause) }
+                if *path == workspace.root.join(".winter/state.toml")
+                    && cause.kind() == std::io::ErrorKind::InvalidData
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_state_file_that_cannot_be_read_is_a_file_read_error_with_the_io_cause() {
     let tree = TempTree::new().expect("an isolated tree");
     // A directory in the place of the state file: it exists, and reading it fails.
     let workspace = WorkspaceBuilder::new(&tree)
@@ -307,9 +351,15 @@ fn a_state_file_that_cannot_be_read_is_an_empty_registry() {
         .build()
         .expect("a workspace");
 
-    assert_eq!(
-        document(&workspace.root, "feature-x"),
-        json!({"name": "feature-x", "index": 40, "source": "suggested"})
+    let error = config_error(&workspace.root);
+
+    assert!(
+        matches!(
+            &error,
+            ConfigError::FileRead { path, cause: FileCause::Io(_) }
+                if *path == workspace.root.join(".winter/state.toml")
+        ),
+        "{error:?}"
     );
 }
 

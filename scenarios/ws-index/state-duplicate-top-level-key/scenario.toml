@@ -1,0 +1,8 @@
+summary = "A state file with a key given twice above its first table header is refused: exit 1, and nothing is answered."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"
+
+[deviation]
+decision = "decision:parallel-workspaces/workspace-configuration/state-read-failures"

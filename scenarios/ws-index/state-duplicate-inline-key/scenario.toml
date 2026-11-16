@@ -1,0 +1,5 @@
+summary = "A state file whose registry is an inline table that names an env twice is refused: exit 1, and nothing is answered."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

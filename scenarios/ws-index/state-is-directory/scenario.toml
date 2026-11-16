@@ -1,0 +1,5 @@
+summary = "A directory at the path of the state file is a state file that cannot be read: exit 1, and nothing is answered."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

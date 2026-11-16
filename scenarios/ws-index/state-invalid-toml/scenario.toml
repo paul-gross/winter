@@ -1,0 +1,8 @@
+summary = "A state file with a syntax error, a table header left open, is refused: exit 1, and nothing is answered."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"
+
+[deviation]
+decision = "decision:parallel-workspaces/workspace-configuration/state-read-failures"

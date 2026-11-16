@@ -1,0 +1,5 @@
+summary = "A name the registry records as true answers the index 1, with the registry as its source."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

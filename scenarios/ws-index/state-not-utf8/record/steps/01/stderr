@@ -1,0 +1,43 @@
+Traceback (most recent call last):
+  File "<REFERENCE>/tools/winter-cli/.venv/bin/winter", line 10, in <module>
+    sys.exit(cli())
+             ~~~^^
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/cli.py", line 431, in cli
+    exit_code = _cli_group.main(standalone_mode=False, obj=CliContext(container_source))
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 1406, in main
+    rv = self.invoke(ctx)
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/cli.py", line 223, in invoke
+    result = super().invoke(ctx)
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 1873, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 1873, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 1269, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/decorators.py", line 34, in new_func
+    return f(get_current_context(), *args, **kwargs)
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/modules/workspace/command.py", line 1229, in ws_index
+    handler.index(EnvIndexParams(name=name, output_json=output_json))
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/modules/workspace/handlers/workspace_handler.py", line 815, in index
+    persisted = self._env_index_registry.get_index(params.name)
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/modules/workspace/internal/toml_env_index_registry.py", line 43, in get_index
+    table = self._read_table()
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/modules/workspace/internal/toml_env_index_registry.py", line 73, in _read_table
+    doc = self._load_doc()
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/modules/workspace/internal/toml_env_index_registry.py", line 83, in _load_doc
+    return tomlkit.parse(self._fs.read_text(self._path))
+                         ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/core/internal/local_filesystem.py", line 41, in read_text
+    return path.read_text()
+           ~~~~~~~~~~~~~~^^
+  File "/home/pgross/.local/share/uv/python/cpython-3.14.6-linux-x86_64-gnu/lib/python3.14/pathlib/__init__.py", line 788, in read_text
+    return f.read()
+           ~~~~~~^^
+  File "<frozen codecs>", line 325, in decode
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte

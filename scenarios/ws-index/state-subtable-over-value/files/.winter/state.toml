@@ -1,0 +1,4 @@
+[env_index]
+feature-x = 15
+
+[env_index.feature-x]

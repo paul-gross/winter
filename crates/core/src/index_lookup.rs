@@ -11,14 +11,15 @@ use crate::termination::ConfigError;
 
 /// The index of `name` in the workspace of `start`. Reads only.
 ///
-/// The whole configuration of the workspace is loaded and validated, so a refusal of any key is the answer.
+/// The whole configuration of the workspace is loaded and validated, so a refusal of any key is the answer,
+/// and so is a state file that cannot be read or does not parse.
 pub(crate) fn answer(
     files: &dyn ReadFiles,
     start: &Path,
     name: &str,
 ) -> Result<IndexAnswer, ConfigError> {
     let workspace = config_load::load(files, start)?;
-    let registry = state_registry::read(files, &workspace.root);
+    let registry = state_registry::read(files, &workspace.root)?;
     let ports = &workspace.config.ports;
     // A band wider than the 65536 values of the hash gives every name the slot a still wider band gives it,
     // so a count beyond `u32` is looked up as the largest `u32`.

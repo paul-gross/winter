@@ -1,0 +1,8 @@
+summary = "A state file that gives the header of its registry table twice is refused: exit 1, and nothing is answered."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"
+
+[deviation]
+decision = "decision:parallel-workspaces/workspace-configuration/state-read-failures"
