@@ -1,0 +1,5 @@
+summary = "An agent override may name a tier the workspace adds beside the built-in ones: the configuration loads and the index is answered."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"

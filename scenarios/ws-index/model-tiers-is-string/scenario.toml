@@ -1,0 +1,5 @@
+summary = "A model_tiers that is a string and no table is read as absent: the configuration loads and the index is answered."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"

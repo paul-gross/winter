@@ -1,0 +1,8 @@
+env_aliases = ["one", "two"]
+envs_per_workspace = 12
+
+[model_tiers.deep]
+claude = "opus"
+
+[agent_model_overrides]
+reviewer = "deep"

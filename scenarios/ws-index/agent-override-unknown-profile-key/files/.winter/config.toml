@@ -1,0 +1,5 @@
+env_aliases = ["one", "two"]
+envs_per_workspace = 12
+
+[agent_model_overrides.reviewer]
+claude = { model = "opus", speed = "fast" }

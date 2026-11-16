@@ -1,0 +1,5 @@
+summary = "An agent override that names a tier no table defines is refused when the configuration is loaded, and nothing is written."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"

@@ -1,0 +1,1 @@
+error: [model_tiers] entry 'deep': unknown vendor label 'lantern'; valid labels: 'claude', 'codex', 'opencode'
