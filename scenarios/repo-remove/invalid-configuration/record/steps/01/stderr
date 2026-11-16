@@ -1,0 +1,1 @@
+error: Invalid config: envs_per_workspace (1) must be >= len(env_aliases) + 2 (12). Either reduce env_aliases (currently 10 entries) or increase envs_per_workspace.

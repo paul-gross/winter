@@ -1,0 +1,4 @@
+envs_per_workspace = 1
+
+[[project_repository]]
+url = "https://fixture.invalid/api.git"

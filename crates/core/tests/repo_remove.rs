@@ -191,23 +191,85 @@ fn without_the_json_flag_one_line_names_the_type_and_the_name() {
 }
 
 #[test]
-fn the_document_holds_the_name_as_the_target_gives_it_not_as_the_block_does() {
+fn a_block_whose_name_is_not_a_string_refuses_the_removal_and_the_file_is_left_as_it_was() {
     let tree = TempTree::new().expect("an isolated tree");
     let root = WorkspaceBuilder::new(&tree)
         .config("[[standalone_repository]]\nname = 7\n")
         .build()
         .expect("a workspace")
         .root;
+    let before = snapshot(&root);
 
-    let document = removed(&root, &["standalone/7", "--json"]);
+    let ended = InProcess::new(&["repo", "remove", "standalone/7", "--json"])
+        .cwd(&root)
+        .run();
 
-    assert_eq!(
-        document,
-        json!({"removed": true, "kind": "standalone", "name": "7"})
+    assert_eq!(ended.stdout, "");
+    assert_eq!(ended.termination.exit_code(), 1);
+    assert!(
+        matches!(
+            &ended.termination,
+            Termination::Config(error) if matches!(**error, ConfigError::ValueType { .. })
+        ),
+        "{:?}",
+        ended.termination
     );
+    assert_eq!(snapshot(&root), before);
+}
+
+#[test]
+fn a_configuration_the_load_refuses_refuses_the_removal_and_leaves_both_files_byte_equal() {
+    let tree = TempTree::new().expect("an isolated tree");
+    let root = WorkspaceBuilder::new(&tree)
+        .config(&["envs_per_workspace = 1\n\n", COMMENTED].concat())
+        .local_config(LOCAL_TEXT)
+        .build()
+        .expect("a workspace")
+        .root;
+    let before = snapshot(&root);
+
+    for args in [
+        &["project/web", "--json"][..],
+        &["project/mine", "--local", "--json"][..],
+    ] {
+        let ended = InProcess::new(&[&["repo", "remove"], args].concat())
+            .cwd(&root)
+            .run();
+
+        assert_eq!(ended.stdout, "", "{args:?}");
+        assert_eq!(ended.termination.exit_code(), 1, "{args:?}");
+        assert!(
+            matches!(
+                &ended.termination,
+                Termination::Config(error) if matches!(
+                    **error,
+                    ConfigError::EnvsPerWorkspaceTooSmall { envs_per_workspace: 1, .. }
+                )
+            ),
+            "{args:?}: {:?}",
+            ended.termination
+        );
+        assert_eq!(snapshot(&root), before, "{args:?}");
+    }
+}
+
+#[test]
+fn a_removal_keeps_the_line_endings_and_every_byte_outside_the_removed_block() {
+    const HEAD: &str = "# d\u{e9}p\u{f4}ts \u{2014} \u{5009}\u{5eab}\r\n\r\n";
+    const API: &str = "[[project_repository]]\r\nurl = \"https://fixture.invalid/api.git\"\r\n\r\n";
+    const WEB: &str = "[[project_repository]]\r\nurl = \"https://fixture.invalid/web.git\"\r\n# apr\u{e8}s web\r\n";
+    let tree = TempTree::new().expect("an isolated tree");
+    let root = WorkspaceBuilder::new(&tree)
+        .config(&[HEAD, API, WEB].concat())
+        .build()
+        .expect("a workspace")
+        .root;
+
+    removed(&root, &["project/api", "--json"]);
+
     assert_eq!(
-        std::fs::read_to_string(root.join(SHARED)).expect("the shared file"),
-        ""
+        std::fs::read(root.join(SHARED)).expect("the shared file"),
+        [HEAD, WEB].concat().into_bytes()
     );
 }
 
@@ -408,34 +470,42 @@ fn a_repository_declared_only_in_the_local_file_is_not_found_without_the_local_f
 }
 
 #[test]
-fn a_file_that_is_not_valid_toml_is_a_file_read_error_and_is_left_byte_equal() {
-    let tree = TempTree::new().expect("an isolated tree");
-    let invalid = "[[project_repository]]\nurl = \"https://fixture.invalid/api.git\"\nname = \n";
-    let root = WorkspaceBuilder::new(&tree)
-        .config(invalid)
-        .local_config("[[project_repository]\n")
-        .build()
-        .expect("a workspace")
-        .root;
-    let before = snapshot(&root);
+fn a_file_that_is_not_valid_toml_is_a_file_read_error_naming_it_whichever_file_is_edited() {
+    let invalid_shared =
+        "[[project_repository]]\nurl = \"https://fixture.invalid/api.git\"\nname = \n";
+    let invalid_local = "[[project_repository]\n";
 
-    for (flags, file) in [(&[][..], SHARED), (&["--local"][..], LOCAL)] {
-        let args = [&["repo", "remove", "project/api", "--json"], flags].concat();
-        let ended = InProcess::new(&args).cwd(&root).run();
+    for (shared, local, file) in [
+        (invalid_shared, LOCAL_TEXT, SHARED),
+        (COMMENTED, invalid_local, LOCAL),
+    ] {
+        let tree = TempTree::new().expect("an isolated tree");
+        let root = WorkspaceBuilder::new(&tree)
+            .config(shared)
+            .local_config(local)
+            .build()
+            .expect("a workspace")
+            .root;
+        let before = snapshot(&root);
 
-        assert_eq!(ended.stdout, "", "{file}");
-        assert_eq!(ended.termination.exit_code(), 1, "{file}");
-        assert!(
-            matches!(
-                &ended.termination,
-                Termination::Config(error)
-                    if matches!(&**error, ConfigError::FileRead { path, cause: FileCause::Toml(_) } if *path == root.join(file))
-            ),
-            "{file}: {:?}",
-            ended.termination
-        );
+        for flags in [&[][..], &["--local"][..]] {
+            let args = [&["repo", "remove", "project/api", "--json"], flags].concat();
+            let ended = InProcess::new(&args).cwd(&root).run();
+
+            assert_eq!(ended.stdout, "", "{file} {flags:?}");
+            assert_eq!(ended.termination.exit_code(), 1, "{file} {flags:?}");
+            assert!(
+                matches!(
+                    &ended.termination,
+                    Termination::Config(error)
+                        if matches!(&**error, ConfigError::FileRead { path, cause: FileCause::Toml(_) } if *path == root.join(file))
+                ),
+                "{file} {flags:?}: {:?}",
+                ended.termination
+            );
+            assert_eq!(snapshot(&root), before, "{file} {flags:?}");
+        }
     }
-    assert_eq!(snapshot(&root), before);
 }
 
 #[test]
@@ -604,26 +674,53 @@ fn the_lock_is_released_after_a_removal_and_after_each_refusal() {
     let tree = TempTree::new().expect("an isolated tree");
     let root = WorkspaceBuilder::new(&tree)
         .config(COMMENTED)
-        .local_config("[[project_repository]\n")
+        .local_config(LOCAL_TEXT)
         .build()
         .expect("a workspace")
         .root;
-    let free = || {
+    let free = |root: &Path| {
         let handle = std::fs::File::open(root.join(".winter")).expect("the directory");
         handle.try_lock().is_ok()
     };
 
     catalog_error(&root, &["project/nope"]);
-    assert!(free(), "after not found");
+    assert!(free(&root), "after not found");
 
-    let invalid = InProcess::new(&["repo", "remove", "project/api", "--local"])
-        .cwd(&root)
-        .run();
-    assert_eq!(invalid.termination.exit_code(), 1);
-    assert!(free(), "after a file that is not valid TOML");
+    let (error, _) = catalog_error(&root, &["other/x"]);
+    assert!(
+        matches!(error, CatalogError::UnknownKind { .. }),
+        "{error:?}"
+    );
+    assert!(free(&root), "after an unknown type word");
 
     removed(&root, &["project/web", "--json"]);
-    assert!(free(), "after a removal");
+    assert!(free(&root), "after a removal");
+
+    let other_tree = TempTree::new().expect("an isolated tree");
+    let invalid_root = WorkspaceBuilder::new(&other_tree)
+        .config(COMMENTED)
+        .local_config("[[project_repository]\n")
+        .build()
+        .expect("a workspace")
+        .root;
+
+    let invalid = InProcess::new(&["repo", "remove", "project/web", "--json"])
+        .cwd(&invalid_root)
+        .run();
+
+    assert!(
+        matches!(
+            &invalid.termination,
+            Termination::Config(error)
+                if matches!(&**error, ConfigError::FileRead { path, cause: FileCause::Toml(_) } if *path == invalid_root.join(LOCAL))
+        ),
+        "{:?}",
+        invalid.termination
+    );
+    assert!(
+        free(&invalid_root),
+        "after a local file that is not valid TOML"
+    );
 }
 
 #[test]
@@ -712,7 +809,7 @@ fn the_file_keeps_the_permission_bits_it_had() {
 }
 
 #[test]
-fn a_file_that_cannot_be_opened_for_writing_is_a_file_read_error_and_is_left_as_it_is() {
+fn a_file_that_cannot_be_opened_for_writing_is_a_file_write_error_and_is_left_as_it_is() {
     let tree = TempTree::new().expect("an isolated tree");
     let root = commented_workspace(&tree);
     let file = root.join(SHARED);
@@ -733,8 +830,8 @@ fn a_file_that_cannot_be_opened_for_writing_is_a_file_read_error_and_is_left_as_
         matches!(
             &ended.termination,
             Termination::Config(error)
-                if matches!(&**error, ConfigError::FileRead { path, cause: FileCause::Io(error) }
-                    if *path == file && error.kind() == std::io::ErrorKind::PermissionDenied)
+                if matches!(&**error, ConfigError::FileWrite { path, cause }
+                    if *path == file && cause.kind() == std::io::ErrorKind::PermissionDenied)
         ),
         "{:?}",
         ended.termination

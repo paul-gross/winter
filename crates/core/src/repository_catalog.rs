@@ -3,10 +3,10 @@
 use std::path::Path;
 
 use crate::config_edit::{self, BlockRemoval, CatalogError, RepositoryKind};
+use crate::config_load;
 use crate::files::{ReadFiles, WriteFiles};
 use crate::termination::{ConfigError, FileCause, TomlParseError};
 use crate::workspace_files::{CONFIG_FILE, LOCAL_CONFIG_FILE};
-use crate::workspace_root;
 
 /// The repository a removal took out of a configuration file: the two parts of its target.
 #[derive(Debug, PartialEq, Eq)]
@@ -27,10 +27,16 @@ pub(crate) enum RemoveError {
 /// Removes the repository `target`, spelled `<type>/<name>`, from a configuration file of the workspace of
 /// `start`: the machine-local file when `local` is set, else the shared one.
 ///
-/// A target without `/` is refused before any file is read. Then the workspace root is found, then the type
-/// is checked to be one of the two words, and then the first block of that type whose effective name is the
-/// name is removed from the one file. Only that file is searched, and it is replaced only when a block was
+/// A target without `/` is refused before any file is read. Then the workspace is loaded, so a configuration
+/// the load refuses ends the removal with both files as they were, whichever of the two is at fault. Then the
+/// type is checked to be one of the two words, and then the first block of that type whose effective name is
+/// the name is removed from the one file. Only that file is searched, and it is replaced only when a block was
 /// removed.
+///
+/// The edit is made on the bytes the writer hands it, not on what the load read, so an entry another writer
+/// added to the file since the load is kept. A file the writer cannot replace is
+/// [`ConfigError::FileWrite`], and one that is no longer valid TOML when the writer reads it is
+/// [`ConfigError::FileRead`].
 pub(crate) fn remove(
     files: &dyn ReadFiles,
     writer: &dyn WriteFiles,
@@ -44,7 +50,7 @@ pub(crate) fn remove(
         }
         .into());
     };
-    let root = workspace_root::find(files, start)?;
+    let root = config_load::load(files, start)?.root;
     let Some(kind) = repository_kind(word) else {
         return Err(CatalogError::UnknownKind {
             kind: word.to_owned(),
@@ -71,7 +77,12 @@ pub(crate) fn remove(
             name: name.to_owned(),
         }
         .into()),
-        Err(cause) => Err(ConfigError::FileRead { path: file, cause }.into()),
+        Err(Unedited::Invalid(error)) => Err(ConfigError::FileRead {
+            path: file,
+            cause: FileCause::Toml(error),
+        }
+        .into()),
+        Err(Unedited::Unwritten(cause)) => Err(ConfigError::FileWrite { path: file, cause }.into()),
     }
 }
 
@@ -95,19 +106,28 @@ enum Removal {
     Entangled,
 }
 
+/// Why an attempt to remove a block came to no answer about the block.
+#[derive(Debug)]
+enum Unedited {
+    /// The bytes the writer handed the edit are not valid TOML.
+    Invalid(TomlParseError),
+    /// The writer failed: at its lock, at its read of the file, or at the replacement.
+    Unwritten(std::io::Error),
+}
+
 /// What takes a block of a kind and a name out of a text: [`config_edit::remove_repository_block`].
 type BlockEdit = fn(&str, RepositoryKind, &str) -> Option<BlockRemoval>;
 
 /// Replaces `file` with its text less the first block of `kind` named `name`, and says how that ended.
 ///
 /// A file that does not exist, and one that holds no such block, is left as it is. So is a file that is not
-/// valid TOML, which is the error.
+/// valid TOML, which is an error, as a failure of the writer is.
 fn remove_block(
     writer: &dyn WriteFiles,
     file: &Path,
     kind: RepositoryKind,
     name: &str,
-) -> Result<Removal, FileCause> {
+) -> Result<Removal, Unedited> {
     remove_block_with(
         writer,
         file,
@@ -125,10 +145,10 @@ fn remove_block_with(
     kind: RepositoryKind,
     name: &str,
     edit: BlockEdit,
-) -> Result<Removal, FileCause> {
+) -> Result<Removal, Unedited> {
     let mut invalid = None;
     let mut entangled = false;
-    let replaced = writer.update(file, &mut |current| {
+    let updated = writer.update(file, &mut |current| {
         let bytes = current?;
         if let Err(error) = toml::from_slice::<toml::Table>(bytes) {
             invalid = Some(TomlParseError::from(error));
@@ -141,9 +161,10 @@ fn remove_block_with(
             return None;
         }
         Some(edited.text.into_bytes())
-    })?;
+    });
+    let replaced = updated.map_err(Unedited::Unwritten)?;
     match invalid {
-        Some(error) => Err(FileCause::Toml(error)),
+        Some(error) => Err(Unedited::Invalid(error)),
         None if entangled => Ok(Removal::Entangled),
         None if replaced => Ok(Removal::Done),
         None => Ok(Removal::NotFound),
@@ -549,6 +570,128 @@ name = \"web\"
             files.text(SHARED).as_deref(),
             Some("[[project_repository\n")
         );
+    }
+
+    #[test]
+    fn a_file_that_is_no_longer_valid_toml_under_the_lock_is_a_file_read_error_on_the_edited_file()
+    {
+        for (local, edited) in [(false, SHARED), (true, LOCAL)] {
+            let files = workspace();
+            let under_the_lock = held_with("[[project_repository\n");
+
+            let ended = remove(
+                &files,
+                &under_the_lock,
+                Path::new("/ws/alpha"),
+                "project/api",
+                local,
+            );
+
+            assert!(
+                matches!(
+                    &ended,
+                    Err(RemoveError::Config(ConfigError::FileRead {
+                        path,
+                        cause: FileCause::Toml(_)
+                    })) if path == Path::new(edited)
+                ),
+                "{edited}: {ended:?}"
+            );
+            assert_eq!(under_the_lock.replacements.get(), 0, "{edited}");
+            assert_eq!(
+                String::from_utf8_lossy(&under_the_lock.content.into_inner()),
+                "[[project_repository\n",
+                "{edited}"
+            );
+        }
+    }
+
+    /// A writer whose every update fails with a kind, before the edit is asked anything.
+    struct Failing(std::io::ErrorKind);
+
+    impl WriteFiles for Failing {
+        fn update(&self, _path: &Path, _edit: &mut Edit<'_>) -> std::io::Result<bool> {
+            Err(std::io::Error::from(self.0))
+        }
+    }
+
+    #[test]
+    fn a_writer_that_fails_is_a_file_write_error_on_the_edited_file() {
+        for (local, edited) in [(false, SHARED), (true, LOCAL)] {
+            let files = workspace();
+            let writer = Failing(std::io::ErrorKind::PermissionDenied);
+
+            let ended = remove(
+                &files,
+                &writer,
+                Path::new("/ws/alpha"),
+                "project/api",
+                local,
+            );
+
+            assert!(
+                matches!(
+                    &ended,
+                    Err(RemoveError::Config(ConfigError::FileWrite { path, cause }))
+                        if path == Path::new(edited)
+                            && cause.kind() == std::io::ErrorKind::PermissionDenied
+                ),
+                "{edited}: {ended:?}"
+            );
+            assert_eq!(files.text(SHARED).as_deref(), Some(TWO_BLOCKS), "{edited}");
+            assert_eq!(files.text(LOCAL).as_deref(), Some(TWO_BLOCKS), "{edited}");
+        }
+    }
+
+    #[test]
+    fn a_configuration_the_load_refuses_ends_the_removal_before_the_type_word_and_the_writer() {
+        // The unknown type word would be the ending had it been checked first, and the writer's error had
+        // the removal of a known type reached the writer.
+        for (target, local) in [
+            ("other/api", false),
+            ("project/api", false),
+            ("project/api", true),
+        ] {
+            let files = Stored::default()
+                .with(SHARED, TWO_BLOCKS)
+                .with(LOCAL, &["envs_per_workspace = 1\n", TWO_BLOCKS].concat());
+            let writer = Failing(std::io::ErrorKind::PermissionDenied);
+
+            let ended = remove(&files, &writer, Path::new("/ws/alpha"), target, local);
+
+            assert!(
+                matches!(
+                    &ended,
+                    Err(RemoveError::Config(
+                        ConfigError::EnvsPerWorkspaceTooSmall { .. }
+                    ))
+                ),
+                "{target} {local}: {ended:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_entry_the_file_gained_since_the_load_is_kept_by_the_removal() {
+        const DOCS: &str = "\n[[project_repository]]\nname = \"docs\"\n";
+        let loaded = Stored::default().with(SHARED, TWO_BLOCKS);
+        let under_the_lock = held_with(&[TWO_BLOCKS, DOCS].concat());
+
+        let ended = remove(
+            &loaded,
+            &under_the_lock,
+            Path::new("/ws/alpha"),
+            "project/api",
+            false,
+        );
+
+        assert!(ended.is_ok(), "{ended:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&under_the_lock.content.into_inner()),
+            [WEB, DOCS].concat()
+        );
+        assert_eq!(under_the_lock.replacements.get(), 1);
+        assert_eq!(loaded.text(SHARED).as_deref(), Some(TWO_BLOCKS));
     }
 
     #[test]

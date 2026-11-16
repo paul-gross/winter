@@ -1,0 +1,8 @@
+summary = "Removing a repository of the shared file beside a local file whose envs_per_workspace is too small exits 1 and leaves every file unchanged."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "remove", "project/api", "--json"]
+stdout = "json"

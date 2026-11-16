@@ -360,4 +360,89 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o7777, 0o444);
     }
+
+    #[test]
+    fn a_second_hard_link_of_the_target_keeps_the_old_content() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let directory = tree.root().join("held");
+        std::fs::create_dir(&directory).expect("a directory");
+        let target = directory.join("config.toml");
+        let other = directory.join("other.toml");
+        std::fs::write(&target, b"a = 1\n").expect("the target");
+        std::fs::hard_link(&target, &other).expect("a second link");
+
+        let replaced = OsFiles.update(&target, &mut |_| Some(b"a = 2\n".to_vec()));
+
+        assert!(matches!(replaced, Ok(true)), "{replaced:?}");
+        assert_eq!(std::fs::read(&target).expect("the target"), b"a = 2\n");
+        assert_eq!(std::fs::read(&other).expect("the other name"), b"a = 1\n");
+        assert_eq!(names(&directory), ["config.toml", "other.toml"]);
+    }
+
+    #[test]
+    fn a_target_in_a_directory_that_takes_no_new_file_is_refused_and_left_as_it_was() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let directory = tree.root().join("held");
+        std::fs::create_dir(&directory).expect("a directory");
+        let target = directory.join("config.toml");
+        std::fs::write(&target, b"a = 1\n").expect("the target");
+        let mode =
+            |mode| std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(mode));
+        mode(0o555).expect("a mode");
+        let probe = directory.join("probe");
+        if std::fs::File::create_new(&probe).is_ok() {
+            // This user may write any file, and then no mode keeps a file out of a directory either.
+            std::fs::remove_file(&probe).expect("the probe removed");
+            mode(0o755).expect("the mode restored");
+            return;
+        }
+        let mut seen = Vec::new();
+
+        let replaced = OsFiles.update(&target, &mut |current| {
+            seen.push(current.map(<[u8]>::to_vec));
+            Some(b"a = 2\n".to_vec())
+        });
+        mode(0o755).expect("the mode restored");
+
+        assert_eq!(
+            replaced.map_err(|error| error.kind()),
+            Err(io::ErrorKind::PermissionDenied)
+        );
+        assert_eq!(seen, [Some(b"a = 1\n".to_vec())]);
+        assert_eq!(std::fs::read(&target).expect("the target"), b"a = 1\n");
+        assert_eq!(names(&directory), ["config.toml"]);
+    }
+
+    #[test]
+    fn a_target_in_a_directory_that_cannot_be_read_is_refused_and_left_as_it_was() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let directory = tree.root().join("held");
+        std::fs::create_dir(&directory).expect("a directory");
+        let target = directory.join("config.toml");
+        std::fs::write(&target, b"a = 1\n").expect("the target");
+        let mode =
+            |mode| std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(mode));
+        // Written and searched, and not read.
+        mode(0o333).expect("a mode");
+        if std::fs::File::open(&directory).is_ok() {
+            // This user may read any file, and then no mode keeps a directory from being opened either.
+            mode(0o755).expect("the mode restored");
+            return;
+        }
+        let mut asked = 0;
+
+        let replaced = OsFiles.update(&target, &mut |_| {
+            asked += 1;
+            Some(b"a = 2\n".to_vec())
+        });
+        mode(0o755).expect("the mode restored");
+
+        assert_eq!(
+            replaced.map_err(|error| error.kind()),
+            Err(io::ErrorKind::PermissionDenied)
+        );
+        assert_eq!(asked, 0, "the edit was asked before the lock was taken");
+        assert_eq!(std::fs::read(&target).expect("the target"), b"a = 1\n");
+        assert_eq!(names(&directory), ["config.toml"]);
+    }
 }
