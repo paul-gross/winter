@@ -203,6 +203,13 @@ package. In practice:
   out.
 - It resolves no host name. Fixture remotes are the tree's own bare repositories.
 - It opens no socket but those [The trace collector](#the-trace-collector) lists.
+- It sends no signal to another process. There are two exceptions, and no other. The runner sends SIGKILL to the process
+  group of the child it started, before it reaps that child, on every way out of the call, an unwind included. One test
+  of the support package, in `crates/test-support/tests/process.rs`, starts a process that leaves that group, where the
+  runner's kill does not reach it, and ends it with SIGKILL by the id the process reported. No test sends SIGINT, or any
+  signal but SIGKILL, to another process. The runner exposes no process id, so a test that needs a signalled child has
+  the child signal itself. The driver is outside this rule: its step runner, in `crates/dev/src/step.rs`, kills the
+  process group of a step it ends.
 - It lets nothing of the developer's environment or home directory reach a child or decide a result. The test process
   reads its own environment only for `WINTER_TEST_` variables and for the directory of the host's git on `PATH`. The two
   fixtures of `crates/cli/src/trace.rs` are the exception: each is a child that reads the whole environment it was
@@ -234,7 +241,8 @@ The unit tests of the SIGINT handler, in `crates/cli/src/interrupt.rs`, use the 
 own process. Each starts its fixture as a child test of its own test binary, at `std::env::current_exe()` and by the
 exact name of the fixture. The fixture sets the disposition of SIGINT it is to start with, default or ignore, calls the
 installer, writes a line to stdout, and raises SIGINT on itself, and the test reads the exit and both streams of the
-child once it has ended. No test sends a signal to another process.
+child once it has ended. The parent sends its child no signal but the runner's SIGKILL of its group, as
+[What a test never does](#what-a-test-never-does) has it.
 
 The unit tests of `crates/cli/src/trace.rs` have two fixtures of the same pattern. One calls the removal of the generic
 exporter variables on a snapshot of its own environment, which its parent gave two such variables, and asserts that the

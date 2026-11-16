@@ -28,10 +28,10 @@ A test file narrower than a row is selected with `--test <subject>` in place of 
 
 ## Manual testing
 
-Three behaviours are exercised by hand. Two cannot be tests of the tree they change, and the third needs a signal sent
-to the running binary, which no test sends. All run in a scratch copy of the checkout under a temporary directory, never
-in the checkout itself. A method that starts the built binary starts it by its path, as
-[development.md](../tooling/development.md#running-the-built-binary) says.
+Three behaviours are exercised by hand. Two cannot be tests of the tree they change, and the third needs SIGINT sent to
+the running binary, which [no test sends](../standards/testing.md#what-a-test-never-does). All run in a scratch copy of
+the checkout under a temporary directory, never in the checkout itself. A method that starts the built binary starts it
+by its path, as [development.md](../tooling/development.md#running-the-built-binary) says.
 
 The scratch copy needs a git directory of its own, since each method ends by reading its `git status`. A clone of the
 checkout with the change under test applied has one. A plain copy does not when the checkout is a git worktree: its
@@ -100,8 +100,8 @@ Exercises what the built binary does with SIGINT: that `main` calls the installe
 what an interrupt then does to the process. Use it when a change touches that file or the start of `main`.
 
 Nothing automatic shows this. The unit tests of `interrupt.rs` prove the installer and the handler in a test process
-that raises the signal on itself, no test sends a signal to another process, and no command runs long enough to be
-interrupted.
+that raises the signal on itself, no test sends SIGINT to the binary, by the rule on signals of
+[testing.md](../standards/testing.md#what-a-test-never-does), and no command runs long enough to be interrupted.
 
 **Setup.** Make a scratch copy of the checkout under a temporary directory, where no directory at or above the copy
 holds a `.winter/config.toml`, as the built-binary rule of [AGENTS.md](../../AGENTS.md#standing-rules) has it, and work

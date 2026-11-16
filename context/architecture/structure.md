@@ -130,15 +130,17 @@ therefore builds the environment of the child from the snapshot and never lets t
 process: an inherited one would lack those variables in every traced invocation.
 
 Outside their test modules, no other file names what these three name. `main.rs` alone names the process streams, reads
-the process environment and the clock, and answers the exit code of an ending. `interrupt.rs` alone reads or changes the
-disposition of a signal, writes to a file descriptor by its number, and ends the process without returning. `trace.rs`
-alone removes a variable from the process environment, starts a thread, and, through the exporter, opens a socket. That
-is why a test can call `run` with in-memory handles and observe everything a command does. The test modules of
-`interrupt.rs` and `trace.rs` are the exceptions: a test of the handler, of the hiding of the variables, or of the
-tracer under an interrupt reads the path of its own test executable to start its fixture, and the fixture reads the
-variable that names it and writes its lines to the process stdout, because the test that started it reads them there.
-The fixtures of `trace.rs` also read the environment they were started with, and the one of the tracer sets the
-disposition of SIGINT and raises the signal on itself.
+the process environment, and answers the exit code of an ending. Two files read the clock: `main.rs`, for the instant
+the trace settings are read at, and `trace.rs`, for the instant a span ends. The instant a span the sampler records
+starts at, when the settings give no launch time, is read by the tracing SDK when the span is opened, and by no source
+of the binary. `interrupt.rs` alone reads or changes the disposition of a signal, writes to a file descriptor by its
+number, and ends the process without returning. `trace.rs` alone removes a variable from the process environment, starts
+a thread, and, through the exporter, opens a socket. That is why a test can call `run` with in-memory handles and
+observe everything a command does. The test modules of `interrupt.rs` and `trace.rs` are the exceptions: a test of the
+handler, of the hiding of the variables, or of the tracer under an interrupt reads the path of its own test executable
+to start its fixture, and the fixture reads the variable that names it and writes its lines to the process stdout,
+because the test that started it reads them there. The fixtures of `trace.rs` also read the environment they were
+started with, and the one of the tracer sets the disposition of SIGINT and raises the signal on itself.
 
 [rust.md](../standards/rust.md) lists what this boundary forbids a library source to name.
 
