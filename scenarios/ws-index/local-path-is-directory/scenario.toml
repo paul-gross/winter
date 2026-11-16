@@ -1,0 +1,5 @@
+summary = "A directory at the path of the local file, which holds only a placeholder, is read as a missing local file: the shared file alone answers."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"

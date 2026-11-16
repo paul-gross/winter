@@ -1,0 +1,5 @@
+summary = "A shared git that is a string, beside a local git table, is refused when the two files are merged, and nothing is written."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"

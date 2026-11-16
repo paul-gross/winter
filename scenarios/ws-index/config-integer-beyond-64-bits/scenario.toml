@@ -1,0 +1,8 @@
+summary = "A file that holds an integer beyond the signed 64-bit range, under a key nothing reads, is refused as text the parser does not take, and nothing is written."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"
+
+[deviation]
+decision = "decision:parallel-workspaces/workspace-configuration/toml-dialect"

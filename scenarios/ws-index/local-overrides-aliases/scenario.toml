@@ -1,0 +1,5 @@
+summary = "An alias list in the local file replaces the shared one whole: the alias answers its position in the local list."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"

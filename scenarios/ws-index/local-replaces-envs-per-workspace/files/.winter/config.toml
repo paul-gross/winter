@@ -1,0 +1,2 @@
+env_aliases = ["one", "two"]
+envs_per_workspace = 48

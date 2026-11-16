@@ -1,0 +1,65 @@
+Traceback (most recent call last):
+  File "<REFERENCE>/tools/winter-cli/.venv/bin/winter", line 10, in <module>
+    sys.exit(cli())
+             ~~~^^
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/cli.py", line 431, in cli
+    exit_code = _cli_group.main(standalone_mode=False, obj=CliContext(container_source))
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 1406, in main
+    rv = self.invoke(ctx)
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/cli.py", line 223, in invoke
+    result = super().invoke(ctx)
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 1873, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 1873, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 1269, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+  File "<REFERENCE>/tools/winter-cli/.venv/lib/python3.14/site-packages/click/decorators.py", line 34, in new_func
+    return f(get_current_context(), *args, **kwargs)
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/modules/workspace/command.py", line 1228, in ws_index
+    handler = container.workspace_handler()
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 2679, in dependency_injector.providers.Factory._provide
+  File "src/dependency_injector/providers.pxd", line 664, in dependency_injector.providers.__factory_call
+  File "src/dependency_injector/providers.pxd", line 591, in dependency_injector.providers.__call
+  File "src/dependency_injector/providers.pxd", line 459, in dependency_injector.providers.__provide_keyword_args
+  File "src/dependency_injector/providers.pxd", line 379, in dependency_injector.providers.__get_value
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 2679, in dependency_injector.providers.Factory._provide
+  File "src/dependency_injector/providers.pxd", line 664, in dependency_injector.providers.__factory_call
+  File "src/dependency_injector/providers.pxd", line 591, in dependency_injector.providers.__call
+  File "src/dependency_injector/providers.pxd", line 459, in dependency_injector.providers.__provide_keyword_args
+  File "src/dependency_injector/providers.pxd", line 379, in dependency_injector.providers.__get_value
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 2679, in dependency_injector.providers.Factory._provide
+  File "src/dependency_injector/providers.pxd", line 664, in dependency_injector.providers.__factory_call
+  File "src/dependency_injector/providers.pxd", line 591, in dependency_injector.providers.__call
+  File "src/dependency_injector/providers.pxd", line 459, in dependency_injector.providers.__provide_keyword_args
+  File "src/dependency_injector/providers.pxd", line 379, in dependency_injector.providers.__get_value
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 4343, in dependency_injector.providers.AttributeGetter._provide
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 4276, in dependency_injector.providers.ProvidedInstance._provide
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 3039, in dependency_injector.providers.Singleton._provide
+  File "src/dependency_injector/providers.pxd", line 664, in dependency_injector.providers.__factory_call
+  File "src/dependency_injector/providers.pxd", line 622, in dependency_injector.providers.__call
+  File "src/dependency_injector/providers.pyx", line 249, in dependency_injector.providers.Provider.__call__
+  File "src/dependency_injector/providers.pyx", line 4561, in dependency_injector.providers.MethodCaller._provide
+  File "src/dependency_injector/providers.pxd", line 622, in dependency_injector.providers.__call
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/config/workspace.py", line 127, in load
+    raw = self._read_config(workspace_root / WINTER_DIR / CONFIG_FILE)
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/config/workspace.py", line 770, in _read_config
+    return self._config_file_reader.load(path)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "<REFERENCE>/tools/winter-cli/src/winter_cli/core/internal/tomllib_config_file_reader.py", line 21, in load
+    return tomllib.load(f)
+           ~~~~~~~~~~~~^^^
+  File "/home/pgross/.local/share/uv/python/cpython-3.14.6-linux-x86_64-gnu/lib/python3.14/tomllib/_parser.py", line 136, in load
+    s = b.decode()
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte

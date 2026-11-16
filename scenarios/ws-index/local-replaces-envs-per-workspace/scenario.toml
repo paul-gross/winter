@@ -1,0 +1,5 @@
+summary = "An envs_per_workspace in the local file replaces the shared one: a name that is no alias is hashed into the local range."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

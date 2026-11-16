@@ -1,0 +1,6 @@
+env_aliases = ["one", "two"]
+envs_per_workspace = 12
+
+[[standalone_repository]]
+name = "tools"
+url = "https://fixture.invalid/tools.git"

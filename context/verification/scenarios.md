@@ -38,7 +38,9 @@ alone and at least one, and anything else is malformed: a stray file beside the 
 directory, a name outside the pattern.
 
 `<ROOT>` stands for the root of the tree in everything stored, so a record does not depend on where it was made. The
-workspace's `.winter/config.toml` and every other workspace file come from `files/`.
+workspace's `.winter/config.toml` and every other workspace file come from `files/`. A file there is copied byte for
+byte and may hold bytes that are not UTF-8; such a file is written with a byte tool, as `printf '\377\376\n'` writes the
+one of `ws-index/config-not-utf8`.
 
 ### scenario.toml
 

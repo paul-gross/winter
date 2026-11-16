@@ -1,0 +1,8 @@
+summary = "A shared keybindings that is an array of pairs, beside a local keybindings table, is refused when the two files are merged, and nothing is written."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"
+
+[deviation]
+decision = "decision:parallel-workspaces/workspace-configuration/element-type-validation"

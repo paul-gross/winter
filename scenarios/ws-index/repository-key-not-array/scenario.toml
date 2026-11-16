@@ -1,0 +1,8 @@
+summary = "A project_repository in the shared file that is a string and no array is refused when the configuration is loaded, and nothing is written."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"
+
+[deviation]
+decision = "decision:parallel-workspaces/workspace-configuration/repository-array-type"
