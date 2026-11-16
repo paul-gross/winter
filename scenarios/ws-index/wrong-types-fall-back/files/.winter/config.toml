@@ -1,0 +1,30 @@
+env_aliases = ["one", "two"]
+envs_per_workspace = 12
+service_prefix = 7
+prefix = false
+skills_dir = []
+doctor = 3
+lint = 5
+provision = "none"
+service = "none"
+
+[keybindings]
+leader = 1
+timeoutlen = "slow"
+bindings = "none"
+
+[tui]
+dashboard = "none"
+
+[capabilities]
+service = 7
+
+[core_checks.file_size]
+injected_bytes = "big"
+reference_bytes = true
+
+[space]
+root = 9
+
+[space.kinds]
+notes = 3

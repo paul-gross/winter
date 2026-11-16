@@ -1,0 +1,5 @@
+summary = "A tui.dashboard.layout that is none of the four layouts is refused: the lookup fails and prints no document."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"

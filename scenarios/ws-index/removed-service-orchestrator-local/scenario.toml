@@ -1,0 +1,5 @@
+summary = "A service_orchestrator declared in the local file alone is refused like one in the shared file: the lookup fails and prints no document."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"

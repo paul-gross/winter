@@ -1,0 +1,5 @@
+summary = "Keys that fall back hold values of the wrong type, each is read as its default with no refusal, and the lookup answers."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"

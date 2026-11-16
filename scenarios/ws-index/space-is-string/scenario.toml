@@ -1,0 +1,5 @@
+summary = "A space that is a string and not a table is read as absent: the lookup answers as if the key were not declared."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"

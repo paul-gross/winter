@@ -1,0 +1,5 @@
+summary = "A git.user that is a string and not a table fails the load: the lookup fails and prints no document."
+
+[[step]]
+args = ["ws", "index", "two", "--json"]
+stdout = "json"

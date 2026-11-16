@@ -1,0 +1,7 @@
+f - 89fbd3cff0c0ae16c92e2e63569c5c6f170cdfd2 gitconfig
+d home
+d home/.config
+d remotes
+d ws
+d ws/.winter
+f - f5ac409f3987dfc10d27f2c77164c2a47b2a2249 ws/.winter/config.toml

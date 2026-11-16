@@ -1,0 +1,1 @@
+error: Invalid tui.dashboard.layout value: 'grid'. Must be one of: 'auto', 'repos-as-columns', 'repos-as-rows', 'list'.
