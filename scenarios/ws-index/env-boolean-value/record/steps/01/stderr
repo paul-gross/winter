@@ -1,0 +1,1 @@
+error: [env.feature.vars] key 'VERBOSE' has an unsupported value type (bool); only string, integer, float, and command-entry table values are allowed.

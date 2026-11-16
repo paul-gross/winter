@@ -1,0 +1,2 @@
+[env.workspace.vars]
+WINTER_TOKEN = { command = "print-token" }

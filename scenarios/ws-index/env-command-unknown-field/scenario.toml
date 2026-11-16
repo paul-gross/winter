@@ -1,0 +1,5 @@
+summary = "A command entry of an env band that holds a field outside its closed set is refused, and nothing is written."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

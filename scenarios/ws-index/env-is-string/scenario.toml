@@ -1,0 +1,5 @@
+summary = "An env that is a string and no table is read as no env bands: the index is answered."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

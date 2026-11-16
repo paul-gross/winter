@@ -1,0 +1,5 @@
+summary = "A configuration that holds the removed [env.vars] table is refused, and nothing is written."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

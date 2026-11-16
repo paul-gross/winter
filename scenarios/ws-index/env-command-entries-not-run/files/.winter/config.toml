@@ -1,0 +1,8 @@
+[env.workspace.vars]
+MARKED = { command = "touch created-by-workspace-entry", shell = true }
+
+[env.feature.vars]
+LISTED = { command = "touch created-by-feature-entry", format = "dotenv", shell = true, exports = ["LISTED"] }
+
+[env.alpha.vars]
+NAMED = { command = "touch created-by-named-entry", format = "json", shell = true }

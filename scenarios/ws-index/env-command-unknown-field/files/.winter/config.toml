@@ -1,0 +1,2 @@
+[env.feature.vars]
+API_TOKEN = { command = "print-token", timeout = 5 }

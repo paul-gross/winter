@@ -1,0 +1,1 @@
+error: Unsupported config key [env.vars] detected. Found keys: API_URL, REGION. Migrate to [env.feature.vars] (feature-env scope) and/or [env.workspace.vars] (workspace scope).

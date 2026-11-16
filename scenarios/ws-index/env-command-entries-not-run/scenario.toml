@@ -1,0 +1,5 @@
+summary = "Command entries of the env bands are read and not run: the index is answered and the file their commands would create is not there."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

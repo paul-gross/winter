@@ -1,0 +1,5 @@
+summary = "A boolean under the vars of an env band is refused, and nothing is written."
+
+[[step]]
+args = ["ws", "index", "feature-x", "--json"]
+stdout = "json"

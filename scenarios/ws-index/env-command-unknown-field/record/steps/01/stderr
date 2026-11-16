@@ -1,0 +1,1 @@
+error: [env.feature.vars] key 'API_TOKEN' has unknown field(s) 'timeout'. Allowed fields: 'command', 'exports', 'format', 'shell'.
