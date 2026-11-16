@@ -16,5 +16,5 @@ pub use process::{
     Exit, FailureKind, Invocation, InvocationFailure, Observation, StdoutFault, invoke,
     invoke_with_stdout,
 };
-pub use tree::TempTree;
+pub use tree::{Found, TempTree, snapshot};
 pub use workspace::{Workspace, WorkspaceBuilder};

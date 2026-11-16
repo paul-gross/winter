@@ -1,13 +1,12 @@
 //! `ws index`: the index of a feature env name, looked up in a fixture workspace and never recorded.
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::{Value, json};
 use winter_workspace_core::{ConfigError, FileCause, ParseFault, Termination, Usage, UsageError};
-use winter_workspace_test_support::{TempTree, WorkspaceBuilder};
+use winter_workspace_test_support::{TempTree, WorkspaceBuilder, snapshot};
 
 #[path = "support/in_process.rs"]
 mod in_process;
@@ -21,79 +20,29 @@ const DEFAULTS: &str = "# workspace\n";
 const RECORD: &str = "DEBUG parse: command path: ws index\n";
 
 /// The document a successful `ws index NAME --json` in `cwd` writes, which is all it writes.
+#[track_caller]
 fn document(cwd: &Path, name: &str) -> Value {
-    let ended = InProcess::new(&["ws", "index", name, "--json"])
+    InProcess::new(&["ws", "index", name, "--json"])
         .cwd(cwd)
-        .run();
-    assert!(
-        matches!(ended.termination, Termination::Success),
-        "{name}: {:?}",
-        ended.termination
-    );
-    assert_eq!(ended.stderr, "", "{name}");
-    serde_json::from_str(&ended.stdout)
-        .unwrap_or_else(|error| panic!("{name}: {error}: {:?}", ended.stdout))
+        .run()
+        .document(name)
 }
 
 /// The configuration error `ws index feature-x --json` in `cwd` ends with, having written nothing.
+#[track_caller]
 fn config_error(cwd: &Path) -> ConfigError {
     let ended = InProcess::new(&["ws", "index", "feature-x", "--json"])
         .cwd(cwd)
         .run();
-    assert_eq!(ended.stdout, "");
-    assert_eq!(ended.stderr, "");
-    assert_eq!(ended.termination.exit_code(), 1);
-    match ended.termination {
+    match ended.wrote_nothing(1, "ws index feature-x --json") {
         Termination::Config(error) => *error,
         other => panic!("expected a configuration error, got {other:?}"),
     }
 }
 
-/// What an entry below a directory is, with the content of a file and the target of a link.
-#[derive(Debug, PartialEq, Eq)]
-enum Found {
-    Directory,
-    File(Vec<u8>),
-    Link(PathBuf),
-}
-
-/// Every entry below `directory`, by its path from there.
-fn snapshot(directory: &Path) -> BTreeMap<PathBuf, Found> {
-    fn walk(root: &Path, directory: &Path, found: &mut BTreeMap<PathBuf, Found>) {
-        for entry in std::fs::read_dir(directory).expect("a readable directory") {
-            let path = entry.expect("a directory entry").path();
-            let relative = path
-                .strip_prefix(root)
-                .expect("a path below the root")
-                .to_path_buf();
-            let kind = std::fs::symlink_metadata(&path)
-                .expect("an entry")
-                .file_type();
-            if kind.is_symlink() {
-                let target = std::fs::read_link(&path).expect("a link");
-                found.insert(relative, Found::Link(target));
-            } else if kind.is_dir() {
-                found.insert(relative, Found::Directory);
-                walk(root, &path, found);
-            } else {
-                let content = std::fs::read(&path).expect("a readable file");
-                found.insert(relative, Found::File(content));
-            }
-        }
-    }
-
-    let mut found = BTreeMap::new();
-    walk(directory, directory, &mut found);
-    found
-}
-
-fn tree() -> TempTree {
-    TempTree::new().expect("an isolated tree")
-}
-
 #[test]
 fn a_recorded_name_gives_its_recorded_index_from_the_registry_and_changes_nothing() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .state("[env_index]\nfeature-x = 15\n")
@@ -112,7 +61,7 @@ fn a_recorded_name_gives_its_recorded_index_from_the_registry_and_changes_nothin
 
 #[test]
 fn an_unrecorded_name_gives_its_hash_slot_as_suggested_and_changes_nothing() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .build()
@@ -131,7 +80,7 @@ fn an_unrecorded_name_gives_its_hash_slot_as_suggested_and_changes_nothing() {
 
 #[test]
 fn a_hash_slot_the_registry_records_for_another_name_is_still_suggested() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .state("[env_index]\nother = 40\n")
@@ -150,7 +99,7 @@ fn a_hash_slot_the_registry_records_for_another_name_is_still_suggested() {
 
 #[test]
 fn a_recorded_index_outside_the_layout_comes_back_as_recorded() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .state("[env_index]\nbelow = -3\nfar = 5000000000\n")
@@ -169,7 +118,7 @@ fn a_recorded_index_outside_the_layout_comes_back_as_recorded() {
 
 #[test]
 fn a_name_with_a_double_quote_and_a_backslash_comes_back_equal() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .build()
@@ -184,7 +133,7 @@ fn a_name_with_a_double_quote_and_a_backslash_comes_back_equal() {
 
 #[test]
 fn the_aliases_and_the_slot_count_of_the_configuration_are_read() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config("env_aliases = [\"one\", \"two\"]\nenvs_per_workspace = 12\n")
         .build()
@@ -203,7 +152,7 @@ fn the_aliases_and_the_slot_count_of_the_configuration_are_read() {
 
 #[test]
 fn a_recorded_alias_gives_the_recorded_index_whatever_its_position() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .state("[env_index]\ngamma = 31\n")
@@ -218,7 +167,7 @@ fn a_recorded_alias_gives_the_recorded_index_whatever_its_position() {
 
 #[test]
 fn an_alias_listed_more_than_once_gives_its_last_position() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config("env_aliases = [\"a\", \"b\", \"a\"]\n")
         .build()
@@ -236,7 +185,7 @@ fn an_alias_listed_more_than_once_gives_its_last_position() {
 
 #[test]
 fn without_the_json_flag_stdout_starts_with_the_integer() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .state("[env_index]\nrecorded = 15\n")
@@ -274,7 +223,7 @@ fn without_the_json_flag_stdout_starts_with_the_integer() {
 
 #[test]
 fn the_local_alias_list_replaces_the_shared_one() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config("env_aliases = [\"one\", \"two\"]\n")
         .local_config("env_aliases = [\"three\"]\n")
@@ -295,7 +244,7 @@ fn the_local_alias_list_replaces_the_shared_one() {
 
 #[test]
 fn a_bare_empty_string_of_aliases_leaves_no_alias() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config("env_aliases = \"\"\n")
         .build()
@@ -313,7 +262,7 @@ fn a_bare_empty_string_of_aliases_leaves_no_alias() {
 
 #[test]
 fn a_slot_count_beyond_32_bits_gives_the_hash_itself_past_the_band_start() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config("envs_per_workspace = 5000000000\n")
         .build()
@@ -327,7 +276,7 @@ fn a_slot_count_beyond_32_bits_gives_the_hash_itself_past_the_band_start() {
 
 #[test]
 fn a_state_file_that_is_not_valid_toml_is_an_empty_registry() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .state("[env_index\nfeature-x = 15\n")
@@ -339,9 +288,7 @@ fn a_state_file_that_is_not_valid_toml_is_an_empty_registry() {
         .cwd(&workspace.root)
         .run();
 
-    assert!(matches!(ended.termination, Termination::Success));
-    assert_eq!(ended.stderr, "");
-    let document: Value = serde_json::from_str(&ended.stdout).expect("a JSON document");
+    let document = ended.document("a state file that is not valid TOML");
     assert_eq!(
         document,
         json!({"name": "feature-x", "index": 40, "source": "suggested"})
@@ -351,7 +298,7 @@ fn a_state_file_that_is_not_valid_toml_is_an_empty_registry() {
 
 #[test]
 fn a_state_file_that_cannot_be_read_is_an_empty_registry() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     // A directory in the place of the state file: it exists, and reading it fails.
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
@@ -367,7 +314,7 @@ fn a_state_file_that_cannot_be_read_is_an_empty_registry() {
 
 #[test]
 fn a_working_directory_two_levels_below_the_root_finds_the_workspace() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config("env_aliases = [\"one\", \"two\"]\nenvs_per_workspace = 12\n")
         .file("alpha/project/keep", b"")
@@ -384,7 +331,7 @@ fn a_working_directory_two_levels_below_the_root_finds_the_workspace() {
 
 #[test]
 fn a_directory_with_no_workspace_above_is_a_root_not_found_error() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let outside = tree.root().join("home");
 
     let error = config_error(&outside);
@@ -397,7 +344,7 @@ fn a_directory_with_no_workspace_above_is_a_root_not_found_error() {
 
 #[test]
 fn a_bare_winter_directory_is_no_workspace() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .file(".winter/state.toml", b"[env_index]\nfeature-x = 15\n")
         .build()
@@ -413,7 +360,7 @@ fn a_bare_winter_directory_is_no_workspace() {
 
 #[test]
 fn a_configuration_file_that_is_not_valid_toml_is_a_file_read_error() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config("env_aliases = [\n")
         .build()
@@ -433,7 +380,7 @@ fn a_configuration_file_that_is_not_valid_toml_is_a_file_read_error() {
 
 #[test]
 fn a_local_configuration_file_that_is_not_valid_toml_is_a_file_read_error() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .local_config("envs_per_workspace = = 3\n")
@@ -454,7 +401,7 @@ fn a_local_configuration_file_that_is_not_valid_toml_is_a_file_read_error() {
 
 #[test]
 fn a_configuration_file_that_is_not_utf_8_is_a_file_read_error_with_the_toml_cause() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .file(".winter/config.toml", &[0xff, 0xfe, b'\n'])
         .build()
@@ -476,7 +423,7 @@ fn a_configuration_file_that_is_not_utf_8_is_a_file_read_error_with_the_toml_cau
 
 #[test]
 fn a_local_configuration_file_that_cannot_be_read_is_a_file_read_error_with_the_io_cause() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     // A directory in the place of the local file: it exists, and reading it fails.
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
@@ -498,7 +445,7 @@ fn a_local_configuration_file_that_cannot_be_read_is_a_file_read_error_with_the_
 
 #[test]
 fn a_slot_count_smaller_than_the_aliases_allow_is_refused() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config("env_aliases = [\"one\", \"two\"]\nenvs_per_workspace = 3\n")
         .build()
@@ -539,21 +486,16 @@ fn ws_alone_writes_nothing_and_ends_as_a_bare_group_with_the_ws_help() {
 
     let ended = InProcess::new(&["ws"]).cwd(Path::new("/")).run();
 
-    assert_eq!(ended.stdout, "");
-    assert_eq!(ended.stderr, "");
-    assert_eq!(ended.termination.exit_code(), 2);
-    assert_eq!(
-        ended.termination.diagnostic().as_deref(),
-        Some(help.as_str())
-    );
+    let termination = ended.wrote_nothing(2, "ws");
+    assert_eq!(termination.diagnostic().as_deref(), Some(help.as_str()));
     assert!(
-        matches!(ended.termination, Termination::BareGroup { .. }),
-        "{:?}",
-        ended.termination
+        matches!(termination, Termination::BareGroup { .. }),
+        "{termination:?}"
     );
 }
 
 /// The parts of a usage error that wrote nothing to either handle and exits 2.
+#[track_caller]
 fn usage_error(args: &[&str]) -> (Vec<String>, Usage, ParseFault) {
     usage_parts(
         InProcess::new(args).cwd(Path::new("/")).run(),
@@ -562,11 +504,9 @@ fn usage_error(args: &[&str]) -> (Vec<String>, Usage, ParseFault) {
 }
 
 /// The parts of the usage error `ended` holds, which wrote nothing to either handle and exits 2.
+#[track_caller]
 fn usage_parts(ended: Ended, line: &str) -> (Vec<String>, Usage, ParseFault) {
-    assert_eq!(ended.stdout, "", "{line}");
-    assert_eq!(ended.stderr, "", "{line}");
-    assert_eq!(ended.termination.exit_code(), 2, "{line}");
-    match ended.termination {
+    match ended.wrote_nothing(2, line) {
         Termination::Usage(error) => {
             let UsageError::Parse {
                 command_path,
@@ -670,7 +610,7 @@ fn two_names_too_many_are_both_rendered_each_quoted() {
 
 #[test]
 fn a_repeated_option_is_refused_as_a_repeated_option_and_nothing_is_looked_up() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .build()
@@ -734,7 +674,7 @@ fn a_root_option_after_the_command_name_is_a_usage_error_of_ws_index() {
 
 #[test]
 fn the_root_options_before_the_command_name_are_accepted_and_change_no_result() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .state("[env_index]\nfeature-x = 15\n")
@@ -776,7 +716,7 @@ fn the_root_options_before_the_command_name_are_accepted_and_change_no_result() 
 
 #[test]
 fn a_name_after_a_double_dash_is_looked_up_though_it_is_spelled_like_an_option() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .state("[env_index]\n--json = 7\n")
@@ -843,7 +783,7 @@ fn a_fault_before_the_help_of_ws_index_is_a_usage_error() {
 
 #[test]
 fn an_argument_of_ws_index_that_is_not_utf_8_is_refused_and_nothing_is_looked_up() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .build()
@@ -916,7 +856,7 @@ fn a_repeated_root_option_is_refused_though_a_help_or_a_fault_follows_it() {
 
 #[test]
 fn a_double_dash_before_a_command_name_is_a_usage_error_and_nothing_is_looked_up() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
         .config(DEFAULTS)
         .state("[env_index]\nfeature-x = 15\n")

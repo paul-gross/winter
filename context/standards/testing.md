@@ -24,11 +24,17 @@ Choose the lowest tier that can make the claim:
 - A component test runs the library in process and asserts on the returned `Termination` and on what was written. The
   run is built through the scaffold `crates/core/tests/support/in_process.rs`, a module the test file declares by
   `#[path]`. `InProcess` takes the arguments, the working directory, the environment, and stdin, calls the library's
-  `run` over in-memory handles, and returns an `Ended` with the `Termination` and both streams as text. A test file
-  never builds an `Invocation` itself. A test that needs a stdout of its own, such as one that fails, keeps that writer
-  in its file and hands it to `run_with_stdout`. When the behaviour reads or writes files or git state, the test builds
-  a fixture workspace with `TempTree`, `Git`, and `WorkspaceBuilder`; the library's manifest declares the support
-  package as a dev-dependency once a component test uses it.
+  `run` over in-memory handles, and returns an `Ended` with the `Termination` and both streams as text. `Ended` carries
+  two assertions on an ending, each taking a subject that names the case in the message of a failure: `Ended::document`
+  asserts a success with an empty stderr and answers stdout parsed as JSON, and `Ended::wrote_nothing` asserts an empty
+  stdout, an empty stderr, and an exit code, and answers the `Termination`. A test file never builds an `Invocation`
+  itself. A test that needs a stdout of its own, such as one that fails, keeps that writer in its file and hands it to
+  `run_with_stdout`. When the behaviour reads or writes files or git state, the test builds a fixture workspace with
+  `TempTree`, `Git`, and `WorkspaceBuilder`; the library's manifest declares the support package as a dev-dependency
+  once a component test uses it. A helper that more than one component test file needs has one owner: the support
+  package for one that reads or builds a tree, as `snapshot` reads every entry below a directory into a map of `Found`
+  values, and `Ended` for an assertion on what `run` answered. No component test file holds a copy of `snapshot`, of
+  `Found`, or of either assertion as a helper.
 - An executable test starts the binary Cargo built, at `env!("CARGO_BIN_EXE_winter-workspace")`, through `invoke`. It is
   for a claim about the process and not about the library. `invoke_with_stdout` starts it with a stdout that cannot be
   written, one of the three faults of `StdoutFault`: `ClosedPipe`, a pipe whose reader is gone; `Full`, a device with no

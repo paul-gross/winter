@@ -12,12 +12,10 @@ mod in_process;
 use in_process::InProcess;
 
 /// The fault of a usage error at the root that wrote nothing to either handle, with the usage it carries.
+#[track_caller]
 fn usage_error(args: &[&str]) -> (ParseFault, Usage) {
     let ended = InProcess::new(args).run();
-    assert_eq!(ended.stdout, "", "{args:?}");
-    assert_eq!(ended.stderr, "", "{args:?}");
-    assert_eq!(ended.termination.exit_code(), 2, "{args:?}");
-    match ended.termination {
+    match ended.wrote_nothing(2, &format!("{args:?}")) {
         Termination::Usage(error) => {
             let UsageError::Parse {
                 command_path,
@@ -56,15 +54,10 @@ fn no_argument_writes_nothing_and_returns_the_root_help_as_a_bare_group() {
 
     let ended = InProcess::new(&[]).run();
 
-    assert_eq!(ended.stdout, "");
-    assert_eq!(ended.stderr, "");
-    assert_eq!(ended.termination.exit_code(), 2);
-    assert_eq!(
-        ended.termination.diagnostic().as_deref(),
-        Some(help.as_str())
-    );
-    let Termination::BareGroup { help: carried } = ended.termination else {
-        panic!("expected a bare group, got {:?}", ended.termination);
+    let termination = ended.wrote_nothing(2, "no argument");
+    assert_eq!(termination.diagnostic().as_deref(), Some(help.as_str()));
+    let Termination::BareGroup { help: carried } = termination else {
+        panic!("expected a bare group, got {termination:?}");
     };
     assert_eq!(carried, help);
 }
@@ -166,13 +159,11 @@ fn a_usage_diagnostic_is_the_error_line_the_usage_line_and_the_help_command() {
 }
 
 /// The fault and the usage of a usage error at the root, for arguments that need not be text.
+#[track_caller]
 fn usage_error_os(args: Vec<OsString>) -> (ParseFault, Usage) {
     let line = format!("{args:?}");
     let ended = InProcess::os_args(args).run();
-    assert_eq!(ended.stdout, "", "{line}");
-    assert_eq!(ended.stderr, "", "{line}");
-    assert_eq!(ended.termination.exit_code(), 2, "{line}");
-    match ended.termination {
+    match ended.wrote_nothing(2, &line) {
         Termination::Usage(error) => {
             let UsageError::Parse {
                 command_path,
@@ -208,14 +199,9 @@ fn root_options_and_no_command_write_nothing_and_end_as_the_bare_root_does() {
     ] {
         let ended = InProcess::new(args).run();
 
-        assert_eq!(ended.stdout, "", "{args:?}");
-        assert_eq!(ended.stderr, "", "{args:?}");
-        assert_eq!(ended.termination.exit_code(), 2, "{args:?}");
-        let Termination::BareGroup { help: carried } = ended.termination else {
-            panic!(
-                "{args:?}: expected a bare group, got {:?}",
-                ended.termination
-            );
+        let termination = ended.wrote_nothing(2, &format!("{args:?}"));
+        let Termination::BareGroup { help: carried } = termination else {
+            panic!("{args:?}: expected a bare group, got {termination:?}");
         };
         assert_eq!(carried, help, "{args:?}");
     }

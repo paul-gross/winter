@@ -1,11 +1,10 @@
 //! A stdout the reader closed: every write of a result ends the invocation as a broken pipe, silently.
 
-use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use winter_workspace_core::Termination;
-use winter_workspace_test_support::{TempTree, WorkspaceBuilder};
+use winter_workspace_test_support::{TempTree, WorkspaceBuilder, snapshot};
 
 #[path = "support/in_process.rs"]
 mod in_process;
@@ -56,48 +55,6 @@ fn assert_broken_pipe(cwd: &Path, args: &[&str]) {
     assert_eq!(ended.stderr, "", "{args:?}");
 }
 
-/// What an entry below a directory is, with the content of a file and the target of a link.
-#[derive(Debug, PartialEq, Eq)]
-enum Found {
-    Directory,
-    File(Vec<u8>),
-    Link(PathBuf),
-}
-
-/// Every entry below `directory`, by its path from there.
-fn snapshot(directory: &Path) -> BTreeMap<PathBuf, Found> {
-    fn walk(root: &Path, directory: &Path, found: &mut BTreeMap<PathBuf, Found>) {
-        for entry in std::fs::read_dir(directory).expect("a readable directory") {
-            let path = entry.expect("a directory entry").path();
-            let relative = path
-                .strip_prefix(root)
-                .expect("a path below the root")
-                .to_path_buf();
-            let kind = std::fs::symlink_metadata(&path)
-                .expect("an entry")
-                .file_type();
-            if kind.is_symlink() {
-                let target = std::fs::read_link(&path).expect("a link");
-                found.insert(relative, Found::Link(target));
-            } else if kind.is_dir() {
-                found.insert(relative, Found::Directory);
-                walk(root, &path, found);
-            } else {
-                let content = std::fs::read(&path).expect("a readable file");
-                found.insert(relative, Found::File(content));
-            }
-        }
-    }
-
-    let mut found = BTreeMap::new();
-    walk(directory, directory, &mut found);
-    found
-}
-
-fn tree() -> TempTree {
-    TempTree::new().expect("an isolated tree")
-}
-
 fn workspace(tree: &TempTree) -> PathBuf {
     WorkspaceBuilder::new(tree)
         .config(TWO_REPOSITORIES)
@@ -109,7 +66,7 @@ fn workspace(tree: &TempTree) -> PathBuf {
 
 #[test]
 fn help_of_the_root_a_group_and_a_command_ends_as_a_broken_pipe() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
 
     for args in [
         &["--help"][..],
@@ -122,7 +79,7 @@ fn help_of_the_root_a_group_and_a_command_ends_as_a_broken_pipe() {
 
 #[test]
 fn the_version_line_ends_as_a_broken_pipe() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
 
     assert_broken_pipe(tree.root(), &["--version"]);
 }
@@ -133,7 +90,7 @@ fn ws_index_ends_as_a_broken_pipe_and_changes_nothing() {
         &["ws", "index", "feature-x"][..],
         &["ws", "index", "feature-x", "--json"],
     ] {
-        let tree = tree();
+        let tree = TempTree::new().expect("an isolated tree");
         let root = workspace(&tree);
         let before = snapshot(&root);
 
@@ -149,7 +106,7 @@ fn repo_remove_ends_as_a_broken_pipe_after_the_file_is_edited() {
         &["repo", "remove", "project/web"][..],
         &["repo", "remove", "project/web", "--json"],
     ] {
-        let tree = tree();
+        let tree = TempTree::new().expect("an isolated tree");
         let root = workspace(&tree);
 
         assert_broken_pipe(&root, args);
@@ -164,7 +121,7 @@ fn repo_remove_ends_as_a_broken_pipe_after_the_file_is_edited() {
 
 #[test]
 fn a_bare_root_and_a_bare_group_write_nothing_to_stdout_and_stay_bare_groups() {
-    let tree = tree();
+    let tree = TempTree::new().expect("an isolated tree");
 
     for args in [&[][..], &["ws"]] {
         let ended = InProcess::new(args)

@@ -10,6 +10,7 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
 use winter_workspace_core::{
     CommandTracer, Identity, Interrupts, Invocation, ProcessEnv, Termination, TraceLog, run,
 };
@@ -133,6 +134,40 @@ pub struct Ended {
     /// The command path the library announced to the tracer of the invocation, or `None` when it announced
     /// none.
     pub announced: Option<Vec<String>>,
+}
+
+/// The assertions more than one component test file makes on an ending. Each panics with what it found, at
+/// the line of the test that called it, and `subject` names the case in that message.
+impl Ended {
+    /// A success that wrote one JSON document and nothing else: asserts `Termination::Success` and an empty
+    /// stderr, and answers stdout parsed as JSON.
+    #[track_caller]
+    pub fn document(&self, subject: &str) -> Value {
+        assert!(
+            matches!(self.termination, Termination::Success),
+            "{subject}: {:?}",
+            self.termination
+        );
+        assert_eq!(self.stderr, "", "{subject}: stderr");
+        match serde_json::from_str(&self.stdout) {
+            Ok(document) => document,
+            Err(error) => panic!("{subject}: {error}: {:?}", self.stdout),
+        }
+    }
+
+    /// An ending that wrote nothing: asserts an empty stdout, an empty stderr, and the exit code `exit_code`,
+    /// and answers the termination, for the test to match its variant.
+    #[track_caller]
+    pub fn wrote_nothing(self, exit_code: u8, subject: &str) -> Termination {
+        assert_eq!(self.stdout, "", "{subject}: stdout");
+        assert_eq!(self.stderr, "", "{subject}: stderr");
+        assert_eq!(
+            self.termination.exit_code(),
+            exit_code,
+            "{subject}: exit code"
+        );
+        self.termination
+    }
 }
 
 /// The tracer of the scaffold: it keeps the command path it is told, and fails when it is told a second one.

@@ -1,5 +1,7 @@
-//! The isolated tree: the temporary directory every process-level test runs in.
+//! The isolated tree: the temporary directory every process-level test runs in, and the snapshot a test
+//! compares a directory by.
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
@@ -245,6 +247,50 @@ impl Drop for TempTree {
     }
 }
 
+/// What an entry below a directory is: what a test compares a directory by, before and after a command.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Found {
+    /// A directory; its entries are entries of their own.
+    Directory,
+    /// A file, with its content.
+    File(Vec<u8>),
+    /// A symbolic link, with its target as written. The link is not followed.
+    Link(PathBuf),
+}
+
+/// Every entry below `directory`, by its path from there.
+///
+/// It reads and never writes. A link is answered as its target and nothing of what it leads to. It panics on
+/// an entry it cannot read.
+pub fn snapshot(directory: &Path) -> BTreeMap<PathBuf, Found> {
+    fn walk(root: &Path, directory: &Path, found: &mut BTreeMap<PathBuf, Found>) {
+        for entry in std::fs::read_dir(directory).expect("a readable directory") {
+            let path = entry.expect("a directory entry").path();
+            let relative = path
+                .strip_prefix(root)
+                .expect("a path below the root")
+                .to_path_buf();
+            let kind = std::fs::symlink_metadata(&path)
+                .expect("an entry")
+                .file_type();
+            if kind.is_symlink() {
+                let target = std::fs::read_link(&path).expect("a link");
+                found.insert(relative, Found::Link(target));
+            } else if kind.is_dir() {
+                found.insert(relative, Found::Directory);
+                walk(root, &path, found);
+            } else {
+                let content = std::fs::read(&path).expect("a readable file");
+                found.insert(relative, Found::File(content));
+            }
+        }
+    }
+
+    let mut found = BTreeMap::new();
+    walk(directory, directory, &mut found);
+    found
+}
+
 /// Whether nothing is at `path`, a path no link is left to follow in, or a directory that holds nothing.
 fn absent_or_empty(path: &Path) -> bool {
     match std::fs::read_dir(path) {
@@ -309,4 +355,57 @@ fn within_charset(path: &Path) -> io::Result<&str> {
                 path.display()
             ))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use super::{Found, TempTree, snapshot};
+
+    #[test]
+    fn a_snapshot_answers_a_file_a_directory_and_a_link_and_nothing_the_link_leads_to() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let outside = tree.workspace_dir().join("outside");
+        let directory = tree.workspace_dir().join("seen");
+        std::fs::create_dir(&outside).expect("the directory outside");
+        std::fs::write(outside.join("unseen"), "beyond the link\n").expect("the file outside");
+        std::fs::create_dir_all(directory.join("inner")).expect("the directory");
+        std::fs::write(directory.join("file"), "content\n").expect("the file");
+        std::os::unix::fs::symlink("../outside", directory.join("link")).expect("the link");
+
+        let found = snapshot(&directory);
+
+        assert_eq!(
+            found,
+            BTreeMap::from([
+                (PathBuf::from("file"), Found::File(b"content\n".to_vec())),
+                (PathBuf::from("inner"), Found::Directory),
+                (PathBuf::from("link"), Found::Link("../outside".into())),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_snapshot_answers_what_a_directory_below_holds_by_its_path_from_the_top() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let directory = tree.workspace_dir().join("seen");
+        std::fs::create_dir_all(directory.join("inner/deeper")).expect("the directories");
+        std::fs::write(directory.join("inner/deeper/file"), "content\n").expect("the file");
+
+        let found = snapshot(&directory);
+
+        assert_eq!(
+            found,
+            BTreeMap::from([
+                (PathBuf::from("inner"), Found::Directory),
+                (PathBuf::from("inner/deeper"), Found::Directory),
+                (
+                    PathBuf::from("inner/deeper/file"),
+                    Found::File(b"content\n".to_vec())
+                ),
+            ])
+        );
+    }
 }
