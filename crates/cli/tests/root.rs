@@ -116,6 +116,41 @@ fn help_is_the_same_bytes_at_every_terminal_width_and_no_line_is_longer_than_100
     }
 }
 
+#[test]
+fn the_root_help_alone_ends_with_the_line_that_names_the_tracing_variable_and_the_readme() {
+    let names_both = |line: &str| {
+        line.contains("WINTER_OTEL_EXPORTER_OTLP_ENDPOINT") && line.contains("README.md")
+    };
+
+    let (help, _, _) = run(&["--help"]);
+    let (_, bare_root, bare_root_exit) = run(&[]);
+
+    let notices: Vec<&str> = help.lines().filter(|line| names_both(line)).collect();
+    let [notice] = notices.as_slice() else {
+        panic!("expected one line that names both: {help}");
+    };
+    assert_eq!(help.lines().last(), Some(*notice), "{help}");
+    let options = help
+        .lines()
+        .position(|line| line == "Options:")
+        .expect("the options of the root");
+    let noticed = help.lines().position(|line| line == *notice);
+    assert!(noticed > Some(options), "{help}");
+    assert_eq!(bare_root_exit, Exit::Code(2));
+    assert!(bare_root.lines().any(|line| line == *notice), "{bare_root}");
+
+    for args in [&["ws", "--help"][..], &["ws", "index", "--help"]] {
+        let (stdout, stderr, exit) = run(args);
+
+        assert_eq!(exit, Exit::Code(0), "{args:?}");
+        assert_eq!(stderr, "", "{args:?}");
+        assert!(stdout.contains("ws"), "{args:?}: {stdout}");
+        for word in ["WINTER_OTEL_EXPORTER_OTLP_ENDPOINT", "README.md"] {
+            assert!(!stdout.contains(word), "{args:?}: {word}: {stdout}");
+        }
+    }
+}
+
 /// Runs the built binary with `options` before `ws index feature-x --json`, and `variables` added to the pinned
 /// environment, in a workspace of an isolated tree that holds the name.
 fn index_run(options: &[&str], variables: &[(&str, &str)]) -> (String, String, Exit) {

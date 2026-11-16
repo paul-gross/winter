@@ -120,14 +120,15 @@ abandons the thread, which it does not join and which ends with the process: `ma
 no thread after the cap, and nothing may be added that does, such as a join of that thread, or a handle of the provider,
 the exporter, or its HTTP client whose drop runs on the calling thread or in `main`. An export the exporter answered
 with an error, one that had not ended when the cap expired, a panic of the export thread, and an export thread that
-could not be started are each reported as a failed export through the log of the invocation. The timeout the exporter is
-given, 100 ms as well, is no bound on the export. An exporter that cannot be built, which includes a trust store that
-yields no certificate, leaves tracing unavailable and the invocation as it was, and so does a panic while the exporter
-and the provider are built, which this file catches. An interrupt the handler ends the process for exports nothing. When
-tracing is on, `main` has this file remove the `OTEL_EXPORTER_OTLP_` variables from the process environment before the
-tracer exists, because the exporter crate would read them; the snapshot keeps them. A port that starts a child process
-therefore builds the environment of the child from the snapshot and never lets the child inherit the environment of the
-process: an inherited one would lack those variables in every traced invocation.
+could not be started are each reported as a failed export through the log of the invocation. Before that record, and
+with a span open alone, each configured header that is not sent for its value is reported through the same log, by its
+name. The timeout the exporter is given, 100 ms as well, is no bound on the export. An exporter that cannot be built,
+which includes a trust store that yields no certificate, leaves tracing unavailable and the invocation as it was, and so
+does a panic while the exporter and the provider are built, which this file catches. An interrupt the handler ends the
+process for exports nothing. When tracing is on, `main` has this file remove the `OTEL_EXPORTER_OTLP_` variables from
+the process environment before the tracer exists, because the exporter crate would read them; the snapshot keeps them. A
+port that starts a child process therefore builds the environment of the child from the snapshot and never lets the
+child inherit the environment of the process: an inherited one would lack those variables in every traced invocation.
 
 Outside their test modules, no other file names what these three name. `main.rs` alone names the process streams, reads
 the process environment, and answers the exit code of an ending. Two files read the clock: `main.rs`, for the instant
@@ -156,7 +157,7 @@ under a lock, which replaces the file through a temporary file beside it.
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `process.rs`                    | `run`, `Invocation`, `Identity`, `ProcessEnv`, `Interrupts`; after the parse: help or version written, the debug record, the command announced to the tracer, the one `Context` built, the command called                                                                                                     |
 | `termination.rs`                | `Termination` and the error enums it carries                                                                                                                                                                                                                                                                  |
-| `trace.rs`                      | `TraceSettings` and `TraceConfig`, `settings`, which reads them from the environment snapshot at an instant it is given, and `span_name`; the tracer port `CommandTracer`, with `NoTrace` and `TraceLog`, which writes the two records about tracing; it names no tracing crate                               |
+| `trace.rs`                      | `TraceSettings` and `TraceConfig`, `settings`, which reads them from the environment snapshot at an instant it is given, and `span_name`; the tracer port `CommandTracer`, with `NoTrace` and `TraceLog`, which writes the three records about tracing; it names no tracing crate                             |
 | `context.rs`                    | `Context`, what a command receives, with `Invoked`, the node being run, and `RootOptions`, the root option values a command can read                                                                                                                                                                          |
 | `logging.rs`                    | `Level` and `Log`, and the resolution of `-v` and `WINTER_LOG_LEVEL` into what an invocation logs                                                                                                                                                                                                             |
 | `registry.rs`                   | `Registration` and `Entry`, and the registry the build script generates                                                                                                                                                                                                                                       |

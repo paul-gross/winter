@@ -36,6 +36,10 @@ const UNSAMPLED: &str = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00
 /// trust store fit in it on a loaded machine. No test asserts a bound nearer to that wait.
 const BOUND: Duration = Duration::from_secs(2);
 
+/// How many collectors in a row [`Fixture::alone`] gives an invocation before it gives up: each after the
+/// first because an invocation of another test reached the one before.
+const COLLECTORS_TRIED: usize = 8;
+
 /// A command that succeeds in the fixture workspace and writes one document to stdout.
 const INDEX: &[&str] = &["ws", "index", "feature-x", "--json"];
 /// The same command without its name: a usage error of the command.
@@ -57,6 +61,16 @@ struct Ended {
     stdout: String,
     stderr: String,
     exit: Exit,
+}
+
+/// What a collector saw of the one invocation that was handed its address, and how that invocation ended.
+struct Alone {
+    ended: Ended,
+    elapsed: Duration,
+    /// How many connections the collector accepted, the one that counted them left out.
+    connections: usize,
+    /// The requests the collector read, each sent to the path the invocation was handed.
+    requests: Vec<ReceivedRequest>,
 }
 
 impl Fixture {
@@ -129,6 +143,70 @@ impl Fixture {
     /// Runs `args` with tracing off, as the pinned environment leaves it.
     fn untraced(&self, args: &[&str]) -> Ended {
         self.run(args, &[]).0
+    }
+
+    /// Runs `args` with tracing on and `variables` added, towards a collector of its own that gives `answer`
+    /// and is addressed under `scheme`, and returns what a collector saw that read no request of another
+    /// invocation.
+    ///
+    /// A collector does not choose its port, and the system may give it one that
+    /// `Collector::refused_endpoint` bound and released a moment before, in this process or in another one
+    /// that runs these tests. The invocation that was handed the released address then exports to this
+    /// collector, which counts a connection and reads a request that are not of the invocation under test.
+    /// Such a request is sent to the traces path of a bare address. The invocation here is handed an address
+    /// with a path no other is handed, the name of its tree, so every request it sends is told from those.
+    /// A collector that read a request sent to another path is set aside with all it counted, and the
+    /// invocation is run again towards a new one.
+    ///
+    /// What is returned is therefore counted over a collector whose every request came from this
+    /// invocation. A connection of another invocation that brought no request it could read is not told
+    /// from one of this invocation and stays counted.
+    fn alone(
+        &self,
+        answer: Answer,
+        scheme: &str,
+        args: &[&str],
+        variables: &[(&str, &str)],
+    ) -> Alone {
+        let own = self
+            .tree
+            .root()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("the name of a tree is text");
+        let own_target = format!("/{own}/v1/traces");
+        let mut seen = Vec::new();
+        for _ in 0..COLLECTORS_TRIED {
+            let collector = collector(answer);
+            let endpoint = collector.endpoint().replacen("http://", scheme, 1);
+            assert!(
+                endpoint.starts_with(&format!("{scheme}127.0.0.1:")),
+                "{endpoint}"
+            );
+
+            let (ended, elapsed) = self.traced(&format!("{endpoint}/{own}"), args, variables);
+
+            let connections = connections_before(&collector);
+            let requests = collector.requests();
+            if requests.iter().all(|request| request.target == own_target) {
+                return Alone {
+                    ended,
+                    elapsed,
+                    connections,
+                    requests,
+                };
+            }
+            seen.push(
+                requests
+                    .into_iter()
+                    .map(|request| request.target)
+                    .collect::<Vec<_>>(),
+            );
+        }
+        panic!(
+            "each of {COLLECTORS_TRIED} collectors in a row read a request that was sent to another path \
+             than {own_target}; the targets each read: {seen:?}"
+        );
     }
 }
 
@@ -429,13 +507,16 @@ fn an_export_that_fails_is_one_error_record_about_tracing_under_the_verbose_flag
 fn an_answer_the_exporter_would_retry_and_a_silent_collector_each_see_one_connection() {
     let fixture = Fixture::new();
     for answer in [Answer::Status(503), Answer::Hang] {
-        let collector = collector(answer);
+        let alone = fixture.alone(answer, "http://", INDEX, &[]);
 
-        let (ended, _) = fixture.traced(&collector.endpoint(), INDEX, &[]);
-
-        assert_eq!(ended.exit, Exit::Code(0), "{answer:?}: {ended:?}");
-        assert_eq!(connections_before(&collector), 1, "{answer:?}");
-        assert_eq!(collector.requests().len(), 1, "{answer:?}");
+        assert_eq!(
+            alone.ended.exit,
+            Exit::Code(0),
+            "{answer:?}: {:?}",
+            alone.ended
+        );
+        assert_eq!(alone.connections, 1, "{answer:?}");
+        assert_eq!(alone.requests.len(), 1, "{answer:?}: {:?}", alone.requests);
     }
 }
 
@@ -516,16 +597,13 @@ fn a_trust_store_that_holds_no_certificate_leaves_tracing_unavailable_and_the_co
 fn an_https_endpoint_is_served_and_its_failed_export_is_bounded() {
     let fixture = Fixture::new();
     let untraced = fixture.untraced(INDEX);
-    let collector = collector(Answer::Ok);
-    let endpoint = collector.endpoint().replacen("http://", "https://", 1);
-    assert!(endpoint.starts_with("https://127.0.0.1:"), "{endpoint}");
 
-    let (ended, elapsed) = fixture.traced(&endpoint, INDEX, &[]);
+    let alone = fixture.alone(Answer::Ok, "https://", INDEX, &[]);
 
-    assert_eq!(ended, untraced);
-    assert!(elapsed < BOUND, "{elapsed:?}");
-    assert_eq!(connections_before(&collector), 1);
-    assert_eq!(collector.requests().len(), 0);
+    assert_eq!(alone.ended, untraced);
+    assert!(alone.elapsed < BOUND, "{:?}", alone.elapsed);
+    assert_eq!(alone.connections, 1);
+    assert_eq!(alone.requests.len(), 0, "{:?}", alone.requests);
 }
 
 #[test]
@@ -623,4 +701,71 @@ fn a_configured_user_agent_replaces_the_one_of_the_exporter_in_every_invocation(
         let request = one_request(collector);
         assert_eq!(header(&request, "user-agent"), ["probe/1"], "run {run}");
     }
+}
+
+#[test]
+fn a_configured_content_type_is_not_sent_and_a_header_with_an_illegal_value_is_left_out_and_named()
+{
+    let fixture = Fixture::new();
+    let untraced = fixture.untraced(INDEX);
+    let headers = [(
+        HEADERS,
+        "content-type=text/plain,x-bad=s3cr3t%0Aprobe,x-plain=b",
+    )];
+
+    let plain = fixture.alone(Answer::Ok, "http://", INDEX, &headers);
+
+    assert_eq!(plain.ended, untraced);
+    let [request] = plain.requests.as_slice() else {
+        panic!("expected one request: {:?}", plain.requests);
+    };
+    assert_eq!(header(request, "content-type"), ["application/x-protobuf"]);
+    assert_eq!(header(request, "x-plain"), ["b"]);
+    assert!(header(request, "x-bad").is_empty(), "{request:?}");
+    let export = decode_export(&request.body).expect("a trace export");
+    assert_eq!(export.spans.len(), 1, "{export:?}");
+
+    let verbose = fixture.alone(Answer::Ok, "http://", &[&["-v"], INDEX].concat(), &headers);
+    let ended = &verbose.ended;
+
+    assert_eq!(ended.exit, untraced.exit, "{ended:?}");
+    assert_eq!(ended.stdout, untraced.stdout);
+    let records = trace_records(&ended.stderr);
+    let [record] = records.as_slice() else {
+        panic!("expected one record about tracing: {ended:?}");
+    };
+    assert!(record.starts_with("DEBUG trace: "), "{record}");
+    assert!(record.contains("x-bad"), "{record}");
+    for word in ["s3cr3t", "probe", "content-type"] {
+        assert!(!ended.stderr.contains(word), "{word}: {ended:?}");
+    }
+    let [request] = verbose.requests.as_slice() else {
+        panic!("expected one request: {:?}", verbose.requests);
+    };
+    assert_eq!(header(request, "content-type"), ["application/x-protobuf"]);
+    assert_eq!(header(request, "x-plain"), ["b"]);
+    assert!(header(request, "x-bad").is_empty(), "{request:?}");
+}
+
+#[test]
+fn a_header_value_with_a_tab_and_a_byte_above_the_ascii_range_arrives_as_it_was_configured() {
+    let fixture = Fixture::new();
+    let untraced = fixture.untraced(INDEX);
+    let headers = [(HEADERS, "x-tab=a%09b,x-high=caf%C3%A9,x-plain=b")];
+
+    let verbose = fixture.alone(Answer::Ok, "http://", &[&["-v"], INDEX].concat(), &headers);
+
+    assert_eq!(verbose.ended.exit, untraced.exit, "{:?}", verbose.ended);
+    assert_eq!(verbose.ended.stdout, untraced.stdout);
+    assert!(
+        trace_records(&verbose.ended.stderr).is_empty(),
+        "{:?}",
+        verbose.ended
+    );
+    let [request] = verbose.requests.as_slice() else {
+        panic!("expected one request: {:?}", verbose.requests);
+    };
+    assert_eq!(header(request, "x-tab"), ["a\tb"]);
+    assert_eq!(header(request, "x-high"), ["caf\u{e9}"]);
+    assert_eq!(header(request, "x-plain"), ["b"]);
 }

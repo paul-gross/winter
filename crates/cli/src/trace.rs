@@ -98,6 +98,8 @@ enum State<E> {
         span: Box<Span>,
         log: TraceLog,
         kept: Kept,
+        /// The names of the configured headers the export goes out without, for their records.
+        skipped_headers: Vec<String>,
     },
 }
 
@@ -125,14 +127,15 @@ impl<E: SpanExporter + 'static> Tracer<E> {
         }
     }
 
-    /// Ends the invocation's tracing, and writes at most one record to `stderr`.
+    /// Ends the invocation's tracing, and writes its records to `stderr`: with a span open, one for each
+    /// configured header that is not sent, in their order, and then at most one about the export.
     ///
     /// An open span gains the attribute `error.type` and an error status with an empty message when
     /// `error_type` names one, and the instant of its end is read, both on this thread. The span and the
     /// provider then go to the export thread, which [`export_within_the_cap`] starts and waits for no longer
     /// than [`EXPORT_CAP`]; an export that failed, or that had not ended by then, is reported through the log of
-    /// the invocation. A tracer that is unavailable reports that, when a command was announced. Anything else
-    /// does nothing, and starts no thread.
+    /// the invocation. A tracer that is unavailable reports that, when a command was announced, and names no
+    /// header: nothing was to be sent. Anything else does nothing, and starts no thread.
     pub(crate) fn finish(&self, error_type: Option<&'static str>, stderr: &mut dyn Write) {
         match self.state.replace(State::Idle) {
             State::Idle | State::Waiting { .. } | State::Unavailable { log: None, .. } => {}
@@ -145,12 +148,16 @@ impl<E: SpanExporter + 'static> Tracer<E> {
                 mut span,
                 log,
                 kept,
+                skipped_headers,
             } => {
                 if let Some(error_type) = error_type {
                     span.set_attribute(KeyValue::new(ERROR_TYPE_ATTRIBUTE, error_type));
                     span.set_status(Status::error(""));
                 }
                 let ended = SystemTime::now();
+                for name in &skipped_headers {
+                    log.header_skipped(stderr, name);
+                }
                 if let Err(cause) = export_within_the_cap(Exported { span, provider }, ended, kept)
                 {
                     log.export_failed(stderr, &cause);
@@ -346,6 +353,7 @@ fn open<E: SpanExporter + 'static>(
         span: Box::new(span),
         log,
         kept,
+        skipped_headers: config.skipped_headers.clone(),
     }
 }
 
@@ -364,9 +372,9 @@ fn parent(traceparent: Option<&str>) -> Context {
 /// no retry. The error is the text of what the exporter crate refused.
 ///
 /// The exporter percent-decodes each header value it is handed, and `config` holds the values decoded already,
-/// so each `%` is handed as `%25` and the exporter holds the value of `config`. What it sends of that is its
-/// own: it drops a header whose value is not legal in an HTTP header, and a configured `content-type` takes the
-/// place of the protobuf one.
+/// so each `%` is handed as `%25` and the exporter holds the value of `config`. The headers of `config` hold no
+/// `content-type` and no value that is not legal in an HTTP header, so the exporter is handed nothing that
+/// takes the place of its protobuf content type and nothing it leaves out for its value.
 ///
 /// The exporter keeps its own `User-Agent` under that spelling in a map keyed by text, beside the headers it is
 /// handed, and sends one of two keys that differ in case alone, whichever its map yields last. A configured
@@ -678,6 +686,7 @@ mod tests {
         TraceConfig {
             endpoint: "http://collector.invalid:4318/v1/traces".to_owned(),
             headers: Vec::new(),
+            skipped_headers: Vec::new(),
             resource: vec![
                 ("service.name".to_owned(), "winter".to_owned()),
                 ("deployment".to_owned(), "test".to_owned()),
@@ -970,6 +979,98 @@ mod tests {
             assert_eq!(written, record, "{logging:?}");
             assert_eq!(probe.handed.spans().len(), 1, "{logging:?}");
         }
+    }
+
+    /// Settings that turn tracing on and name two configured headers the export goes out without.
+    fn with_skipped_headers() -> TraceConfig {
+        TraceConfig {
+            skipped_headers: vec!["x-bad".to_owned(), "x-c".to_owned()],
+            ..on()
+        }
+    }
+
+    const SKIPPED_RECORDS: &str = "\
+        DEBUG trace: the header x-bad is not sent: its value is not legal in an HTTP header\n\
+        DEBUG trace: the header x-c is not sent: its value is not legal in an HTTP header\n";
+
+    #[test]
+    fn each_skipped_header_is_one_debug_record_in_order_before_the_record_of_the_export() {
+        let failed = "ERROR trace: the command span was not exported: \
+                      Operation failed: the collector is away\n";
+        for (exporter, logging, records) in [
+            (
+                Exporter::Records,
+                Logging::Debug,
+                SKIPPED_RECORDS.to_owned(),
+            ),
+            (
+                Exporter::Fails,
+                Logging::Debug,
+                format!("{SKIPPED_RECORDS}{failed}"),
+            ),
+            (Exporter::Fails, Logging::Unswitched, String::new()),
+            (Exporter::Fails, Logging::Error, failed.to_owned()),
+        ] {
+            let probe = probe(TraceSettings::On(with_skipped_headers()), exporter);
+
+            announce(&probe.tracer, logging);
+            let written = finished(&probe.tracer, None);
+
+            assert_eq!(written, records, "{logging:?}");
+            assert_eq!(
+                probe.handed.spans().len(),
+                1,
+                "{logging:?}: the span is handed to the exporter all the same"
+            );
+        }
+    }
+
+    #[test]
+    fn a_span_the_sampler_did_not_record_still_has_its_skipped_headers_named() {
+        let probe = probe(
+            TraceSettings::On(TraceConfig {
+                traceparent: Some(
+                    "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00".to_owned(),
+                ),
+                ..with_skipped_headers()
+            }),
+            Exporter::Fails,
+        );
+
+        announce(&probe.tracer, Logging::Debug);
+
+        assert_eq!(finished(&probe.tracer, None), SKIPPED_RECORDS);
+        assert_eq!(probe.handed.spans(), []);
+    }
+
+    #[test]
+    fn no_skipped_header_is_named_when_no_span_was_opened() {
+        // No command is announced.
+        let unannounced = probe(TraceSettings::On(with_skipped_headers()), Exporter::Records);
+        run_library(&unannounced.tracer, Logging::Debug, &["--version"]);
+        assert_eq!(finished(&unannounced.tracer, None), "");
+
+        // The settings are unavailable.
+        let unavailable = probe(
+            TraceSettings::Unavailable("the value is not UTF-8".to_owned()),
+            Exporter::Records,
+        );
+        announce(&unavailable.tracer, Logging::Debug);
+        assert_eq!(
+            finished(&unavailable.tracer, None),
+            "DEBUG trace: tracing is unavailable: the value is not UTF-8\n"
+        );
+
+        // The exporter cannot be built.
+        let unbuilt = probe(
+            TraceSettings::On(with_skipped_headers()),
+            Exporter::CannotBeBuilt,
+        );
+        announce(&unbuilt.tracer, Logging::Debug);
+        assert_eq!(
+            finished(&unbuilt.tracer, None),
+            "DEBUG trace: tracing is unavailable: the endpoint is no address\n"
+        );
     }
 
     #[test]

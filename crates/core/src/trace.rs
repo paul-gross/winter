@@ -1,5 +1,5 @@
 //! The pure part of tracing: the settings of the command span, read from the environment snapshot, the span's
-//! name, the port `run` announces a command to, and the two log records about tracing.
+//! name, the port `run` announces a command to, and the three log records about tracing.
 //!
 //! Nothing here reads a clock, opens a socket, or names a tracing crate: the instant is an argument, the
 //! environment is the snapshot, and the host's tracer is behind the port.
@@ -25,6 +25,9 @@ const RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 const TRACEPARENT: &str = "TRACEPARENT";
 const LAUNCH_TIME: &str = "WINTER_LAUNCH_TIME";
 
+/// The header the export sets itself: a configured one of this name is not sent.
+const CONTENT_TYPE: &str = "content-type";
+
 /// The path every export is sent to, below the configured address.
 const EXPORT_PATH: &str = "/v1/traces";
 /// The resource attribute that names the service.
@@ -49,8 +52,12 @@ pub enum TraceSettings {
 pub struct TraceConfig {
     /// The address the export is sent to; it ends in `/v1/traces`.
     pub endpoint: String,
-    /// The headers of the export request, each name in lower case and held once.
+    /// The configured headers that are sent with the export, each name in lower case and held once. None is
+    /// named `content-type`, and no value holds a byte that is not legal in an HTTP header.
     pub headers: Vec<(String, String)>,
+    /// The names of the configured headers that are not sent because their value is not legal in an HTTP
+    /// header, in the order they were configured.
+    pub skipped_headers: Vec<String>,
     /// The resource attributes, `service.name` first.
     pub resource: Vec<(String, String)>,
     /// The value of `TRACEPARENT` as it was given, or `None` when the span starts a trace of its own. Whether
@@ -83,9 +90,11 @@ pub fn settings(env: &ProcessEnv, now_unix_nano: u64) -> TraceSettings {
     let Some(endpoint) = endpoint else {
         return TraceSettings::Unavailable(format!("the value of {ENDPOINT} is not UTF-8"));
     };
+    let (headers, skipped_headers) = headers(text(env, HEADERS).unwrap_or_default());
     TraceSettings::On(TraceConfig {
         endpoint: format!("{}{EXPORT_PATH}", endpoint.trim().trim_end_matches('/')),
-        headers: headers(text(env, HEADERS).unwrap_or_default()),
+        headers,
+        skipped_headers,
         resource: resource(
             text(env, SERVICE_NAME_VARIABLE),
             text(env, RESOURCE_ATTRIBUTES).unwrap_or_default(),
@@ -149,6 +158,17 @@ impl TraceLog {
         );
     }
 
+    /// Reports to `err` that the configured header `name` is not sent with the export, because its value is
+    /// not legal in an HTTP header: a debug record, written only when `-v` or a valid `WINTER_LOG_LEVEL`
+    /// switched the record format. The record holds the name and nothing of the value.
+    pub fn header_skipped(self, err: &mut dyn Write, name: &str) {
+        self.report(
+            err,
+            Level::Debug,
+            &format!("the header {name} is not sent: its value is not legal in an HTTP header"),
+        );
+    }
+
     fn report(self, err: &mut dyn Write, level: Level, message: &str) {
         diagnostics::record(
             err,
@@ -168,12 +188,43 @@ fn text<'a>(env: &'a ProcessEnv, key: &str) -> Option<&'a str> {
     env.get(key).and_then(|value| value.to_str())
 }
 
-/// The headers `value` lists: items separated by `,`, each split at its first `=`, the name and the value
-/// percent-decoded and trimmed, the name in lower case.
+/// The headers `value` lists that are sent, and the names of those that are not sent for their value.
 ///
-/// An item with no `=`, with an empty name, or with a name that is no HTTP token is skipped, and the others
-/// still apply. A name given twice keeps its first place and its last value.
-fn headers(value: &str) -> Vec<(String, String)> {
+/// The items are separated by `,`, each split at its first `=`, the name and the value percent-decoded and
+/// trimmed, the name in lower case. An item with no `=`, with an empty name, or with a name that is no HTTP
+/// token is skipped, and the others still apply. A name given twice keeps its first place and its last value.
+///
+/// A `,` always ends an item, one that stands unencoded inside a value included: what follows it is read as an
+/// item of its own, so its text before the first `=` is taken for a name, and may be reported as one.
+///
+/// Two kinds of the pairs read so are left out of the first list, each judged by the value its name ended
+/// with. The name `content-type` is left out and named nowhere: the export carries a content type of its own.
+/// A pair whose value holds a byte that is not legal in an HTTP header is left out, and its name is in the
+/// second list, in the order of the pairs.
+fn headers(value: &str) -> (Vec<(String, String)>, Vec<String>) {
+    let mut sent = parsed_headers(value);
+    let mut skipped = Vec::new();
+    sent.retain(|(name, value)| {
+        if name == CONTENT_TYPE {
+            return false;
+        }
+        let legal = value.bytes().all(is_header_value_byte);
+        if !legal {
+            skipped.push(name.clone());
+        }
+        legal
+    });
+    (sent, skipped)
+}
+
+/// Whether `byte` may stand in the value of an HTTP header, as the HTTP crate of the exporter judges it: the
+/// tab and every byte from the space on, except the delete character. A byte above the ASCII range is legal.
+fn is_header_value_byte(byte: u8) -> bool {
+    byte == b'\t' || (byte >= 0x20 && byte != 0x7f)
+}
+
+/// Every header `value` lists, as [`headers`] reads the items, before any is left out.
+fn parsed_headers(value: &str) -> Vec<(String, String)> {
     let mut pairs = Vec::new();
     for item in value.split(',') {
         let Some((name, value)) = item.split_once('=') else {
@@ -343,6 +394,7 @@ mod tests {
             TraceSettings::On(TraceConfig {
                 endpoint: "http://c:4318/v1/traces".to_owned(),
                 headers: Vec::new(),
+                skipped_headers: Vec::new(),
                 resource: pairs(&[("service.name", "winter")]),
                 traceparent: None,
                 launch_time_unix_nano: None,
@@ -526,6 +578,98 @@ mod tests {
         for value in [&b""[..], b"  ", b"x-a=1,x-b=\xff"] {
             assert_eq!(config_with(HEADERS, value).headers, Vec::new(), "{value:?}");
         }
+    }
+
+    #[test]
+    fn a_configured_content_type_is_left_out_in_any_letter_case_and_named_nowhere() {
+        for value in [
+            &b"content-type=text/plain,x-a=1"[..],
+            b"Content-Type=a,x-a=1",
+            b"x-a=1,CONTENT-TYPE=a%0Ab",
+        ] {
+            let config = config_with(HEADERS, value);
+
+            assert_eq!(config.headers, pairs(&[("x-a", "1")]), "{value:?}");
+            assert_eq!(config.skipped_headers, Vec::<String>::new(), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn a_header_whose_value_is_not_legal_is_left_out_and_named_and_the_others_still_apply() {
+        for value in [
+            &b"x-a=1,x-bad=a%0Ab,x-b=2"[..],
+            b"x-a=1,x-bad=a%7Fb,x-b=2",
+            b"x-a=1,x-bad=a%00b,x-b=2",
+            b"x-a=1,x-bad=a%1Fb,x-b=2",
+        ] {
+            let config = config_with(HEADERS, value);
+
+            assert_eq!(
+                config.headers,
+                pairs(&[("x-a", "1"), ("x-b", "2")]),
+                "{value:?}"
+            );
+            assert_eq!(config.skipped_headers, ["x-bad"], "{value:?}");
+        }
+    }
+
+    #[test]
+    fn the_skipped_headers_are_named_in_the_order_they_were_configured() {
+        let config = config_with(HEADERS, b"x-c=a%0Ab,x-a=1,x-b=%00%00");
+
+        assert_eq!(config.headers, pairs(&[("x-a", "1")]));
+        assert_eq!(config.skipped_headers, ["x-c", "x-b"]);
+    }
+
+    #[test]
+    fn a_tab_and_bytes_above_the_ascii_range_are_legal_in_a_header_value() {
+        let config = config_with(HEADERS, b"x-tab=a%09b,x-high=%C3%A9,x-space=a b~");
+
+        assert_eq!(
+            config.headers,
+            pairs(&[("x-tab", "a\tb"), ("x-high", "\u{e9}"), ("x-space", "a b~")])
+        );
+        assert_eq!(config.headers[1].1.as_bytes(), [0xc3, 0xa9]);
+        assert_eq!(config.skipped_headers, Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_last_value_of_a_header_name_given_twice_is_the_one_judged() {
+        let legal_last = config_with(HEADERS, b"x-a=a%0Ab,x-a=ok");
+        assert_eq!(legal_last.headers, pairs(&[("x-a", "ok")]));
+        assert_eq!(legal_last.skipped_headers, Vec::<String>::new());
+
+        let illegal_last = config_with(HEADERS, b"x-a=ok,x-b=1,x-a=a%0Ab");
+        assert_eq!(illegal_last.headers, pairs(&[("x-b", "1")]));
+        assert_eq!(illegal_last.skipped_headers, ["x-a"]);
+    }
+
+    #[test]
+    fn a_skipped_header_is_one_debug_record_that_holds_its_name_under_a_switched_log_alone() {
+        let written = |log: Log| {
+            let mut err = Vec::new();
+            TraceLog::new(log).header_skipped(&mut err, "x-bad");
+            String::from_utf8(err).expect("UTF-8")
+        };
+        let switched = |threshold| Log {
+            threshold,
+            switched: true,
+        };
+
+        assert_eq!(
+            written(switched(Level::Debug)),
+            "DEBUG trace: the header x-bad is not sent: its value is not legal in an HTTP header\n"
+        );
+        assert_eq!(written(switched(Level::Info)), "");
+        assert_eq!(written(switched(Level::Error)), "");
+        assert_eq!(written(Log::DEFAULT), "");
+        assert_eq!(
+            written(Log {
+                threshold: Level::Debug,
+                switched: false,
+            }),
+            ""
+        );
     }
 
     #[test]

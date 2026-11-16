@@ -406,12 +406,17 @@ fn node_at<'c>(node: &'c clap::Command, path: &[String]) -> &'c clap::Command {
     })
 }
 
+/// The line the root help ends with, after the options. The help of a group and of a command has no such
+/// line.
+const TRACING_NOTICE: &str = "WINTER_OTEL_EXPORTER_OTLP_ENDPOINT makes a command send a trace span; README.md says what is sent.";
+
 fn root(identity: &Identity) -> clap::Command {
     root_options(
         with_help(
             clap::Command::new(identity.program)
                 .about("Manage a Winter workspace")
                 .bin_name(identity.program)
+                .after_help(TRACING_NOTICE)
                 .version(identity.version)
                 .no_binary_name(true)
                 .disable_version_flag(true),
