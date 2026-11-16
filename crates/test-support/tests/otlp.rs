@@ -1,13 +1,17 @@
-//! The loopback collector: what it records of a request, what it answers, and how it stops.
+//! The loopback collector: what it records of a request, what it answers, and how it stops; and the refused
+//! endpoint: what a connection to it meets, and who may have its port.
 //!
-//! Every client here is a plain `TcpStream` of the test, connected to the collector the test started and to
-//! nothing else.
+//! Every client here is a plain `TcpStream` of the test. It connects to a collector the test started, or to
+//! the address of a `RefusedEndpoint` the test holds, where it is refused, and to nothing else. Two tests
+//! bind a listener of their own to a port they saw freed, that of a dropped collector and that of a dropped
+//! `RefusedEndpoint`, and the second first tries to bind it while the port is held, which fails.
 
+use std::collections::BTreeSet;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddrV4, TcpListener, TcpStream};
 use std::time::Duration;
 
-use winter_workspace_test_support::{Answer, Collector, ReceivedRequest};
+use winter_workspace_test_support::{Answer, Collector, ReceivedRequest, RefusedEndpoint};
 
 /// Longer than any answer of a collector takes; a read that waits this long fails its test.
 const PATIENCE: Duration = Duration::from_secs(30);
@@ -225,14 +229,92 @@ fn a_collector_no_client_reached_has_no_connection_and_no_request() {
     assert_eq!(collector.requests(), []);
 }
 
+/// How many values, or collectors, a test holds at once to see that their ports differ.
+const HELD_AT_ONCE: usize = 64;
+
+/// Asserts that a connection to `endpoint` is refused: not accepted, and not left waiting.
+fn assert_refused(endpoint: &str, when: &str) {
+    let connection = TcpStream::connect(loopback(port_of(endpoint)));
+
+    let error = match connection {
+        Ok(_) => panic!("{when}: a connection to {endpoint} was accepted"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.kind(),
+        ErrorKind::ConnectionRefused,
+        "{when}: {error:?}"
+    );
+}
+
 #[test]
-fn nothing_accepts_at_the_refused_endpoint() {
-    let endpoint = Collector::refused_endpoint().expect("an endpoint");
+fn every_connection_to_a_held_address_is_refused() {
+    let refused = RefusedEndpoint::hold().expect("a held address");
+    let endpoint = refused.endpoint();
 
-    let connection = TcpStream::connect(loopback(port_of(&endpoint)));
+    for nth in 1..=3 {
+        assert_refused(&endpoint, &format!("connection {nth}"));
+    }
+    drop(Collector::start(Answer::Ok).expect("a collector"));
+    assert_refused(&endpoint, "after a collector was started and dropped");
 
-    let error = connection.expect_err("a refused connection");
-    assert_eq!(error.kind(), ErrorKind::ConnectionRefused, "{error:?}");
+    drop(refused);
+}
+
+#[test]
+fn addresses_held_at_once_have_different_ports() {
+    let held: Vec<RefusedEndpoint> = (0..HELD_AT_ONCE)
+        .map(|_| RefusedEndpoint::hold().expect("a held address"))
+        .collect();
+
+    let ports: BTreeSet<u16> = held
+        .iter()
+        .map(|refused| port_of(&refused.endpoint()))
+        .collect();
+
+    assert_eq!(ports.len(), HELD_AT_ONCE, "{ports:?}");
+}
+
+/// The one test that tells a port that is held from one that was bound and given back: a connection to either
+/// is refused, and only the held one cannot be bound.
+#[test]
+fn the_port_of_a_held_address_is_taken_while_it_is_held_and_free_after_the_drop() {
+    let refused = RefusedEndpoint::hold().expect("a held address");
+    let port = port_of(&refused.endpoint());
+
+    let while_held = TcpListener::bind(loopback(port));
+
+    let error = while_held.expect_err("no listener on a held port");
+    assert_eq!(error.kind(), ErrorKind::AddrInUse, "{error:?}");
+
+    drop(refused);
+
+    TcpListener::bind(loopback(port)).expect("the port of the dropped value, free again");
+}
+
+#[test]
+fn no_collector_is_given_the_port_of_a_held_address() {
+    let refused = RefusedEndpoint::hold().expect("a held address");
+    let endpoint = refused.endpoint();
+
+    let collectors: Vec<Collector> = (0..HELD_AT_ONCE)
+        .map(|_| Collector::start(Answer::Ok).expect("a collector"))
+        .collect();
+    let ports: BTreeSet<u16> = collectors
+        .iter()
+        .map(|collector| port_of(&collector.endpoint()))
+        .collect();
+
+    assert_eq!(ports.len(), HELD_AT_ONCE, "{ports:?}");
+    assert!(
+        !ports.contains(&port_of(&endpoint)),
+        "{endpoint}: {ports:?}"
+    );
+
+    drop(collectors);
+    assert_refused(&endpoint, "after the collectors were dropped");
+
+    drop(refused);
 }
 
 #[test]

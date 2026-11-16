@@ -131,14 +131,15 @@ resolves no name, lives outside the isolated tree, and holds no file.
 
 The sockets a test opens or causes are these, each on 127.0.0.1, and no other:
 
-- a `Collector` the test started, and the port `Collector::refused_endpoint` binds and releases;
+- a `Collector` the test started, and the bound socket of a `RefusedEndpoint`, which never listens;
 - the client side of a connection to a `Collector`, from the test itself or from a child the test starts and hands the
   endpoint to;
-- a connection attempt to an address `Collector::refused_endpoint` gave, from the test or from such a child, which
-  reaches no listener;
+- a connection attempt to the address of a `RefusedEndpoint` that is still held, from the test or from such a child,
+  which reaches no listener and is refused;
 - in the support package's own tests of the collector, and nowhere else, a listener of the test's own: the listener a
   collector serves, bound without a collector, with the client side of the connections the test makes to it while it is
-  bound; and the port of a collector that was dropped, bound again to show it free.
+  bound; the port of a collector that was dropped, bound again to show it free; the listener whose bind to the port of a
+  held `RefusedEndpoint` fails; and the port of a dropped `RefusedEndpoint`, bound to show it free.
 
 What the collector gives a test:
 
@@ -157,8 +158,11 @@ What the collector gives a test:
   body. A connection made before the stop is still served, for five seconds at most once the thread has seen the stop,
   so a client that goes on connecting does not keep a stopped collector alive. Dropping the collector stops it the same
   way; either joins the thread and frees the port.
-- `Collector::refused_endpoint` is an address of the same form at which nothing listens: a loopback port that was bound
-  and released. Nothing holds the port once it is released, so another process may take it before the test connects.
+- `RefusedEndpoint::hold` gives a value that owns a socket bound to a loopback port the system chose, which never
+  listens; its `endpoint` is an address of the same form. A connection to it is refused for as long as the value lives,
+  and no TCP socket that is bound on 127.0.0.1 and asks the system for a port is given that one, the listener of a
+  `Collector` among them. A test keeps the value until every child it handed the endpoint to has ended: once the value
+  is dropped, the port may be given to anyone.
 
 `decode_export` reads the protobuf body of a trace export request into a `ReceivedExport`: the string-valued resource
 attributes, the scope's name, and each span as a `ReceivedSpan`. It is written by hand from the field numbers of the
@@ -172,8 +176,8 @@ The pinned environment turns tracing off: it sets the kill switch, `OTEL_SDK_DIS
 binary to trace does three things through `PinnedEnv::set`:
 
 - it sets `OTEL_SDK_DISABLED` to `false`, which clears the kill switch;
-- it sets `WINTER_OTEL_EXPORTER_OTLP_ENDPOINT` to the endpoint of a `Collector` it started, or to an address
-  `Collector::refused_endpoint` gave;
+- it sets `WINTER_OTEL_EXPORTER_OTLP_ENDPOINT` to the endpoint of a `Collector` it started or of a `RefusedEndpoint` it
+  holds;
 - it sets `SSL_CERT_FILE` to a certificate file it wrote under `tmp/` of its tree.
 
 The exporter reads its trust store when it is built, for an `http` endpoint as for an `https` one, and with

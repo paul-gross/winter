@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use winter_workspace_test_support::{
-    Answer, Collector, Exit, ReceivedExport, ReceivedRequest, ReceivedSpan, TempTree,
-    WorkspaceBuilder, decode_export, invoke,
+    Answer, Collector, Exit, ReceivedExport, ReceivedRequest, ReceivedSpan, RefusedEndpoint,
+    TempTree, WorkspaceBuilder, decode_export, invoke,
 };
 
 /// The variable that names the collector, which turns tracing on.
@@ -35,10 +35,6 @@ const UNSAMPLED: &str = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00
 /// twenty times what the binary waits for an export, so that the start of the process and the reading of the
 /// trust store fit in it on a loaded machine. No test asserts a bound nearer to that wait.
 const BOUND: Duration = Duration::from_secs(2);
-
-/// How many collectors in a row [`Fixture::alone`] gives an invocation before it gives up: each after the
-/// first because an invocation of another test reached the one before.
-const COLLECTORS_TRIED: usize = 8;
 
 /// A command that succeeds in the fixture workspace and writes one document to stdout.
 const INDEX: &[&str] = &["ws", "index", "feature-x", "--json"];
@@ -145,22 +141,16 @@ impl Fixture {
         self.run(args, &[]).0
     }
 
-    /// Runs `args` with tracing on and `variables` added, towards a collector of its own that gives `answer`
-    /// and is addressed under `scheme`, and returns what a collector saw that read no request of another
-    /// invocation.
+    /// Runs `args` once with tracing on and `variables` added, towards a collector of its own that gives
+    /// `answer` and is addressed under `scheme`, and returns what that collector saw.
     ///
-    /// A collector does not choose its port, and the system may give it one that
-    /// `Collector::refused_endpoint` bound and released a moment before, in this process or in another one
-    /// that runs these tests. The invocation that was handed the released address then exports to this
-    /// collector, which counts a connection and reads a request that are not of the invocation under test.
-    /// Such a request is sent to the traces path of a bare address. The invocation here is handed an address
-    /// with a path no other is handed, the name of its tree, so every request it sends is told from those.
-    /// A collector that read a request sent to another path is set aside with all it counted, and the
-    /// invocation is run again towards a new one.
+    /// The invocation is handed an address with a path no other is handed, the name of its tree, so every
+    /// request it sends goes to the traces path under that name: the binary appends the traces path to an
+    /// endpoint that has a path. A request the collector read at another target fails the test with the
+    /// targets it read.
     ///
-    /// What is returned is therefore counted over a collector whose every request came from this
-    /// invocation. A connection of another invocation that brought no request it could read is not told
-    /// from one of this invocation and stays counted.
+    /// A connection that brought no request the collector could read is not told from one of this invocation
+    /// and stays counted.
     fn alone(
         &self,
         answer: Answer,
@@ -175,38 +165,32 @@ impl Fixture {
             .and_then(|name| name.to_str())
             .expect("the name of a tree is text");
         let own_target = format!("/{own}/v1/traces");
-        let mut seen = Vec::new();
-        for _ in 0..COLLECTORS_TRIED {
-            let collector = collector(answer);
-            let endpoint = collector.endpoint().replacen("http://", scheme, 1);
-            assert!(
-                endpoint.starts_with(&format!("{scheme}127.0.0.1:")),
-                "{endpoint}"
-            );
-
-            let (ended, elapsed) = self.traced(&format!("{endpoint}/{own}"), args, variables);
-
-            let connections = connections_before(&collector);
-            let requests = collector.requests();
-            if requests.iter().all(|request| request.target == own_target) {
-                return Alone {
-                    ended,
-                    elapsed,
-                    connections,
-                    requests,
-                };
-            }
-            seen.push(
-                requests
-                    .into_iter()
-                    .map(|request| request.target)
-                    .collect::<Vec<_>>(),
-            );
-        }
-        panic!(
-            "each of {COLLECTORS_TRIED} collectors in a row read a request that was sent to another path \
-             than {own_target}; the targets each read: {seen:?}"
+        let collector = collector(answer);
+        let endpoint = collector.endpoint().replacen("http://", scheme, 1);
+        assert!(
+            endpoint.starts_with(&format!("{scheme}127.0.0.1:")),
+            "{endpoint}"
         );
+
+        let (ended, elapsed) = self.traced(&format!("{endpoint}/{own}"), args, variables);
+
+        let connections = connections_before(&collector);
+        let requests = collector.requests();
+        let targets: Vec<&str> = requests
+            .iter()
+            .map(|request| request.target.as_str())
+            .collect();
+        assert!(
+            targets.iter().all(|target| *target == own_target),
+            "the collector read a request at another target than {own_target}; the targets it read: \
+             {targets:?}"
+        );
+        Alone {
+            ended,
+            elapsed,
+            connections,
+            requests,
+        }
     }
 }
 
@@ -442,16 +426,35 @@ fn an_unsampled_traceparent_sends_no_request() {
     assert_eq!(collector.requests().len(), 0);
 }
 
-/// A collector that is silent, one that fails, and an address at which nothing listens.
-fn failing_endpoints() -> Vec<(&'static str, Option<Collector>, String)> {
-    let silent = collector(Answer::Hang);
-    let failing = collector(Answer::Status(500));
-    let refused = Collector::refused_endpoint().expect("an address at which nothing listens");
-    let (silent_endpoint, failing_endpoint) = (silent.endpoint(), failing.endpoint());
+/// What keeps the address of a failing endpoint as it is for as long as an invocation may use it.
+enum Held {
+    Collector(Collector),
+    Refused(RefusedEndpoint),
+}
+
+impl Held {
+    fn endpoint(&self) -> String {
+        match self {
+            Self::Collector(collector) => collector.endpoint(),
+            Self::Refused(refused) => refused.endpoint(),
+        }
+    }
+}
+
+/// A collector that is silent, one that fails, and an address at which nothing listens, each with what keeps
+/// it so: the caller holds that until the invocation it handed the endpoint to has ended.
+fn failing_endpoints() -> Vec<(&'static str, Held)> {
+    let refused = RefusedEndpoint::hold().expect("an address at which nothing listens");
     vec![
-        ("a silent collector", Some(silent), silent_endpoint),
-        ("a failing collector", Some(failing), failing_endpoint),
-        ("a refused endpoint", None, refused),
+        (
+            "a silent collector",
+            Held::Collector(collector(Answer::Hang)),
+        ),
+        (
+            "a failing collector",
+            Held::Collector(collector(Answer::Status(500))),
+        ),
+        ("a refused endpoint", Held::Refused(refused)),
     ]
 }
 
@@ -460,8 +463,8 @@ fn a_collector_that_is_silent_failing_or_away_changes_nothing_and_does_not_keep_
     let fixture = Fixture::new();
     for args in [INDEX, INDEX_WITHOUT_A_NAME] {
         let untraced = fixture.untraced(args);
-        for (name, _collector, endpoint) in failing_endpoints() {
-            let (ended, elapsed) = fixture.traced(&endpoint, args, &[]);
+        for (name, held) in failing_endpoints() {
+            let (ended, elapsed) = fixture.traced(&held.endpoint(), args, &[]);
 
             assert_eq!(ended, untraced, "{name}: {args:?}");
             assert!(elapsed < BOUND, "{name}: {args:?}: {elapsed:?}");
@@ -486,8 +489,8 @@ fn a_delivered_export_writes_no_record_about_tracing_under_the_verbose_flag() {
 fn an_export_that_fails_is_one_error_record_about_tracing_under_the_verbose_flag() {
     let fixture = Fixture::new();
     let untraced = fixture.untraced(INDEX);
-    for (name, _collector, endpoint) in failing_endpoints() {
-        let (ended, elapsed) = fixture.traced(&endpoint, &[&["-v"], INDEX].concat(), &[]);
+    for (name, held) in failing_endpoints() {
+        let (ended, elapsed) = fixture.traced(&held.endpoint(), &[&["-v"], INDEX].concat(), &[]);
 
         assert_eq!(ended.exit, Exit::Code(0), "{name}: {ended:?}");
         assert_eq!(ended.stdout, untraced.stdout, "{name}");

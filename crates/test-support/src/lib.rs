@@ -11,7 +11,10 @@ mod workspace;
 
 pub use env::PinnedEnv;
 pub use git::{CommitSpec, Git, GitError};
-pub use otlp::{Answer, Collector, ReceivedExport, ReceivedRequest, ReceivedSpan, decode_export};
+pub use otlp::{
+    Answer, Collector, ReceivedExport, ReceivedRequest, ReceivedSpan, RefusedEndpoint,
+    decode_export,
+};
 pub use process::{
     Exit, FailureKind, Invocation, InvocationFailure, Observation, StdoutFault, invoke,
     invoke_with_stdout,

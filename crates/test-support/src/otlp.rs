@@ -1,5 +1,6 @@
-//! What a test sees of a trace export: a decoder of the export request's body, and a collector that listens
-//! on the loopback address and records what it is sent.
+//! What a test sees of a trace export: a decoder of the export request's body, a collector that listens on the
+//! loopback address and records what it is sent, and a held address on the loopback address at which nothing
+//! listens, where an export is refused.
 //!
 //! The decoder is written by hand from the field numbers of the OTLP trace messages and stands on no tracing
 //! crate, so a test compares what an exporter wrote with what it should have written, not an encoder with
@@ -7,6 +8,7 @@
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
@@ -455,13 +457,6 @@ impl Collector {
         }
     }
 
-    /// An address of the same form as [`Collector::endpoint`] at which nothing listens: a loopback port that
-    /// was bound and released again, so a connection to it is refused.
-    pub fn refused_endpoint() -> std::io::Result<String> {
-        let listener = loopback_listener()?;
-        Ok(endpoint_of(listener.local_addr()?.port()))
-    }
-
     /// Asks the thread to stop and waits for it; `None` when that was done before.
     fn stopped(&mut self) -> Option<std::thread::Result<Vec<ReceivedRequest>>> {
         self.stop.store(true, Ordering::SeqCst);
@@ -477,6 +472,83 @@ impl Drop for Collector {
                 std::panic::resume_unwind(panic);
             }
         }
+    }
+}
+
+/// An address on 127.0.0.1 at which nothing listens, with the socket that keeps it so.
+///
+/// The value owns a TCP socket that is bound to a port the system chose and never listens. A connection to
+/// the address is therefore refused for as long as the value lives, and no TCP socket that is bound on
+/// 127.0.0.1 and asks the system for a port is given that one, the listener of a [`Collector`] among them. A
+/// dropped value frees the port, which may then be given to anyone: a test keeps the value until every child
+/// it handed the endpoint to has ended.
+///
+/// The socket is made through `libc` and not through the standard library, which offers no TCP socket that is
+/// bound and does not listen. It carries no option but close-on-exec, which keeps it out of every child:
+/// `SO_REUSEADDR` is not set. Nothing is sent or received on it. That the socket is close-on-exec and bound
+/// to 127.0.0.1 alone is held by no test; it is checked in review.
+pub struct RefusedEndpoint {
+    /// Held for the port it is bound to, and closed by the drop.
+    _socket: OwnedFd,
+    port: u16,
+}
+
+impl RefusedEndpoint {
+    /// Binds a socket to a port of 127.0.0.1 that the system chooses, and does not listen on it.
+    pub fn hold() -> std::io::Result<Self> {
+        // SAFETY: `socket` takes three integers and touches no memory.
+        let descriptor =
+            unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
+        if descriptor < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `descriptor` is an open descriptor that `socket` returned just now, and nothing else owns
+        // or closes it.
+        let socket = unsafe { OwnedFd::from_raw_fd(descriptor) };
+        let mut address = libc::sockaddr_in {
+            sin_family: libc::AF_INET as libc::sa_family_t,
+            sin_port: 0,
+            sin_addr: libc::in_addr {
+                s_addr: u32::from(Ipv4Addr::LOCALHOST).to_be(),
+            },
+            sin_zero: [0; 8],
+        };
+        let mut length = size_of::<libc::sockaddr_in>() as libc::socklen_t;
+        // SAFETY: `socket` is an open socket of the address family of `address`, and the pointer is to a
+        // live `sockaddr_in` of `length` bytes, which `bind` only reads.
+        let bound = unsafe {
+            libc::bind(
+                socket.as_raw_fd(),
+                std::ptr::from_ref(&address).cast::<libc::sockaddr>(),
+                length,
+            )
+        };
+        if bound != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `socket` is an open socket; `address` and `length` are live and exclusively borrowed, and
+        // `getsockname` writes at most `length` bytes, the size of `address`, to the first and the count to
+        // the second.
+        let named = unsafe {
+            libc::getsockname(
+                socket.as_raw_fd(),
+                std::ptr::from_mut(&mut address).cast::<libc::sockaddr>(),
+                &raw mut length,
+            )
+        };
+        if named != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self {
+            _socket: socket,
+            port: u16::from_be(address.sin_port),
+        })
+    }
+
+    /// The base address, of the form of [`Collector::endpoint`]: `http://127.0.0.1:<port>`. A connection to
+    /// it is refused while the value lives. Opens nothing.
+    pub fn endpoint(&self) -> String {
+        endpoint_of(self.port)
     }
 }
 
