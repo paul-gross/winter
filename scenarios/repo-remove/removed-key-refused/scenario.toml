@@ -1,0 +1,8 @@
+summary = "Removing a declared repository from a configuration that still sets the removed session_prefix exits 1 and leaves every file unchanged."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "remove", "project/web", "--json"]
+stdout = "json"

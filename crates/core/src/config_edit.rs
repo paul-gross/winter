@@ -204,7 +204,7 @@ fn effective_name(block: &Table) -> Option<String> {
 
 /// The repository name a URL ends with: what follows the last `/` or `:`, whichever is later, once every
 /// trailing `/` is gone, and without one trailing `.git`.
-fn name_from_url(url: &str) -> &str {
+pub(crate) fn name_from_url(url: &str) -> &str {
     let trimmed = url.trim_end_matches('/');
     let last = trimmed
         .rsplit_once(['/', ':'])

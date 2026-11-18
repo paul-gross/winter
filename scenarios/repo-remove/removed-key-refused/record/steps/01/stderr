@@ -1,0 +1,1 @@
+error: Unsupported config key `session_prefix` detected. Use `service_prefix` instead.

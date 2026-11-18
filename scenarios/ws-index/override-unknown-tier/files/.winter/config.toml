@@ -1,0 +1,4 @@
+# workspace configuration
+
+[agent_model_overrides]
+planner = "turbo"

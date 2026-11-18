@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use crate::config_raw;
+use crate::config;
 use crate::env_index::{self, IndexAnswer};
 use crate::files::ReadFiles;
 use crate::state_registry;
@@ -17,7 +17,7 @@ pub(crate) fn answer(
     name: &str,
 ) -> Result<IndexAnswer, ConfigError> {
     let root = workspace_root::find(files, start)?;
-    let config = config_raw::load(files, &root)?;
+    let config = config::load(files, &root)?;
     let registry = state_registry::read(files, &root);
     // A band wider than the 65536 values of the hash gives every name the slot a still wider band gives it,
     // so a count beyond `u32` is looked up as the largest `u32`.

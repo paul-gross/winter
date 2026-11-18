@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use winter_workspace_core::{
     CatalogError, CommandError, ConfigError, FileCause, ParseFault, RepositoryKind, Termination,
-    UsageError,
+    TypedKey, UsageError,
 };
 use winter_workspace_test_support::{Found, TempTree, WorkspaceBuilder, snapshot};
 
@@ -194,21 +194,48 @@ fn without_the_json_flag_one_line_names_the_type_and_the_name() {
 fn the_document_holds_the_name_as_the_target_gives_it_not_as_the_block_does() {
     let tree = TempTree::new().expect("an isolated tree");
     let root = WorkspaceBuilder::new(&tree)
-        .config("[[standalone_repository]]\nname = 7\n")
+        .config("[[standalone_repository]]\nurl = \"https://host/org/ctx.git\"\n")
         .build()
         .expect("a workspace")
         .root;
 
-    let document = removed(&root, &["standalone/7", "--json"]);
+    let document = removed(&root, &["standalone/ctx", "--json"]);
 
     assert_eq!(
         document,
-        json!({"removed": true, "kind": "standalone", "name": "7"})
+        json!({"removed": true, "kind": "standalone", "name": "ctx"})
     );
     assert_eq!(
         std::fs::read_to_string(root.join(SHARED)).expect("the shared file"),
         ""
     );
+}
+
+#[test]
+fn a_block_whose_name_is_not_a_string_is_refused_by_the_load_and_nothing_is_written() {
+    let tree = TempTree::new().expect("an isolated tree");
+    let root = WorkspaceBuilder::new(&tree)
+        .config("[[standalone_repository]]\nname = 7\n")
+        .build()
+        .expect("a workspace")
+        .root;
+    let before = snapshot(&root);
+
+    let ended = InProcess::new(&["repo", "remove", "standalone/7", "--json"])
+        .cwd(&root)
+        .run();
+
+    assert_eq!(ended.stdout, "");
+    assert!(
+        matches!(
+            &ended.termination,
+            Termination::Config(error)
+                if matches!(&**error, ConfigError::ValueType { key: TypedKey::Name, .. })
+        ),
+        "{:?}",
+        ended.termination
+    );
+    assert_eq!(snapshot(&root), before);
 }
 
 #[test]
@@ -419,7 +446,8 @@ fn a_file_that_is_not_valid_toml_is_a_file_read_error_and_is_left_byte_equal() {
         .root;
     let before = snapshot(&root);
 
-    for (flags, file) in [(&[][..], SHARED), (&["--local"][..], LOCAL)] {
+    // The load reads the shared file first, so it is the one named whichever file the removal edits.
+    for (flags, file) in [(&[][..], SHARED), (&["--local"][..], SHARED)] {
         let args = [&["repo", "remove", "project/api", "--json"], flags].concat();
         let ended = InProcess::new(&args).cwd(&root).run();
 
@@ -602,12 +630,7 @@ fn the_command_waits_while_another_handle_holds_the_lock_of_the_directory() {
 #[test]
 fn the_lock_is_released_after_a_removal_and_after_each_refusal() {
     let tree = TempTree::new().expect("an isolated tree");
-    let root = WorkspaceBuilder::new(&tree)
-        .config(COMMENTED)
-        .local_config("[[project_repository]\n")
-        .build()
-        .expect("a workspace")
-        .root;
+    let root = commented_workspace(&tree);
     let free = || {
         let handle = std::fs::File::open(root.join(".winter")).expect("the directory");
         handle.try_lock().is_ok()
@@ -616,14 +639,68 @@ fn the_lock_is_released_after_a_removal_and_after_each_refusal() {
     catalog_error(&root, &["project/nope"]);
     assert!(free(), "after not found");
 
-    let invalid = InProcess::new(&["repo", "remove", "project/api", "--local"])
-        .cwd(&root)
-        .run();
-    assert_eq!(invalid.termination.exit_code(), 1);
-    assert!(free(), "after a file that is not valid TOML");
+    // Every call now ends in the load, whichever file it edits.
+    std::fs::write(root.join(LOCAL), "[[project_repository]\n").expect("an invalid local file");
+    for flags in [&[][..], &["--local"][..]] {
+        let args = [&["repo", "remove", "project/api"], flags].concat();
+        let invalid = InProcess::new(&args).cwd(&root).run();
+        assert_eq!(invalid.termination.exit_code(), 1, "{flags:?}");
+        assert!(free(), "after a file that is not valid TOML: {flags:?}");
+    }
+    std::fs::remove_file(root.join(LOCAL)).expect("the invalid local file removed");
 
     removed(&root, &["project/web", "--json"]);
     assert!(free(), "after a removal");
+}
+
+/// The `FileRead` error naming the local file that `repo remove` with `args` ends with in `root`, at exit
+/// code 1 and having written nothing to either stream.
+#[track_caller]
+fn local_file_read_error(root: &Path, args: &[&str]) {
+    let ended = InProcess::new(&[&["repo", "remove"], args].concat())
+        .cwd(root)
+        .run();
+    let termination = ended.wrote_nothing(1, &format!("{args:?}"));
+    let diagnostic = termination.diagnostic().expect("a diagnostic");
+    match termination {
+        Termination::Config(error) if matches!(&*error, ConfigError::FileRead { path, cause: FileCause::Toml(_) } if *path == root.join(LOCAL)) =>
+        {
+            assert!(diagnostic.contains(LOCAL), "{args:?}: {diagnostic}");
+        }
+        other => panic!("{args:?}: expected a read error of the local file, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_invalid_local_file_ends_the_removal_of_a_shared_repository_as_a_read_error_of_that_file() {
+    let tree = TempTree::new().expect("an isolated tree");
+    let root = WorkspaceBuilder::new(&tree)
+        .config(COMMENTED)
+        .local_config("[[project_repository]\n")
+        .build()
+        .expect("a workspace")
+        .root;
+    let before = snapshot(&root);
+
+    local_file_read_error(&root, &["project/web", "--json"]);
+
+    assert_eq!(snapshot(&root), before);
+}
+
+#[test]
+fn an_invalid_local_file_is_read_before_the_type_of_the_target_is_checked() {
+    let tree = TempTree::new().expect("an isolated tree");
+    let root = WorkspaceBuilder::new(&tree)
+        .config(COMMENTED)
+        .local_config("[[project_repository]\n")
+        .build()
+        .expect("a workspace")
+        .root;
+    let before = snapshot(&root);
+
+    local_file_read_error(&root, &["bogus/x"]);
+
+    assert_eq!(snapshot(&root), before);
 }
 
 #[test]

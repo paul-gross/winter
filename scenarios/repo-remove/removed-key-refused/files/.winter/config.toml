@@ -1,0 +1,5 @@
+# workspace configuration
+session_prefix = "x"
+
+[[project_repository]]
+url = "https://fixture.invalid/web.git"

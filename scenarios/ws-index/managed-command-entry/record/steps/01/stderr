@@ -1,0 +1,1 @@
+error: [env.workspace.vars] key 'WINTER_ROOT' is a command entry declared under a `WINTER_*` name. winter's managed vars can never be written by a command entry's output or its own declared key — declare 'WINTER_ROOT' as a plain string instead, or use a different key.

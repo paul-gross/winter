@@ -1,0 +1,9 @@
+# workspace configuration
+
+[[standalone_repository]]
+name = "ctx"
+url = "https://fixture.invalid/ctx-a.git"
+
+[[standalone_repository]]
+name = "ctx"
+url = "https://fixture.invalid/ctx-b.git"
