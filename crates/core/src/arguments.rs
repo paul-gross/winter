@@ -30,6 +30,40 @@ where
     }
 }
 
+/// The value of the option `id` when it was given, with `None` for an option that was not.
+///
+/// Fails as an internal failure when `id` is unknown to the node or of another type.
+pub(crate) fn optional<'m, T>(
+    matches: &'m ArgMatches,
+    id: &str,
+) -> Result<Option<&'m T>, Termination>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    matches.try_get_one::<T>(id).map_err(|_| {
+        Termination::Internal(Box::new(InternalError::unexpected(MissingArgument {
+            id: id.to_owned(),
+        })))
+    })
+}
+
+/// The values of the option `id` in command-line order, none when it was not given.
+///
+/// Fails as an internal failure when `id` is unknown to the node or of another type.
+pub(crate) fn repeated<'m, T>(matches: &'m ArgMatches, id: &str) -> Result<Vec<&'m T>, Termination>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    matches
+        .try_get_many::<T>(id)
+        .map(|values| values.map(Iterator::collect).unwrap_or_default())
+        .map_err(|_| {
+            Termination::Internal(Box::new(InternalError::unexpected(MissingArgument {
+                id: id.to_owned(),
+            })))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Arg;
@@ -40,6 +74,7 @@ mod tests {
         clap::Command::new("index")
             .no_binary_name(true)
             .arg(Arg::new("name"))
+            .arg(Arg::new("tag").long("tag").action(clap::ArgAction::Append))
             .arg(
                 Arg::new("count")
                     .long("count")
@@ -96,5 +131,53 @@ mod tests {
         let diagnostic = internal(required::<String>(&matches, "count"));
 
         assert!(diagnostic.contains("count"), "{diagnostic}");
+    }
+
+    #[test]
+    fn an_optional_value_is_none_when_absent_and_present_when_empty() {
+        assert!(
+            optional::<String>(&matches(&[]), "count")
+                .expect("read")
+                .is_none()
+        );
+        let given = matches(&["--tag", ""]);
+        assert_eq!(
+            optional::<String>(&given, "tag").expect("read"),
+            Some(&String::new())
+        );
+        let absent = matches(&[]);
+        assert!(optional::<String>(&absent, "tag").expect("read").is_none());
+    }
+
+    #[test]
+    fn an_optional_of_an_unknown_id_or_another_type_is_an_internal_failure() {
+        let matches = matches(&["--count", "3"]);
+
+        assert!(matches!(
+            optional::<String>(&matches, "count"),
+            Err(Termination::Internal(_))
+        ));
+        assert!(matches!(
+            optional::<String>(&matches, "nope"),
+            Err(Termination::Internal(_))
+        ));
+    }
+
+    #[test]
+    fn repeated_values_come_in_command_line_order() {
+        let given = matches(&["--tag", "b", "--tag", "a", "--tag", ""]);
+
+        let values = repeated::<String>(&given, "tag").expect("values");
+
+        assert_eq!(values, ["b", "a", ""]);
+        assert!(
+            repeated::<String>(&matches(&[]), "tag")
+                .expect("values")
+                .is_empty()
+        );
+        assert!(matches!(
+            repeated::<String>(&given, "nope"),
+            Err(Termination::Internal(_))
+        ));
     }
 }

@@ -1,0 +1,8 @@
+summary = "An invalid URL outside a workspace ends as the missing workspace."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "nope", "--json"]
+stdout = "json"

@@ -1,13 +1,14 @@
-//! Removal of one repository block from the text of a configuration file.
+//! Addition and removal of one repository block in the text of a configuration file.
 //!
-//! A pure text edit: the block is located in the parsed document and removed as ranges of whole lines of
-//! the original text, so every byte outside those ranges is kept. No file is read or written here.
+//! A removal locates the block in the parsed document and removes it as ranges of whole lines of the original
+//! text, so every byte outside those ranges is kept. An addition appends the block to the parsed document and
+//! serialises it, and the layout is `toml_edit`'s. No file is read or written here.
 
 use std::fmt;
 use std::ops::Range;
 use std::path::PathBuf;
 
-use toml_edit::{Document, Item, Table, Value};
+use toml_edit::{Array, ArrayOfTables, Document, DocumentMut, Item, Table, Value};
 
 /// The array a repository block belongs to, named as a `TARGET` names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +36,24 @@ impl fmt::Display for RepositoryKind {
     }
 }
 
+/// An option that only a standalone repository takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandaloneOption {
+    Path,
+    Prefix,
+    Ref,
+}
+
+impl fmt::Display for StandaloneOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Path => "--path",
+            Self::Prefix => "--prefix",
+            Self::Ref => "--ref",
+        })
+    }
+}
+
 /// A rule of the repository catalog that an invocation violates.
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
@@ -48,6 +67,91 @@ pub enum CatalogError {
     NotArrayOfTables { kind: RepositoryKind, path: PathBuf },
     #[error("the {kind} repository {name} cannot be removed without changing other entries")]
     Entangled { kind: RepositoryKind, name: String },
+    #[error("{url}: not a git URL")]
+    InvalidUrl { url: String },
+    #[error("--pinned applies to project repositories only")]
+    PinnedStandalone,
+    #[error("{option} applies to standalone repositories only")]
+    StandaloneOnly { option: StandaloneOption },
+    #[error("{path}: --path is relative and has no .. component")]
+    UnsafePath { path: String },
+    #[error("a {kind} repository with the URL {url} is declared")]
+    DuplicateUrl { kind: RepositoryKind, url: String },
+    #[error("a {kind} repository named {name} is declared")]
+    DuplicateName { kind: RepositoryKind, name: String },
+}
+
+/// The block a repository addition writes, as the arguments give it. An option is `Some` when it was given,
+/// the empty string included.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct NewBlock<'a> {
+    pub kind: RepositoryKind,
+    pub name: Option<&'a str>,
+    pub url: &'a str,
+    pub main_branch: Option<&'a str>,
+    /// Project only.
+    pub pinned: bool,
+    /// Standalone only.
+    pub path: Option<&'a str>,
+    /// Standalone only.
+    pub prefix: Option<&'a str>,
+    /// Standalone only.
+    pub r#ref: Option<&'a str>,
+    pub git_excludes: &'a [String],
+    pub cmd: &'a [String],
+}
+
+/// The key of an array of tables holds no array of tables.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct NotArrayOfTables;
+
+/// The table of a new block: each key only when its condition holds, in the order of the reference tool.
+pub(crate) fn block_table(block: &NewBlock<'_>) -> Table {
+    let mut table = Table::new();
+    let mut put = |key: &str, value: Option<&str>| {
+        if let Some(value) = value {
+            table.insert(key, toml_edit::value(value));
+        }
+    };
+    put("name", block.name);
+    put("url", Some(block.url));
+    put("main_branch", block.main_branch);
+    if block.kind == RepositoryKind::Project {
+        if block.pinned {
+            table.insert("pinned", toml_edit::value(true));
+        }
+    } else {
+        put("path", block.path);
+        put("prefix", block.prefix);
+        put("ref", block.r#ref);
+    }
+    for (key, values) in [("git_excludes", block.git_excludes), ("cmd", block.cmd)] {
+        if !values.is_empty() {
+            let array: Array = values.iter().map(String::as_str).collect();
+            table.insert(key, toml_edit::value(array));
+        }
+    }
+    table
+}
+
+/// `document` with the block appended to the array of its kind, which is created when absent. `document` is
+/// the empty text for a file that does not exist. Fails when the key holds anything but an array of tables,
+/// and when `document` does not parse.
+pub(crate) fn append_repository_block(
+    document: &str,
+    block: &NewBlock<'_>,
+) -> Result<String, NotArrayOfTables> {
+    let mut parsed = document
+        .parse::<DocumentMut>()
+        .map_err(|_| NotArrayOfTables)?;
+    let key = block.kind.array_key();
+    let item = parsed
+        .as_table_mut()
+        .entry(key)
+        .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+    let blocks = item.as_array_of_tables_mut().ok_or(NotArrayOfTables)?;
+    blocks.push(block_table(block));
+    Ok(parsed.to_string())
 }
 
 /// A text less one block, and which block that is.
@@ -207,7 +311,7 @@ fn effective_name(block: &Table) -> Option<String> {
 
 /// The repository name a URL ends with: what follows the last `/` or `:`, whichever is later, once every
 /// trailing `/` is gone, and without one trailing `.git`.
-fn name_from_url(url: &str) -> &str {
+pub(crate) fn name_from_url(url: &str) -> &str {
     let trimmed = url.trim_end_matches('/');
     let last = trimmed
         .rsplit_once(['/', ':'])
@@ -1144,5 +1248,143 @@ name = \"ünï\"
             !lacks_one_block(&both, &[TOOL, API].concat(), RepositoryKind::Standalone, 1),
             "the other array"
         );
+    }
+
+    mod addition {
+        use super::*;
+
+        fn new_block<'a>(kind: RepositoryKind, url: &'a str) -> NewBlock<'a> {
+            NewBlock {
+                kind,
+                name: None,
+                url,
+                main_branch: None,
+                pinned: false,
+                path: None,
+                prefix: None,
+                r#ref: None,
+                git_excludes: &[],
+                cmd: &[],
+            }
+        }
+
+        fn keys(table: &Table) -> Vec<&str> {
+            table.iter().map(|(key, _)| key).collect()
+        }
+
+        #[test]
+        fn a_bare_block_holds_the_url_only() {
+            let block = new_block(RepositoryKind::Project, "u");
+
+            assert_eq!(keys(&block_table(&block)), ["url"]);
+        }
+
+        #[test]
+        fn each_project_key_appears_when_its_condition_holds_in_order() {
+            let excludes = vec!["a".to_owned(), "b".to_owned()];
+            let cmd = vec!["c".to_owned()];
+            let block = NewBlock {
+                name: Some(""),
+                main_branch: Some("dev"),
+                pinned: true,
+                path: Some("ignored"),
+                git_excludes: &excludes,
+                cmd: &cmd,
+                ..new_block(RepositoryKind::Project, "u")
+            };
+
+            let table = block_table(&block);
+
+            assert_eq!(
+                keys(&table),
+                [
+                    "name",
+                    "url",
+                    "main_branch",
+                    "pinned",
+                    "git_excludes",
+                    "cmd"
+                ]
+            );
+            assert_eq!(table["name"].as_str(), Some(""));
+            assert_eq!(table["pinned"].as_bool(), Some(true));
+        }
+
+        #[test]
+        fn the_standalone_keys_follow_the_shared_ones() {
+            let block = NewBlock {
+                name: Some("n"),
+                main_branch: Some("m"),
+                pinned: true,
+                path: Some(""),
+                prefix: Some("p"),
+                r#ref: Some("r"),
+                ..new_block(RepositoryKind::Standalone, "u")
+            };
+
+            assert_eq!(
+                keys(&block_table(&block)),
+                ["name", "url", "main_branch", "path", "prefix", "ref"]
+            );
+        }
+
+        fn appended(document: &str, block: &NewBlock<'_>) -> String {
+            let text = append_repository_block(document, block).expect("appended");
+            let before: toml::Table = toml::from_str(document).expect("original parses");
+            let mut after: toml::Table = toml::from_str(&text).expect("result parses");
+            let key = block.kind.array_key();
+            let Some(toml::Value::Array(blocks)) = after.remove(key) else {
+                panic!("no array: {text}");
+            };
+            let mut expected_rest = before;
+            let old = match expected_rest.remove(key) {
+                Some(toml::Value::Array(old)) => old,
+                _ => Vec::new(),
+            };
+            assert_eq!(blocks.len(), old.len() + 1, "{text}");
+            assert_eq!(blocks[..old.len()], old[..]);
+            assert_eq!(blocks[old.len()]["url"].as_str(), Some(block.url));
+            assert_eq!(after, expected_rest, "{text}");
+            text
+        }
+
+        #[test]
+        fn the_block_is_appended_to_every_shape_of_file() {
+            let block = new_block(RepositoryKind::Project, "u");
+            for document in [
+                "",
+                "[[standalone_repository]]\nurl = \"s\"\n",
+                PLAIN,
+                "[[project_repository]]\nurl = \"a\"\n[project_repository.sub]\nx = 1\n",
+            ] {
+                appended(document, &block);
+            }
+        }
+
+        #[test]
+        fn an_array_that_is_no_array_of_tables_is_refused() {
+            let block = new_block(RepositoryKind::Project, "u");
+            for document in [
+                "project_repository = []\n",
+                "project_repository = [{ url = \"x\" }]\n",
+                "project_repository = 1\n",
+            ] {
+                assert_eq!(
+                    append_repository_block(document, &block),
+                    Err(NotArrayOfTables)
+                );
+            }
+        }
+
+        #[test]
+        fn comments_elsewhere_are_kept() {
+            let document = "# top\nx = 1 # trailing\n\n# above table\n[t]\ny = 2\n";
+
+            let text = appended(document, &new_block(RepositoryKind::Standalone, "u"));
+
+            for kept in ["# top", "# trailing", "# above table"] {
+                assert!(text.contains(kept), "{text}");
+            }
+        }
     }
 }

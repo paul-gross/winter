@@ -15,7 +15,7 @@ cargo build
 
 The binary is written to `target/debug/winter-workspace`.
 
-`repo remove` edits the workspace configuration it finds at or above the working directory. [AGENTS.md](./AGENTS.md)
+`repo add` and `repo remove` edit the workspace configuration it finds at or above the working directory. [AGENTS.md](./AGENTS.md)
 states where the binary may run. It is on no `PATH`: from a directory that rule permits, it is started by its path, as
 in `<checkout>/target/debug/winter-workspace --help`, where `<checkout>` is the path of the repository root.
 
@@ -23,6 +23,11 @@ in `<checkout>/target/debug/winter-workspace --help`, where `<checkout>` is the 
 configuration (`--local` selects the local file). Inline arrays such as `project_repository = [{ ... }]` are refused:
 the command fails without changing the file or printing a success result. Removal edits configuration only; existing
 checkouts, linked worktrees, their contents, and git state are preserved.
+
+`repo add <URL>` appends a `[[project_repository]]` block to the shared configuration, or a `[[standalone_repository]]`
+block with `--standalone`; `--local` writes the machine-local file, which is created when absent. Inline arrays such as
+`project_repository = [{ ... }]` are refused without changing the file. Adding edits configuration only: nothing is
+cloned.
 
 ## Tracing, exit codes, and logging
 

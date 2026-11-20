@@ -1,0 +1,30 @@
+repository
+    ws
+    kind: main
+dot-git
+    directory
+head
+    c425923c17432c395943e4b569db49be624fd0a1
+    refs/heads/main
+refs
+    refs/heads/main c425923c17432c395943e4b569db49be624fd0a1  
+worktrees
+    worktree <ROOT>/ws
+    HEAD c425923c17432c395943e4b569db49be624fd0a1
+    branch refs/heads/main
+    
+status
+    # branch.oid c425923c17432c395943e4b569db49be624fd0a1
+    # branch.head main
+    1 .M N... 100644 100644 100644 1515ea8ff0bf57ee4baa5517fca11cdf7ab3afce 1515ea8ff0bf57ee4baa5517fca11cdf7ab3afce .winter/config.toml
+stash
+config
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    c425923c17432c395943e4b569db49be624fd0a1  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Workspace root

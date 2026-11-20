@@ -1,0 +1,8 @@
+summary = "A --path with a parent-directory component is refused."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "https://fixture.invalid/web.git", "--standalone", "--path", "../x", "--json"]
+stdout = "json"

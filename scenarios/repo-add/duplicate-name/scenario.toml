@@ -1,0 +1,8 @@
+summary = "A name already declared for the kind is refused with exit 1 and nothing written."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "https://other.invalid/api", "--json"]
+stdout = "json"

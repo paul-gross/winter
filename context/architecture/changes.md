@@ -168,6 +168,8 @@ name from `lib.rs`.
 The function a command file calls, the module's entry, returns a typed value or the module's failure, never a
 `Termination`. The command file maps the failure: `repository_catalog::remove` fails with `RemoveError`, a sum of the
 module's own that the command file takes apart into `Termination::Command` and `Termination::Config`,
+`repository_catalog::add` fails with `AddError`, whose three variants become `Termination::Command`,
+`Termination::Config`, and `Termination::Internal`,
 `index_lookup::answer` fails with `ConfigError` alone, which becomes `Termination::Config`, and
 `repository_catalog::list` and `locations::list` each fail with a `ListError`, whose two variants become `Termination::Config` and
 `Termination::Internal`: the command file boxes what each variant carries, and so never names the type of an internal

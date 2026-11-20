@@ -1,0 +1,8 @@
+summary = "--path on a project is refused."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "https://fixture.invalid/web.git", "--path", "x", "--json"]
+stdout = "json"
