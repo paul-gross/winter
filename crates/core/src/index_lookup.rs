@@ -75,6 +75,10 @@ mod tests {
         fn entries(&self, path: &Path) -> std::io::Result<Vec<std::ffi::OsString>> {
             self.files.entries(path)
         }
+
+        fn read_link(&self, path: &Path) -> std::io::Result<Option<std::path::PathBuf>> {
+            self.files.read_link(path)
+        }
     }
 
     #[test]

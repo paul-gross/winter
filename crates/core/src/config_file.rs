@@ -65,6 +65,10 @@ mod tests {
         fn entries(&self, _path: &Path) -> std::io::Result<Vec<std::ffi::OsString>> {
             Err(std::io::ErrorKind::NotADirectory.into())
         }
+
+        fn read_link(&self, _path: &Path) -> std::io::Result<Option<std::path::PathBuf>> {
+            Ok(None)
+        }
     }
 
     #[test]

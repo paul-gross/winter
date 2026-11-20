@@ -12,6 +12,7 @@ use crate::files::OsFiles;
 use crate::logging::Level;
 use crate::output;
 use crate::parse::{self, Outcome, Parsed, Stage};
+use crate::programs::OsPrograms;
 use crate::registry::{Entry, REGISTRY};
 use crate::termination::{InternalError, Termination};
 use crate::trace::{CommandTracer, TraceLog};
@@ -41,6 +42,13 @@ impl ProcessEnv {
     /// Every name the snapshot holds, in no particular order.
     pub fn names(&self) -> impl Iterator<Item = &OsStr> {
         self.0.keys().map(OsString::as_os_str)
+    }
+
+    /// Every name the snapshot holds with its value, bytes as given, in no particular order.
+    pub fn pairs(&self) -> impl Iterator<Item = (&OsStr, &OsStr)> {
+        self.0
+            .iter()
+            .map(|(name, value)| (name.as_os_str(), value.as_os_str()))
     }
 }
 
@@ -148,7 +156,8 @@ struct DispatchAtRoot;
 
 /// [`run`] over the commands of `entries`: asks the parser, then acts on its answer.
 ///
-/// The one place that writes the help and the version line, builds the `Context`, and calls a command. Once a
+/// The one place that writes the help and the version line, builds the `Context`, with the programs of the
+/// operating system built once from the environment snapshot, and calls a command. Once a
 /// command name was resolved it writes one debug record that names the command path to the stderr handle and
 /// then announces that path to the tracer of the invocation, once and whatever the outcome. The working
 /// directory is read only for a command that is dispatched: when the invocation carries an error in its place,
@@ -203,6 +212,7 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
                     return Termination::Internal(Box::new(InternalError::unexpected(error)));
                 }
             };
+            let programs = OsPrograms::new(&env);
             let mut cx = Context {
                 cwd: &cwd,
                 env: &env,
@@ -214,6 +224,7 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
                 err_is_terminal: stderr_is_terminal,
                 files: &OsFiles,
                 file_writer: &OsFiles,
+                programs: &programs,
                 invoked: &invoked,
                 root: &options,
                 log,
@@ -388,6 +399,26 @@ mod tests {
 
         assert_eq!(env.get("EDITOR"), Some(OsStr::new("vi")));
         assert_eq!(env.get("SHELL"), None);
+    }
+
+    #[test]
+    fn the_pairs_of_a_process_env_are_its_names_and_values_as_given_utf_8_or_not() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let name = OsStr::from_bytes(b"NAME\xff");
+        let value = OsStr::from_bytes(b"value\xfe");
+        let env = ProcessEnv::from_vars([
+            (name.to_owned(), value.to_owned()),
+            (OsString::from("EDITOR"), OsString::from("vi")),
+        ]);
+
+        let mut pairs: Vec<(&OsStr, &OsStr)> = env.pairs().collect();
+        pairs.sort();
+
+        assert_eq!(
+            pairs,
+            [(OsStr::new("EDITOR"), OsStr::new("vi")), (name, value)]
+        );
     }
 
     #[test]

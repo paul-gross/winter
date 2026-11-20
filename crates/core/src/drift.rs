@@ -269,6 +269,10 @@ mod tests {
         fn entries(&self, _path: &Path) -> std::io::Result<Vec<OsString>> {
             Ok(self.0.clone())
         }
+
+        fn read_link(&self, _path: &Path) -> std::io::Result<Option<std::path::PathBuf>> {
+            Ok(None)
+        }
     }
 
     #[test]

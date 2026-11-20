@@ -61,6 +61,12 @@ const FILE_SYSTEM_TOKEN: &str = "std::fs";
 /// The one library source that may name [`FILE_SYSTEM_TOKEN`]: the file port and its adapter.
 const FILE_PORT: &str = "crates/core/src/files.rs";
 
+/// Forbidden in every library source but [`PROGRAM_PORT`]: the start of a process.
+const PROGRAM_TOKEN: &str = "process::Command";
+
+/// The one library source that may name [`PROGRAM_TOKEN`]: the program port and its adapter.
+const PROGRAM_PORT: &str = "crates/core/src/programs.rs";
+
 /// The directory of the command files, from the repository root.
 const COMMAND_FILES: &str = "crates/core/src/commands/";
 
@@ -68,11 +74,14 @@ const COMMAND_FILES: &str = "crates/core/src/commands/";
 /// mapping of that call's outcome; these are the names of what such a call stands on.
 ///
 /// A deny-list: the change that adds a module only a domain entry may call adds its name here.
-const COMMAND_FILE_NAMES: [&str; 20] = [
+const COMMAND_FILE_NAMES: [&str; 22] = [
     // The file port.
     "ReadFiles",
     "WriteFiles",
     "OsFiles",
+    // The program port.
+    "RunPrograms",
+    "OsPrograms",
     // The modules a domain entry stands on.
     "workspace_root",
     "workspace_files",
@@ -484,11 +493,13 @@ pub fn unpublished(packages: &[Package]) -> Vec<Violation> {
 /// start at the same place the longer is the one reported.
 pub fn forbidden_tokens(file: &str, source: &str) -> Vec<Violation> {
     let file_system = (file != FILE_PORT).then_some(FILE_SYSTEM_TOKEN);
+    let program = (file != PROGRAM_PORT).then_some(PROGRAM_TOKEN);
     let mut violations = Vec::new();
     for (index, text) in source.lines().enumerate() {
         let mut found: Vec<(usize, &'static str)> = FORBIDDEN_TOKENS
             .into_iter()
             .chain(file_system)
+            .chain(program)
             .flat_map(|token| {
                 text.match_indices(token)
                     .map(move |(start, _)| (start, token))
@@ -1275,6 +1286,60 @@ jobs:
     }
 
     #[test]
+    fn the_start_of_a_process_in_a_library_source_other_than_the_program_port_is_named() {
+        let source = "use std::io;\nfn run() { let _ = std::process::Command::new(\"git\"); }\n";
+
+        for file in [
+            "crates/core/src/locations.rs",
+            "crates/core/src/files.rs",
+            "crates/core/src/locations/programs.rs",
+        ] {
+            assert_eq!(
+                forbidden_tokens(file, source),
+                [Violation::ForbiddenToken {
+                    file: file.to_owned(),
+                    line: 2,
+                    token: "process::Command",
+                }]
+            );
+        }
+        assert_eq!(
+            forbidden_tokens("crates/core/src/git.rs", "use process::Command;\n").len(),
+            1,
+            "the name is found however it is reached"
+        );
+    }
+
+    #[test]
+    fn the_start_of_a_process_in_the_program_port_is_allowed() {
+        let source = "fn run() { let _ = std::process::Command::new(\"git\"); }\n";
+
+        assert_eq!(forbidden_tokens("crates/core/src/programs.rs", source), []);
+    }
+
+    #[test]
+    fn the_program_port_is_held_to_every_other_token_the_file_system_included() {
+        let source =
+            "use std::process::Command;\nfn find() { let _ = std::fs::metadata(\"git\"); }\n";
+
+        assert_eq!(
+            forbidden_tokens("crates/core/src/programs.rs", source),
+            [Violation::ForbiddenToken {
+                file: "crates/core/src/programs.rs".to_owned(),
+                line: 2,
+                token: "std::fs",
+            }]
+        );
+    }
+
+    #[test]
+    fn the_process_id_the_file_port_reads_is_no_start_of_a_process() {
+        let source = "fn name() -> String { format!(\".{}.tmp\", std::process::id()) }\n";
+
+        assert_eq!(forbidden_tokens("crates/core/src/files.rs", source), []);
+    }
+
+    #[test]
     fn a_token_inside_a_test_module_of_the_library_is_reported() {
         let source = "\
 pub fn answer() -> u8 {
@@ -1302,7 +1367,10 @@ mod tests {
 
     #[test]
     fn every_forbidden_token_is_found() {
-        for token in FORBIDDEN_TOKENS.into_iter().chain([FILE_SYSTEM_TOKEN]) {
+        for token in FORBIDDEN_TOKENS
+            .into_iter()
+            .chain([FILE_SYSTEM_TOKEN, PROGRAM_TOKEN])
+        {
             let source = format!("let _ = {token};\n");
 
             let found: Vec<&str> = forbidden_tokens("crates/core/src/any.rs", &source)
@@ -1346,13 +1414,15 @@ mod tests {
     const COMMAND_FILE: &str = "crates/core/src/commands/repo/add.rs";
 
     #[test]
-    fn the_names_no_command_file_may_hold_are_these_twenty() {
+    fn the_names_no_command_file_may_hold_are_these_twenty_two() {
         assert_eq!(
             COMMAND_FILE_NAMES,
             [
                 "ReadFiles",
                 "WriteFiles",
                 "OsFiles",
+                "RunPrograms",
+                "OsPrograms",
                 "workspace_root",
                 "workspace_files",
                 "config_file",

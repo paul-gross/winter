@@ -82,9 +82,10 @@ Logic that two commands share lives in a domain module, never under `commands/`.
   Termination>` and reads a value the node's parser requires or defaults through `arguments::required`. When the parsed
   arguments do not hold that value the fault is the node's own parser, so `required` answers an internal failure, which
   `run` returns; a command file builds no usage error for it;
-- one call into a domain module, which is handed `cx.files`, `cx.file_writer`, and `cx.cwd` as they are. For a domain
-  entry that reports on stderr, the file builds a `Diagnostics` from `cx.err` and `cx.log` and hands it to that call.
-  The entry writes its notices and records through it, and the command file writes none;
+- one call into a domain module, which is handed `cx.files`, `cx.file_writer`, and `cx.cwd` as they are, and
+  `cx.programs` as well when it starts a program. For a domain entry that reports on stderr, the file builds a
+  `Diagnostics` from `cx.err` and `cx.log` and hands it to that call. The entry writes its notices and records through
+  it, and the command file writes none;
 - the mapping of that call's typed outcome to a `Termination`;
 - the text of the human line and the fields of the `--json` document, written as [below](#writing-the-result).
 
@@ -100,12 +101,13 @@ handler, and there `pending` stays false.
 
 A command file names none of these:
 
-| Area                                 | Names a command file may not hold                                                                                                           |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| The file port                        | `ReadFiles`, `WriteFiles`, `OsFiles`                                                                                                        |
+| Area                                 | Names a command file may not hold                                                                                                                           |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The file port                        | `ReadFiles`, `WriteFiles`, `OsFiles`                                                                                                                        |
+| The program port                     | `RunPrograms`, `OsPrograms`                                                                                                                                 |
 | Modules a domain entry stands on     | `workspace_root`, `workspace_files`, `config_file`, `config_load`, `config_merge`, `config_model`, `config_edit`, `state_registry`, `environments`, `drift` |
-| File formats                         | `toml::`, `toml_edit`                                                                                                                       |
-| Writing, and how a failed write ends | `writeln!`, `write!(`, `to_writer`, `InternalError`, `Backtrace`                                                                            |
+| File formats                         | `toml::`, `toml_edit`                                                                                                                                       |
+| Writing, and how a failed write ends | `writeln!`, `write!(`, `to_writer`, `InternalError`, `Backtrace`                                                                                            |
 
 The architecture test checks the names by scanning each file under `crates/core/src/commands/` as text. A test module
 and a comment are checked like the rest, and a failure names the file, the line, and the name.
@@ -117,8 +119,8 @@ still reach what they stand for:
 - an item of a listed module through a re-export, by name or through a glob import of the crate root: the test module of
   `commands/repo/remove.rs` names `crate::RepositoryKind`, which `config_edit.rs` defines;
 - a crate under another name: after `use toml as t;` no line holds `toml::`;
-- the port through the handles of the context: `cx.files.read(..)` and `cx.file_writer.update(..)` name no type of the
-  port, and `cx.out.write_all(..)` writes with none of the listed names.
+- a port through the handles of the context: `cx.files.read(..)`, `cx.file_writer.update(..)`, and `cx.programs.run(..)`
+  name no type of a port, and `cx.out.write_all(..)` writes with none of the listed names.
 
 Those remain a matter of review. A change that adds a module only a domain entry may call adds its name to the list in
 `crates/dev/src/architecture.rs`.
@@ -171,13 +173,17 @@ module's own that the command file takes apart into `Termination::Command` and `
 `repository_catalog::add` fails with `AddError`, whose three variants become `Termination::Command`,
 `Termination::Config`, and `Termination::Internal`,
 `index_lookup::answer` fails with `ConfigError` alone, which becomes `Termination::Config`, and
-`repository_catalog::list` and `locations::list` each fail with a `ListError`, whose two variants become `Termination::Config` and
-`Termination::Internal`: the command file boxes what each variant carries, and so never names the type of an internal
-failure.
+`repository_catalog::list` and `locations::list` each fail with a `ListError` of their own, whose variants `Config` and
+`Internal` become `Termination::Config` and `Termination::Internal`: the command file boxes what each of the two
+carries, and so never names the type of an internal failure. The `ListError` of `locations::list` has a third variant,
+`Repo`, for a git call of a worktree probe that failed, which becomes `Termination::Repo`. It holds its error in a box
+already, because a `Result` whose error is as wide as a `RepoError` is refused by the `clippy` step, and the command
+file hands that box on.
 
 An entry that reports a condition on stderr takes a `&mut Diagnostics`, the borrow of the stderr handle and the log its
 command file built, and writes through `crates/core/src/diagnostics.rs`: `repository_catalog::list` writes the drift
-notice that way before it returns its list. `Diagnostics` is no port: no `Context` and no `Invocation` carries it.
+notice that way before it returns its list, and `locations::list` a record for each git call that failed. `Diagnostics`
+is no port: no `Context` and no `Invocation` carries it.
 
 ## An error
 

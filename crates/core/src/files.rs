@@ -27,6 +27,10 @@ pub(crate) trait ReadFiles {
     /// name that starts with `.` is among them; `.` and `..` are not. A `path` that is no directory, or one
     /// that cannot be listed, is an error.
     fn entries(&self, path: &Path) -> io::Result<Vec<OsString>>;
+
+    /// The target text of the symbolic link at `path`, as it was written and not followed: `Ok(None)` when
+    /// `path` is no symbolic link or does not exist. The directories above `path` are followed.
+    fn read_link(&self, path: &Path) -> io::Result<Option<PathBuf>>;
 }
 
 /// What one update does to a file: it gets the current bytes, `None` when no such file exists, and returns the
@@ -79,6 +83,24 @@ impl ReadFiles for OsFiles {
         std::fs::read_dir(path)?
             .map(|entry| entry.map(|entry| entry.file_name()))
             .collect()
+    }
+
+    fn read_link(&self, path: &Path) -> io::Result<Option<PathBuf>> {
+        match std::fs::read_link(path) {
+            Ok(target) => Ok(Some(target)),
+            // An entry that is no link, no entry at all, and a path through something that is no directory.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::InvalidInput
+                        | io::ErrorKind::NotFound
+                        | io::ErrorKind::NotADirectory
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -350,6 +372,17 @@ impl ReadFiles for MemoryFiles {
             Some((_, MemoryEntry::FailingDir(kind))) => Err(io::Error::from(*kind)),
             Some(_) => Err(io::Error::from(io::ErrorKind::NotADirectory)),
             None => Err(io::Error::from(io::ErrorKind::NotFound)),
+        }
+    }
+
+    fn read_link(&self, path: &Path) -> io::Result<Option<PathBuf>> {
+        let (Some(above), Some(name)) = (path.parent(), path.file_name()) else {
+            return Ok(None);
+        };
+        let held = self.followed(above).map(|above| above.join(name));
+        match held.and_then(|held| self.0.get(&held)) {
+            Some(MemoryEntry::Link(target)) => Ok(Some(target.clone())),
+            _ => Ok(None),
         }
     }
 }
@@ -665,6 +698,50 @@ mod tests {
         let (files, root) = kinds_in_memory();
 
         assert_the_reads_tell_the_kinds_apart(&files, &root);
+    }
+
+    /// Asserts what `read_link` of `files` answers for each kind of entry under `root`, which holds the tree of
+    /// the kinds and the link `absolute`, whose target text is `/somewhere/else`.
+    fn assert_a_link_gives_its_target_as_written_and_nothing_else_gives_one(
+        files: &dyn ReadFiles,
+        root: &Path,
+    ) {
+        for (name, target) in [
+            ("to-file", Some("file")),
+            ("to-dir", Some("dir")),
+            ("dangling", Some("gone")),
+            ("absolute", Some("/somewhere/else")),
+            ("to-dir/plain", None),
+            ("file", None),
+            ("dir", None),
+            ("absent", None),
+            ("file/below", None),
+        ] {
+            assert_eq!(
+                files
+                    .read_link(&root.join(name))
+                    .map_err(|error| error.kind()),
+                Ok(target.map(PathBuf::from)),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_link_of_the_file_system_gives_its_target_as_written_and_nothing_else_gives_one() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let root = kinds_on_disk(&tree);
+        std::os::unix::fs::symlink("/somewhere/else", root.join("absolute")).expect("a link");
+
+        assert_a_link_gives_its_target_as_written_and_nothing_else_gives_one(&OsFiles, &root);
+    }
+
+    #[test]
+    fn a_link_of_the_memory_files_gives_its_target_as_written_and_nothing_else_gives_one() {
+        let (files, root) = kinds_in_memory();
+        let files = files.link("/kinds/absolute", "/somewhere/else");
+
+        assert_a_link_gives_its_target_as_written_and_nothing_else_gives_one(&files, &root);
     }
 
     #[test]

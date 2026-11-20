@@ -120,8 +120,9 @@ impl PinnedEnv {
             .collect()
     }
 
-    /// Every variable with its value, sorted by name.
-    pub(crate) fn variables(&self) -> impl Iterator<Item = (&OsStr, &OsStr)> {
+    /// Every variable with its value, sorted by name: what a test hands an invocation it runs in its own
+    /// process, so that a program the invocation starts gets the environment a child of the harness gets.
+    pub fn variables(&self) -> impl Iterator<Item = (&OsStr, &OsStr)> {
         self.variables
             .iter()
             .map(|(name, pinned)| (name.as_os_str(), pinned.value.as_os_str()))

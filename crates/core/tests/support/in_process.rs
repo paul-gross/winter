@@ -14,6 +14,7 @@ use serde_json::Value;
 use winter_workspace_core::{
     CommandTracer, Identity, Interrupts, Invocation, ProcessEnv, Termination, TraceLog, run,
 };
+use winter_workspace_test_support::PinnedEnv;
 
 /// One invocation of the library, over handles the scaffold owns.
 pub struct InProcess {
@@ -65,6 +66,17 @@ impl InProcess {
     /// Adds one variable to the environment; a later value replaces an earlier one of the same key.
     pub fn env(mut self, key: &str, value: &str) -> Self {
         self.env.push((OsString::from(key), OsString::from(value)));
+        self
+    }
+
+    /// Makes the environment the whole of `pinned`, the pinned environment of a tree, in place of what was
+    /// set before. An invocation that starts a program takes this: the program is then found on the pinned
+    /// `PATH` and gets nothing but the pinned variables and those added after this call.
+    pub fn pinned(mut self, pinned: &PinnedEnv) -> Self {
+        self.env = pinned
+            .variables()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect();
         self
     }
 
