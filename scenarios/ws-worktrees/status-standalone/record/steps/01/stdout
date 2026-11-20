@@ -1,0 +1,24 @@
+[
+  {
+    "kind": "standalone",
+    "env": null,
+    "repo": null,
+    "name": "tools",
+    "label": "tools",
+    "path": "<ROOT>/ws/tools",
+    "ahead": null,
+    "behind": null,
+    "dirty": null
+  },
+  {
+    "kind": "workspace",
+    "env": null,
+    "repo": null,
+    "name": "ws",
+    "label": "<workspace>",
+    "path": "<ROOT>/ws",
+    "ahead": null,
+    "behind": null,
+    "dirty": null
+  }
+]

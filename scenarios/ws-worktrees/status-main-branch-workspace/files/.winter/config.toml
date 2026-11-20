@@ -1,0 +1,5 @@
+# workspace configuration
+main_branch = "trunk"
+
+[[project_repository]]
+name = "web"

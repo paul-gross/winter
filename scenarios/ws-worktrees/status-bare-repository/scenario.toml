@@ -1,0 +1,9 @@
+summary = "A worktree location that holds a bare repository ends the command: exit 1, and nothing is listed."
+
+[[fixture.git]]
+cwd = "."
+args = ["init", "--quiet", "--bare", "alpha/web"]
+
+[[step]]
+args = ["ws", "worktrees", "--status", "--json"]
+stdout = "json"

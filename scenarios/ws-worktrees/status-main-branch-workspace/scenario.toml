@@ -1,0 +1,36 @@
+summary = "A project without a main branch of its own is counted against the main branch of the workspace."
+
+[[fixture.remote]]
+name = "web"
+
+[[fixture.remote.commit]]
+message = "Initial web"
+files = { "README.md" = "web fixture\n" }
+
+[[fixture.remote.commit]]
+message = "First on trunk"
+files = { "one.txt" = "one\n" }
+branch = "trunk"
+
+[[fixture.remote.commit]]
+message = "Second on trunk"
+files = { "two.txt" = "two\n" }
+branch = "trunk"
+
+[[fixture.checkout]]
+remote = "web"
+path = "projects/web"
+
+[[fixture.worktree]]
+checkout = "projects/web"
+path = "alpha/web"
+branch = "alpha"
+start = "main"
+
+[[fixture.git]]
+cwd = "alpha/web"
+args = ["commit", "--quiet", "--allow-empty", "-m", "Local change"]
+
+[[step]]
+args = ["ws", "worktrees", "--status", "--json"]
+stdout = "json"

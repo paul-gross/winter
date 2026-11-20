@@ -1,0 +1,6 @@
+status probe failed for web — git status --porcelain=v2 --branch --untracked-files=all -z (cwd=<ROOT>/ws/alpha/web exit=128) fatal: this operation must be run in a work tree
+error: status probe failed for web
+  $ git status --porcelain=v2 --branch --untracked-files=all -z
+  cwd: <ROOT>/ws/alpha/web
+  exit 128
+  stderr: fatal: this operation must be run in a work tree

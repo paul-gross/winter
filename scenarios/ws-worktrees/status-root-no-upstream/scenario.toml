@@ -1,0 +1,8 @@
+summary = "The workspace root on a branch with no upstream is neither ahead nor behind, and its dirty count is still given."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["ws", "worktrees", "--status", "--json"]
+stdout = "json"

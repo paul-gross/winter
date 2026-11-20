@@ -1,0 +1,107 @@
+repository
+    remotes/web.git
+    kind: bare
+head
+    0b2113ea687ad6831b68baf0f3e217d7acc39029
+    refs/heads/trunk
+refs
+    refs/heads/trunk 0b2113ea687ad6831b68baf0f3e217d7acc39029  
+worktrees
+    worktree <ROOT>/remotes/web.git
+    bare
+    
+config
+    core.bare=true
+    core.filemode=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/trunk
+    0b2113ea687ad6831b68baf0f3e217d7acc39029 1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677 Fixture Author author@fixture.invalid 946684860 Fixture Committer committer@fixture.invalid 946684860 Second web
+    1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial web
+
+repository
+    ws/alpha/web
+    kind: worktree
+dot-git
+    gitdir: <ROOT>/ws/projects/web/.git/worktrees/web
+head
+    f7dd8bd9a39f514fb5388966522959e0adf8214b
+    refs/heads/alpha
+refs
+    refs/heads/alpha f7dd8bd9a39f514fb5388966522959e0adf8214b  
+    refs/heads/trunk 0b2113ea687ad6831b68baf0f3e217d7acc39029 refs/remotes/origin/trunk 
+    refs/remotes/origin/HEAD 0b2113ea687ad6831b68baf0f3e217d7acc39029  refs/remotes/origin/trunk
+    refs/remotes/origin/trunk 0b2113ea687ad6831b68baf0f3e217d7acc39029  
+status
+    # branch.oid f7dd8bd9a39f514fb5388966522959e0adf8214b
+    # branch.head alpha
+stash
+config
+    branch.trunk.merge=refs/heads/trunk
+    branch.trunk.remote=origin
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+    remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+    remote.origin.url=https://fixture.invalid/web.git
+in-progress
+exclude
+log
+    refs/heads/alpha
+    f7dd8bd9a39f514fb5388966522959e0adf8214b 0b2113ea687ad6831b68baf0f3e217d7acc39029 Fixture Author author@fixture.invalid 978307200 Fixture Committer committer@fixture.invalid 978307200 Local change
+    0b2113ea687ad6831b68baf0f3e217d7acc39029 1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677 Fixture Author author@fixture.invalid 946684860 Fixture Committer committer@fixture.invalid 946684860 Second web
+    1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial web
+    refs/heads/trunk
+    0b2113ea687ad6831b68baf0f3e217d7acc39029 1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677 Fixture Author author@fixture.invalid 946684860 Fixture Committer committer@fixture.invalid 946684860 Second web
+    1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial web
+
+repository
+    ws/projects/web
+    kind: main
+dot-git
+    directory
+head
+    0b2113ea687ad6831b68baf0f3e217d7acc39029
+    refs/heads/trunk
+refs
+    refs/heads/alpha f7dd8bd9a39f514fb5388966522959e0adf8214b  
+    refs/heads/trunk 0b2113ea687ad6831b68baf0f3e217d7acc39029 refs/remotes/origin/trunk 
+    refs/remotes/origin/HEAD 0b2113ea687ad6831b68baf0f3e217d7acc39029  refs/remotes/origin/trunk
+    refs/remotes/origin/trunk 0b2113ea687ad6831b68baf0f3e217d7acc39029  
+worktrees
+    worktree <ROOT>/ws/projects/web
+    HEAD 0b2113ea687ad6831b68baf0f3e217d7acc39029
+    branch refs/heads/trunk
+    
+    worktree <ROOT>/ws/alpha/web
+    HEAD f7dd8bd9a39f514fb5388966522959e0adf8214b
+    branch refs/heads/alpha
+    
+status
+    # branch.oid 0b2113ea687ad6831b68baf0f3e217d7acc39029
+    # branch.head trunk
+    # branch.upstream origin/trunk
+    # branch.ab +0 -0
+stash
+config
+    branch.trunk.merge=refs/heads/trunk
+    branch.trunk.remote=origin
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+    remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+    remote.origin.url=https://fixture.invalid/web.git
+in-progress
+exclude
+log
+    refs/heads/alpha
+    f7dd8bd9a39f514fb5388966522959e0adf8214b 0b2113ea687ad6831b68baf0f3e217d7acc39029 Fixture Author author@fixture.invalid 978307200 Fixture Committer committer@fixture.invalid 978307200 Local change
+    0b2113ea687ad6831b68baf0f3e217d7acc39029 1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677 Fixture Author author@fixture.invalid 946684860 Fixture Committer committer@fixture.invalid 946684860 Second web
+    1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial web
+    refs/heads/trunk
+    0b2113ea687ad6831b68baf0f3e217d7acc39029 1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677 Fixture Author author@fixture.invalid 946684860 Fixture Committer committer@fixture.invalid 946684860 Second web
+    1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial web

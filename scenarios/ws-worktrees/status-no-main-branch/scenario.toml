@@ -1,0 +1,31 @@
+summary = "A worktree whose remote has no main branch fetched is neither ahead nor behind."
+
+[[fixture.remote]]
+name = "web"
+default_branch = "trunk"
+
+[[fixture.remote.commit]]
+message = "Initial web"
+files = { "README.md" = "web fixture\n" }
+
+[[fixture.remote.commit]]
+message = "Second web"
+files = { "notes.txt" = "web notes\n" }
+
+[[fixture.checkout]]
+remote = "web"
+path = "projects/web"
+
+[[fixture.worktree]]
+checkout = "projects/web"
+path = "alpha/web"
+branch = "alpha"
+start = "trunk"
+
+[[fixture.git]]
+cwd = "alpha/web"
+args = ["commit", "--quiet", "--allow-empty", "-m", "Local change"]
+
+[[step]]
+args = ["ws", "worktrees", "--status", "--json"]
+stdout = "json"

@@ -1,0 +1,13 @@
+f - 89fbd3cff0c0ae16c92e2e63569c5c6f170cdfd2 gitconfig
+d home
+d home/.config
+d remotes
+d remotes/tools.git
+d ws
+d ws/.winter
+f - 307f953d47edd105ef394aa5489d9a4bd92405e2 ws/.winter/config.toml
+d ws/tools
+d ws/tools/.git
+f - 72349df8c5edbc852548455fb21ca186ad290fb7 ws/tools/README.md
+f - d4bfb8fb87e2c8c92582033f1057d05793148d8b ws/tools/loose.txt
+f - 2b50c16822e85b17fad6a94a396b230bff1d3213 ws/tools/notes.txt

@@ -1,0 +1,17 @@
+f - 89fbd3cff0c0ae16c92e2e63569c5c6f170cdfd2 gitconfig
+d home
+d home/.config
+d remotes
+d ws
+d ws/.winter
+f - ccdd6da43a7c68060bdeec6e4c8333f7a41a4c14 ws/.winter/config.toml
+d ws/alpha
+d ws/alpha/web
+f - acbaef275e46a7f14c1ef456fff2c8bbe8c84724 ws/alpha/web/HEAD
+f - 11289439b2f75957fa163559baa7d3aec83601ef ws/alpha/web/config
+d ws/alpha/web/objects
+d ws/alpha/web/objects/info
+d ws/alpha/web/objects/pack
+d ws/alpha/web/refs
+d ws/alpha/web/refs/heads
+d ws/alpha/web/refs/tags
