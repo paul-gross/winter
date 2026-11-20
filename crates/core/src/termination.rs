@@ -24,6 +24,8 @@ pub enum Termination {
     },
     Command(Box<CommandError>),
     Config(Box<ConfigError>),
+    /// A program run on a repository failed; the diagnostic is the message and the details of the call.
+    Repo(Box<RepoError>),
     /// The reader closed stdout before the result was written; nothing more is written.
     BrokenPipe,
     Internal(Box<InternalError>),
@@ -37,6 +39,7 @@ impl Termination {
             Self::Reported
             | Self::Command(_)
             | Self::Config(_)
+            | Self::Repo(_)
             | Self::BrokenPipe
             | Self::Internal(_) => 1,
             Self::Usage(_) | Self::BareGroup { .. } => 2,
@@ -46,7 +49,8 @@ impl Termination {
     /// The text the process boundary writes to its error stream, or `None` when nothing more is written.
     ///
     /// A bare group's text is its help. Every other text opens with a line that starts with the error marker
-    /// and carries the message; a usage error adds its usage line and the command that prints its help.
+    /// and carries the message; a usage error adds its usage line and the command that prints its help, and a
+    /// repo error one line for each detail of the failed call that is present.
     pub fn diagnostic(&self) -> Option<String> {
         match self {
             Self::Success | Self::Reported | Self::BrokenPipe => None,
@@ -54,6 +58,7 @@ impl Termination {
             Self::BareGroup { help } => Some(help.clone()),
             Self::Command(error) => Some(format!("{ERROR_MARKER}{error}")),
             Self::Config(error) => Some(format!("{ERROR_MARKER}{error}")),
+            Self::Repo(error) => Some(format!("{ERROR_MARKER}{}", error.detailed())),
             Self::Internal(error) => Some(format!("{ERROR_MARKER}{error}")),
         }
     }
@@ -72,6 +77,7 @@ impl Termination {
             Self::BareGroup { .. } => Some("BareGroup"),
             Self::Command(_) => Some("Command"),
             Self::Config(_) => Some("Config"),
+            Self::Repo(_) => Some("Repo"),
             Self::BrokenPipe => Some("BrokenPipe"),
             Self::Internal(_) => Some("Internal"),
         }
@@ -653,6 +659,89 @@ fn of_owner(owner: &Option<RepoRef>) -> String {
         .unwrap_or_default()
 }
 
+/// A failed operation on a repository: what failed, and the call that failed with each detail that is known.
+///
+/// Its text is the message alone. The diagnostic of its ending adds the details.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
+pub struct RepoError {
+    pub message: RepoMessage,
+    /// The program that was run.
+    pub program: Option<String>,
+    /// The first argument of the program.
+    pub subcommand: Option<String>,
+    /// The arguments after the subcommand.
+    pub args: Vec<String>,
+    /// The working directory of the call.
+    pub cwd: Option<PathBuf>,
+    /// The exit code of the program, or minus the number of the signal that ended it.
+    pub exit: Option<i32>,
+    /// What the program wrote to its stderr, without the blank space around it.
+    pub stderr: Option<String>,
+}
+
+impl RepoError {
+    /// The message, then one indented line for each detail that is present: the command line, the working
+    /// directory, the exit, which tells the signal that ended the program from an exit code, and the stderr.
+    fn detailed(&self) -> String {
+        let mut lines = vec![self.message.to_string()];
+        let command: Vec<&str> = self
+            .program
+            .iter()
+            .chain(&self.subcommand)
+            .chain(&self.args)
+            .map(String::as_str)
+            .collect();
+        if self.program.is_some() || self.subcommand.is_some() {
+            lines.push(format!("  $ {}", command.join(" ")));
+        }
+        if let Some(cwd) = &self.cwd {
+            lines.push(format!("  cwd: {}", cwd.display()));
+        }
+        match self.exit {
+            Some(exit) if exit < 0 => lines.push(format!(
+                "  exit {exit} (killed by signal {})",
+                exit.unsigned_abs()
+            )),
+            Some(exit) => lines.push(format!("  exit {exit}")),
+            None => {}
+        }
+        if let Some(stderr) = &self.stderr {
+            lines.push(format!("  stderr: {stderr}"));
+        }
+        lines.join("\n")
+    }
+}
+
+/// What a repo error reports. A caller matches the variant, never the text.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RepoMessage {
+    /// A git call made for `operation` on the repository `repo` failed.
+    #[error("{operation} failed for {repo}")]
+    GitFailure {
+        operation: GitOperation,
+        repo: String,
+    },
+}
+
+/// What a git call that failed was made for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitOperation {
+    /// The read of the state of a working tree.
+    StatusProbe,
+    /// The count of the commits a checkout is ahead of and behind the main branch of its remote.
+    MainAheadBehindProbe,
+}
+
+impl fmt::Display for GitOperation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::StatusProbe => "status probe",
+            Self::MainAheadBehindProbe => "main-branch ahead/behind probe",
+        })
+    }
+}
+
 /// A failure with no other class, and any panic.
 ///
 /// The backtrace is a public field of each variant: the process boundary reads it from there.
@@ -790,6 +879,21 @@ mod tests {
         }
     }
 
+    fn failed_status() -> RepoError {
+        RepoError {
+            message: RepoMessage::GitFailure {
+                operation: GitOperation::StatusProbe,
+                repo: "api".to_owned(),
+            },
+            program: Some("git".to_owned()),
+            subcommand: Some("status".to_owned()),
+            args: vec!["--porcelain=v2".to_owned(), "-z".to_owned()],
+            cwd: Some(PathBuf::from("/ws/alpha/api")),
+            exit: Some(128),
+            stderr: Some("fatal: not a git repository".to_owned()),
+        }
+    }
+
     #[test]
     fn a_termination_is_at_most_four_words_wide() {
         assert!(
@@ -815,6 +919,7 @@ mod tests {
             Termination::Config(Box::new(root_not_found())).exit_code(),
             1
         );
+        assert_eq!(Termination::Repo(Box::new(failed_status())).exit_code(), 1);
         assert_eq!(Termination::Internal(Box::new(panic())).exit_code(), 1);
     }
 
@@ -832,6 +937,7 @@ mod tests {
                 name: "docs".to_owned(),
             }))),
             Termination::Config(Box::new(root_not_found())),
+            Termination::Repo(Box::new(failed_status())),
             Termination::BrokenPipe,
             Termination::Internal(Box::new(panic())),
         ];
@@ -855,6 +961,7 @@ mod tests {
                 "BareGroup",
                 "Command",
                 "Config",
+                "Repo",
                 "BrokenPipe",
                 "Internal"
             ]
@@ -1019,6 +1126,70 @@ mod tests {
             assert!(diagnostic.contains(carried), "{diagnostic}");
             assert_eq!(diagnostic.lines().count(), 1, "{diagnostic}");
         }
+    }
+
+    #[test]
+    fn the_text_of_a_repo_error_is_its_message_alone() {
+        assert_eq!(failed_status().to_string(), "status probe failed for api");
+        let counted = RepoMessage::GitFailure {
+            operation: GitOperation::MainAheadBehindProbe,
+            repo: "web".to_owned(),
+        };
+        assert_eq!(
+            counted.to_string(),
+            "main-branch ahead/behind probe failed for web"
+        );
+    }
+
+    #[test]
+    fn a_repo_diagnostic_is_the_error_line_and_then_each_detail_of_the_call() {
+        let diagnostic = Termination::Repo(Box::new(failed_status())).diagnostic();
+
+        assert_eq!(
+            diagnostic.as_deref(),
+            Some(
+                "error: status probe failed for api\n\
+                 \x20 $ git status --porcelain=v2 -z\n\
+                 \x20 cwd: /ws/alpha/api\n\
+                 \x20 exit 128\n\
+                 \x20 stderr: fatal: not a git repository"
+            )
+        );
+    }
+
+    #[test]
+    fn a_repo_diagnostic_leaves_out_each_detail_that_is_absent() {
+        let bare = RepoError {
+            program: None,
+            subcommand: None,
+            args: Vec::new(),
+            cwd: None,
+            exit: None,
+            stderr: None,
+            ..failed_status()
+        };
+
+        assert_eq!(
+            Termination::Repo(Box::new(bare)).diagnostic().as_deref(),
+            Some("error: status probe failed for api")
+        );
+    }
+
+    #[test]
+    fn a_repo_diagnostic_tells_a_signal_from_an_exit_code() {
+        let killed = RepoError {
+            exit: Some(-9),
+            ..failed_status()
+        };
+
+        let diagnostic = Termination::Repo(Box::new(killed))
+            .diagnostic()
+            .expect("a diagnostic");
+
+        assert!(
+            diagnostic.contains("\n  exit -9 (killed by signal 9)\n"),
+            "{diagnostic}"
+        );
     }
 
     #[test]

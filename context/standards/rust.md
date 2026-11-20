@@ -9,17 +9,19 @@ The library returns values and the binary alone touches the process, as
 [structure.md](../architecture/structure.md#the-library-and-the-binary) describes. No source under `crates/core/src/`
 may contain any of these tokens:
 
-| Area             | Forbidden tokens                                                                         |
-| ---------------- | ---------------------------------------------------------------------------------------- |
-| Standard streams | `std::io::stdout`, `std::io::stderr`, `io::stdout(`, `io::stderr(`                       |
-| Printing         | `println!`, `eprintln!`, `print!`, `eprint!`, `dbg!`                                     |
-| Process exit     | `std::process::exit`, `process::exit(`                                                   |
-| Environment      | `std::env::var`, `std::env::vars`, `std::env::args`, `std::env::current_dir`             |
-| File system      | `std::fs`, in every source except `crates/core/src/files.rs`, the place of the file port |
+| Area             | Forbidden tokens                                                                                        |
+| ---------------- | ------------------------------------------------------------------------------------------------------- |
+| Standard streams | `std::io::stdout`, `std::io::stderr`, `io::stdout(`, `io::stderr(`                                      |
+| Printing         | `println!`, `eprintln!`, `print!`, `eprint!`, `dbg!`                                                    |
+| Process exit     | `std::process::exit`, `process::exit(`                                                                  |
+| Environment      | `std::env::var`, `std::env::vars`, `std::env::args`, `std::env::current_dir`                            |
+| File system      | `std::fs`, in every source except `crates/core/src/files.rs`, the place of the file port                |
+| Process start    | `process::Command`, in every source except `crates/core/src/programs.rs`, the place of the program port |
 
 A command writes its result to the stdout handle of its `Context` through `crates/core/src/output.rs`, as
 [changes.md](../architecture/changes.md#writing-the-result) describes, and reads the environment and the working
-directory from the `Context`.
+directory from the `Context`. A domain module starts a program through the program port it is handed, `cx.programs`, as
+[structure.md](../architecture/structure.md#modules) describes.
 
 The architecture test checks the token table by scanning each source as text. Nothing is exempt: a test module inside
 the library is checked like the rest, and so is a comment. A failure names the file, the line, and the token.

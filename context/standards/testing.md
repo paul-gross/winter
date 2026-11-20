@@ -34,7 +34,12 @@ Choose the lowest tier that can make the claim:
   once a component test uses it. A helper that more than one component test file needs has one owner: the support
   package for one that reads or builds a tree, as `snapshot` reads every entry below a directory into a map of `Found`
   values, and `Ended` for an assertion on what `run` answered. No component test file holds a copy of `snapshot`, of
-  `Found`, or of either assertion as a helper.
+  `Found`, or of either assertion as a helper. A component test of a behaviour that starts git lets the library start it
+  through its own program port, and hands `InProcess` the whole pinned environment of its tree with `InProcess::pinned`,
+  which takes `PinnedEnv::variables`. An invocation left with the empty environment would have that port search the
+  directories of the host that stand in for a missing `PATH`, and let git read the configuration of the host. The git it
+  starts is the host's, on the pinned `PATH`, or a stand-in the test wrote to `bin/` of its tree, which comes first
+  there and records its calls under `calls/`.
 - An executable test starts the binary Cargo built, at `env!("CARGO_BIN_EXE_winter-workspace")`, through `invoke`. It is
   for a claim about the process and not about the library. `invoke_with_stdout` starts it with a stdout that cannot be
   written, one of the three faults of `StdoutFault`: `ClosedPipe`, a pipe whose reader is gone; `Full`, a device with no

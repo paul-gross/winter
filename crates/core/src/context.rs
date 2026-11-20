@@ -7,10 +7,11 @@ use std::path::Path;
 use crate::files::{ReadFiles, WriteFiles};
 use crate::logging::Log;
 use crate::process::{Identity, Interrupts, ProcessEnv};
+use crate::programs::RunPrograms;
 use crate::termination::Usage;
 
-/// The working directory, environment, identity, and stream handles of one invocation, the node being run, the
-/// root option values, what is logged, and the interrupt state of the process.
+/// The working directory, environment, identity, and stream handles of one invocation, its file and program
+/// ports, the node being run, the root option values, what is logged, and the interrupt state of the process.
 #[allow(
     dead_code,
     reason = "the command contract: a field stays whether or not a present command reads it"
@@ -26,6 +27,7 @@ pub(crate) struct Context<'a> {
     pub err_is_terminal: bool,
     pub files: &'a dyn ReadFiles,
     pub file_writer: &'a dyn WriteFiles,
+    pub programs: &'a dyn RunPrograms,
     pub invoked: &'a Invoked,
     pub root: &'a RootOptions,
     pub log: Log,

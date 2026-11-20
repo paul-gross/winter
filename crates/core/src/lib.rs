@@ -26,6 +26,7 @@ mod logging;
 mod output;
 mod parse;
 mod process;
+mod programs;
 mod registry;
 mod repository_catalog;
 mod state_registry;
@@ -44,9 +45,10 @@ pub use config_model::{
 pub use process::{Identity, Interrupts, Invocation, ProcessEnv, run};
 pub use termination::{
     AgentOverrideFault, ChoiceKey, CommandError, ConfigError, ConfigFileName, ConfigValue,
-    EntryIdent, EnvVarFault, FileCause, InternalError, MergedTable, ModelTierFault,
-    NestedExcludedKey, NestedOnlyKey, ParseFault, PathField, RemovedKey, RepoKind, RepoRef,
-    RepositoryFault, Termination, TomlParseError, TypedKey, Usage, UsageError, ValueType,
+    EntryIdent, EnvVarFault, FileCause, GitOperation, InternalError, MergedTable, ModelTierFault,
+    NestedExcludedKey, NestedOnlyKey, ParseFault, PathField, RemovedKey, RepoError, RepoKind,
+    RepoMessage, RepoRef, RepositoryFault, Termination, TomlParseError, TypedKey, Usage,
+    UsageError, ValueType,
 };
 pub use trace::{
     CommandTracer, NoTrace, TraceConfig, TraceLog, TraceSettings, settings, span_name,

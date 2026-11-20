@@ -670,6 +670,58 @@ fn a_generic_exporter_header_is_not_sent() {
 }
 
 #[test]
+fn a_generic_exporter_variable_the_binary_hid_from_its_exporter_reaches_the_git_it_starts() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.workspace.join(".winter/config.toml"),
+        "[[project_repository]]\nname = \"api\"\n",
+    )
+    .expect("the configuration of the fixture");
+    let worktree = fixture.workspace.join("alpha/api");
+    std::fs::create_dir_all(&worktree).expect("a worktree directory");
+    std::fs::write(worktree.join(".git"), "gitdir: /nowhere\n").expect("a repository by its file");
+    // A stand-in for git, first on the pinned `PATH`: it writes its environment to a file of its own under
+    // `calls/` and answers as a git whose working tree is clean and level with its main branch.
+    let calls = fixture.tree.root().join("calls");
+    let stub = fixture.tree.root().join("bin/git");
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\nenv >'{}'/\"$1\"\ncase \"$1\" in rev-list) printf '0\\t0\\n' ;; esac\n",
+            calls.display()
+        ),
+    )
+    .expect("the stand-in");
+    std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("a mode");
+    let collector = collector(Answer::Ok);
+
+    let (ended, _) = fixture.traced(
+        &collector.endpoint(),
+        &["ws", "worktrees", "--status", "--json"],
+        &[("OTEL_EXPORTER_OTLP_HEADERS", "x-generic=1")],
+    );
+
+    assert_eq!(ended.exit, Exit::Code(0), "{ended:?}");
+    assert_eq!(ended.stderr, "", "{ended:?}");
+    assert!(ended.stdout.contains("\"dirty\":0"), "{ended:?}");
+    let request = one_request(collector);
+    assert!(
+        header(&request, "x-generic").is_empty(),
+        "the exporter of the binary did not read the variable"
+    );
+    for call in ["status", "rev-list"] {
+        let environment = std::fs::read_to_string(calls.join(call)).expect("a recorded call");
+        assert!(
+            environment
+                .lines()
+                .any(|line| line == "OTEL_EXPORTER_OTLP_HEADERS=x-generic=1"),
+            "{call}: {environment}"
+        );
+    }
+}
+
+#[test]
 fn a_generic_exporter_compression_the_binary_cannot_do_does_not_keep_the_export_back() {
     let fixture = Fixture::new();
     let collector = collector(Answer::Ok);
