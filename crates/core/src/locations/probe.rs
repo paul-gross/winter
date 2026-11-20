@@ -1,8 +1,8 @@
 //! The git counts of a checkout location: the rule that tells a repository from any other directory, and the
-//! probe of a worktree.
+//! probes of a worktree and of the workspace root.
 
 use std::collections::BTreeSet;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 
@@ -20,6 +20,12 @@ pub(super) enum Failure {
     Internal(InternalError),
 }
 
+impl From<InternalError> for Failure {
+    fn from(error: InternalError) -> Self {
+        Self::Internal(error)
+    }
+}
+
 /// What git wrote on a call that succeeded, when it does not read as the result of that call.
 #[derive(Debug, thiserror::Error)]
 #[error("git {subcommand} wrote what does not read as its result: {output:?}")]
@@ -29,11 +35,11 @@ struct UnreadOutput {
 }
 
 impl UnreadOutput {
-    fn failure(subcommand: &'static str, output: &[u8]) -> Failure {
-        Failure::Internal(InternalError::unexpected(Self {
+    fn failure(subcommand: &'static str, output: &[u8]) -> InternalError {
+        InternalError::unexpected(Self {
             subcommand,
             output: String::from_utf8_lossy(output).into_owned(),
-        }))
+        })
     }
 }
 
@@ -209,16 +215,163 @@ pub(super) fn worktree(
     })
 }
 
+/// The counts of the workspace root `root`, against the upstream of its branch.
+///
+/// Every count is `None` when the root is no repository, for which git is not started, when its `HEAD` is
+/// detached, and when a git call ends in a way that is no answer; the calls stop at the first of these. No
+/// such call is a failure: only a git that cannot be started, or one that wrote what does not read as a
+/// count, is.
+///
+/// Otherwise the dirty count is the number of distinct paths that are staged or changed plus the number of
+/// untracked files, with no path staged while `HEAD` has no commit, and the commits ahead and behind are
+/// counted against the upstream the configuration of the branch names. A branch with no upstream is neither
+/// ahead nor behind.
+pub(super) fn workspace(
+    files: &dyn ReadFiles,
+    programs: &dyn RunPrograms,
+    root: &Path,
+) -> Result<Counts, InternalError> {
+    if !is_repository(files, root) {
+        return Ok(Counts::UNCOUNTED);
+    }
+    Ok(workspace_counts(programs, root)?.unwrap_or(Counts::UNCOUNTED))
+}
+
+/// The counts of the repository at `root`, or `None` at the first call that gives none.
+fn workspace_counts(
+    programs: &dyn RunPrograms,
+    root: &Path,
+) -> Result<Option<Counts>, InternalError> {
+    let named = git(
+        programs,
+        root,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+    )?;
+    if named.exit != Exit::Code(0) {
+        return Ok(None);
+    }
+    let branch = without_final_newline(&named.stdout);
+
+    let commit = git(
+        programs,
+        root,
+        &["rev-parse", "--verify", "--quiet", "HEAD"],
+    )?;
+    let has_commit = match commit.exit {
+        Exit::Code(0) => true,
+        Exit::Code(1) => false,
+        _ => return Ok(None),
+    };
+
+    let mut listings = Vec::new();
+    if has_commit {
+        listings.push(&["diff", "--cached", "--name-only", "-z", "-M", "HEAD"][..]);
+    }
+    listings.push(&["diff", "--name-only", "-z"]);
+    listings.push(&["ls-files", "--others", "--exclude-standard", "-z"]);
+    let mut listed = Vec::new();
+    for listing in listings {
+        let finished = git(programs, root, listing)?;
+        if finished.exit != Exit::Code(0) {
+            return Ok(None);
+        }
+        listed.push(finished.stdout);
+    }
+    let Some((untracked, changed)) = listed.split_last() else {
+        return Ok(None);
+    };
+    let changed: BTreeSet<&[u8]> = changed.iter().flat_map(|output| paths(output)).collect();
+    let dirty = changed.len() + paths(untracked).count();
+    let dirty = u64::try_from(dirty).map_err(InternalError::unexpected)?;
+
+    let mut upstream = Vec::new();
+    for key in ["remote", "merge"] {
+        let mut name = OsString::from("branch.");
+        name.push(OsStr::from_bytes(branch));
+        name.push(".");
+        name.push(key);
+        let finished = git(
+            programs,
+            root,
+            &[OsStr::new("config"), OsStr::new("--get"), &name],
+        )?;
+        match finished.exit {
+            Exit::Code(0) => upstream.push(finished.stdout),
+            Exit::Code(1) => {
+                return Ok(Some(Counts {
+                    ahead: Some(0),
+                    behind: Some(0),
+                    dirty: Some(dirty),
+                }));
+            }
+            _ => return Ok(None),
+        }
+    }
+    let [remote, merge] = upstream.as_slice() else {
+        return Ok(None);
+    };
+    let merge = without_final_newline(merge);
+    let mut operand = without_final_newline(remote).to_vec();
+    operand.push(b'/');
+    operand.extend_from_slice(merge.strip_prefix(b"refs/heads/").unwrap_or(merge));
+
+    let mut counted = Vec::new();
+    for range in [
+        [&operand[..], b"..HEAD"].concat(),
+        [b"HEAD..", &operand[..]].concat(),
+    ] {
+        let args = [
+            OsStr::new("rev-list"),
+            OsStr::new("--count"),
+            OsStr::from_bytes(&range),
+        ];
+        let finished = git(programs, root, &args)?;
+        if finished.exit != Exit::Code(0) {
+            return Ok(None);
+        }
+        let count = std::str::from_utf8(&finished.stdout)
+            .ok()
+            .and_then(|text| text.trim().parse::<u64>().ok())
+            .ok_or_else(|| UnreadOutput::failure("rev-list", &finished.stdout))?;
+        counted.push(count);
+    }
+    let [ahead, behind] = counted.as_slice() else {
+        return Ok(None);
+    };
+
+    Ok(Some(Counts {
+        ahead: Some(*ahead),
+        behind: Some(*behind),
+        dirty: Some(dirty),
+    }))
+}
+
+/// `output` less the one newline git ends a value with.
+fn without_final_newline(output: &[u8]) -> &[u8] {
+    output.strip_suffix(b"\n").unwrap_or(output)
+}
+
+/// The paths of an output that ends each with a NUL.
+fn paths(output: &[u8]) -> impl Iterator<Item = &[u8]> {
+    output
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+}
+
 /// Runs git with `args` in `cwd`. A git that cannot be started is an internal failure.
-fn git(programs: &dyn RunPrograms, cwd: &Path, args: &[&str]) -> Result<Finished, Failure> {
-    let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
+fn git<A: AsRef<OsStr>>(
+    programs: &dyn RunPrograms,
+    cwd: &Path,
+    args: &[A],
+) -> Result<Finished, InternalError> {
+    let args: Vec<&OsStr> = args.iter().map(AsRef::as_ref).collect();
     programs
         .run(&Call {
             program: Program::Git,
             args: &args,
             cwd,
         })
-        .map_err(|error| Failure::Internal(InternalError::unexpected(error)))
+        .map_err(InternalError::unexpected)
 }
 
 /// The repo error of the git call `args` in `cwd` that ended as `finished`, made for `operation` on the
