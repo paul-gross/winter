@@ -1,0 +1,4 @@
+# repositories
+[[standalone_repository]]
+url = "https://fixture.invalid/lib.git"
+path = "vendor"

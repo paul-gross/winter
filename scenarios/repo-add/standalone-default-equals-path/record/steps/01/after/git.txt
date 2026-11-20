@@ -1,0 +1,29 @@
+repository
+    ws
+    kind: main
+dot-git
+    directory
+head
+    78ce2045d1aa3c1ed643458baefa2d054188f786
+    refs/heads/main
+refs
+    refs/heads/main 78ce2045d1aa3c1ed643458baefa2d054188f786  
+worktrees
+    worktree <ROOT>/ws
+    HEAD 78ce2045d1aa3c1ed643458baefa2d054188f786
+    branch refs/heads/main
+    
+status
+    # branch.oid 78ce2045d1aa3c1ed643458baefa2d054188f786
+    # branch.head main
+stash
+config
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    78ce2045d1aa3c1ed643458baefa2d054188f786  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Workspace root

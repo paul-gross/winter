@@ -31,6 +31,67 @@ pub(crate) trait ReadFiles {
     /// The target text of the symbolic link at `path`, as it was written and not followed: `Ok(None)` when
     /// `path` is no symbolic link or does not exist. The directories above `path` are followed.
     fn read_link(&self, path: &Path) -> io::Result<Option<PathBuf>>;
+
+    /// Where the absolute `path` leads with every symbolic link followed: the `resolve` rule of
+    /// repository-addition.md, Duplicates.
+    ///
+    /// The walk is not strict. A component that does not exist, or whose link cannot be read, is kept as
+    /// text, and the rest of the path is taken as text after it. `.` is dropped and `..` removes the last
+    /// component, lexically, as `os.path.realpath` does. A link met again while it is still being resolved
+    /// is a loop: the path reached at that link is kept, and nothing after it is resolved.
+    fn resolve(&self, path: &Path) -> PathBuf {
+        let mut seen = std::collections::HashMap::new();
+        resolve_walk(self, PathBuf::from("/"), path, &mut seen).0
+    }
+}
+
+/// One walk of [`ReadFiles::resolve`]: `at` followed by the parts of `rest`, and whether every link met
+/// was resolved. `seen` maps each link met to its resolution, which is `None` while it is under way.
+fn resolve_walk<F: ReadFiles + ?Sized>(
+    files: &F,
+    mut at: PathBuf,
+    rest: &Path,
+    seen: &mut std::collections::HashMap<PathBuf, Option<PathBuf>>,
+) -> (PathBuf, bool) {
+    use std::path::Component;
+
+    let mut parts = rest.components();
+    while let Some(part) = parts.next() {
+        let name = match part {
+            Component::RootDir | Component::Prefix(_) => {
+                at = PathBuf::from("/");
+                continue;
+            }
+            Component::CurDir => continue,
+            Component::ParentDir => {
+                at.pop();
+                continue;
+            }
+            Component::Normal(name) => name,
+        };
+        let reached = at.join(name);
+        let Some(target) = files.read_link(&reached).ok().flatten() else {
+            at = reached;
+            continue;
+        };
+        if let Some(resolution) = seen.get(&reached) {
+            match resolution {
+                Some(resolution) => {
+                    at = resolution.clone();
+                    continue;
+                }
+                None => return (reached.join(parts.as_path()), false),
+            }
+        }
+        seen.insert(reached.clone(), None);
+        let (resolved, whole) = resolve_walk(files, at, &target, seen);
+        if !whole {
+            return (resolved.join(parts.as_path()), false);
+        }
+        seen.insert(reached, Some(resolved.clone()));
+        at = resolved;
+    }
+    (at, true)
 }
 
 /// What one update does to a file: it gets the current bytes, `None` when no such file exists, and returns the
@@ -742,6 +803,62 @@ mod tests {
         let files = files.link("/kinds/absolute", "/somewhere/else");
 
         assert_a_link_gives_its_target_as_written_and_nothing_else_gives_one(&files, &root);
+    }
+
+    /// Asserts what `resolve` of `files` answers for paths under `root`, which holds the links `via -> real`,
+    /// `up -> ..`, `abs -> <root>/real`, `a -> b`, `b -> a`, `c -> a`, and the directory `real`.
+    fn assert_resolve_follows_links_and_keeps_the_rest_as_text(files: &dyn ReadFiles, root: &Path) {
+        let at = |name: &str| root.join(name);
+        for (given, resolved) in [
+            ("real", at("real")),
+            ("real/", at("real")),
+            ("via", at("real")),
+            ("via/x/y", at("real/x/y")),
+            ("abs", at("real")),
+            ("absent/deeper", at("absent/deeper")),
+            ("absent/../real", at("real")),
+            ("./real/./x", at("real/x")),
+            ("real/..", root.to_path_buf()),
+            ("up", root.parent().expect("a parent").to_path_buf()),
+            ("c", at("a")),
+            ("b", at("b")),
+            ("a", at("a")),
+        ] {
+            assert_eq!(files.resolve(&root.join(given)), resolved, "{given}");
+        }
+    }
+
+    #[test]
+    fn resolve_of_the_file_system_follows_links_and_keeps_the_rest_as_text() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let root = tree.root().join("resolving");
+        std::fs::create_dir_all(root.join("real")).expect("a directory");
+        for (link, target) in [
+            ("via", "real".into()),
+            ("up", "..".into()),
+            ("abs", root.join("real")),
+            ("a", "b".into()),
+            ("b", "a".into()),
+            ("c", "a".into()),
+        ] {
+            std::os::unix::fs::symlink(target, root.join(link)).expect("a link");
+        }
+
+        assert_resolve_follows_links_and_keeps_the_rest_as_text(&OsFiles, &root);
+    }
+
+    #[test]
+    fn resolve_of_the_memory_files_follows_links_and_keeps_the_rest_as_text() {
+        let files = MemoryFiles::default()
+            .dir("/resolving/real")
+            .link("/resolving/via", "real")
+            .link("/resolving/up", "..")
+            .link("/resolving/abs", "/resolving/real")
+            .link("/resolving/a", "b")
+            .link("/resolving/b", "a")
+            .link("/resolving/c", "a");
+
+        assert_resolve_follows_links_and_keeps_the_rest_as_text(&files, Path::new("/resolving"));
     }
 
     #[test]

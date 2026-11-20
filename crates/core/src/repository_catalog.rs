@@ -233,8 +233,9 @@ struct SharedFileMissing {
 ///
 /// The workspace is loaded first, so a configuration the load refuses ends the addition with both files as
 /// they were. Then the checks run in order: the shape of the URL, the options that do not fit the kind, the
-/// `--path` rule, and a declared repository of the kind with the URL or with the name, the URL test first of
-/// each entry. Then the one file is replaced through the writer with its text and the block appended; only
+/// `--path` rule, a declared repository of the kind with the URL or with the name, the URL test first of
+/// each entry, and, for a standalone, a declared standalone at the same location with symbolic links
+/// followed. Then the one file is replaced through the writer with its text and the block appended; only
 /// that file is read for the edit, and it is replaced once. The local file is created when absent. The shared
 /// file must exist.
 pub(crate) fn add(
@@ -305,6 +306,23 @@ pub(crate) fn add(
                 name: name.to_owned(),
             }
             .into());
+        }
+    }
+
+    if request.kind == RepositoryKind::Standalone {
+        let given = match request.path {
+            Some(path) if !path.is_empty() => path,
+            _ => name,
+        };
+        let new = files.resolve(&location(&workspace.root, Path::new(given)));
+        for entry in &workspace.config.standalone_repositories {
+            let declared = location(&workspace.root, Path::new(&entry.path));
+            if files.resolve(&declared) == new {
+                return Err(CatalogError::DuplicatePath {
+                    path: given.to_owned(),
+                }
+                .into());
+            }
         }
     }
 
@@ -1713,6 +1731,45 @@ name = \"web\"
                 catalog(add_in(&files, &block, false)),
                 CatalogError::DuplicateName { name, .. } if name == "api"
             ));
+        }
+
+        #[test]
+        fn a_standalone_at_a_declared_location_is_refused_after_the_name_and_url_checks() {
+            let declared = "\
+[[standalone_repository]]
+name = \"lib\"
+url = \"https://h.invalid/lib.git\"
+path = \"vendor\"
+";
+            let files = Stored::default().with(SHARED, declared);
+            let standalone = |url, name, path| NewBlock {
+                kind: RepositoryKind::Standalone,
+                name,
+                path,
+                ..request(url)
+            };
+
+            let by_path = standalone("https://h.invalid/x.git", None, Some("vendor/"));
+            let by_default = standalone("https://h.invalid/vendor.git", None, None);
+            let by_name = standalone("https://h.invalid/x.git", Some("lib"), Some("vendor"));
+            let project = NewBlock {
+                name: Some("vendor"),
+                ..request("https://h.invalid/vendor.git")
+            };
+
+            assert!(matches!(
+                catalog(add_in(&files, &by_path, false)),
+                CatalogError::DuplicatePath { path } if path == "vendor/"
+            ));
+            assert!(matches!(
+                catalog(add_in(&files, &by_default, false)),
+                CatalogError::DuplicatePath { path } if path == "vendor"
+            ));
+            assert!(matches!(
+                catalog(add_in(&files, &by_name, false)),
+                CatalogError::DuplicateName { .. }
+            ));
+            assert!(add_in(&files, &project, false).is_ok());
         }
 
         #[test]

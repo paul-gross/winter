@@ -27,7 +27,8 @@ checkouts, linked worktrees, their contents, and git state are preserved.
 
 `repo add <URL>` appends a `[[project_repository]]` block to the shared configuration, or a `[[standalone_repository]]`
 block with `--standalone`; `--local` writes the machine-local file, which is created when absent. Inline arrays such as
-`project_repository = [{ ... }]` are refused without changing the file. Adding edits configuration only: nothing is
+`project_repository = [{ ... }]` are refused without changing the file. A standalone whose location, with symbolic
+links followed, is that of a declared standalone is refused, and the file is left unchanged. Adding edits configuration only: nothing is
 cloned.
 
 `ws worktrees --status` adds the git counts of each location: the commits ahead of and behind the main branch of
