@@ -1,0 +1,8 @@
+summary = "A URL of no accepted shape is refused."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "ssh://user@fixture.invalid/path", "--json"]
+stdout = "json"

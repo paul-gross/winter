@@ -1,0 +1,13 @@
+summary = "A URL ending in /api is a different URL from a declared one ending in /api.git, though the names collide."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "https://other.invalid/api", "--name", "api2", "--json"]
+stdout = "json"
+
+[[compare.file]]
+path = "ws/.winter/*.toml"
+mode = "toml"
+reason = "decision:toml-parity"

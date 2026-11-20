@@ -1,0 +1,1 @@
+Error: Invalid git URL: 'ssh://user@fixture.invalid/path'. Expected http(s)://host/path, ssh://user@host/path, git://host/path, or user@host:path.

@@ -1,0 +1,8 @@
+summary = "--pinned with --standalone is refused."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "https://fixture.invalid/web.git", "--standalone", "--pinned", "--json"]
+stdout = "json"

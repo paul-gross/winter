@@ -1,0 +1,8 @@
+summary = "A duplicate of an entry of the local file is refused when adding to the shared file."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "https://fixture.invalid/loc.git", "--json"]
+stdout = "json"

@@ -1,0 +1,13 @@
+summary = "A standalone with path, prefix, ref, main branch, two git excludes, and a command writes every key in the reference's order."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "git@fixture.invalid:tools/x.git", "--standalone", "--path", "tools/x", "--prefix", "px", "--ref", "v1", "--main-branch", "dev", "--git-exclude", "a", "--git-exclude", "b", "--cmd", "make", "--json"]
+stdout = "json"
+
+[[compare.file]]
+path = "ws/.winter/*.toml"
+mode = "toml"
+reason = "decision:toml-parity"

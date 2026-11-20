@@ -34,7 +34,7 @@ mod trace;
 mod workspace_files;
 mod workspace_root;
 
-pub use config_edit::{CatalogError, RepositoryKind};
+pub use config_edit::{CatalogError, RepositoryKind, StandaloneOption};
 pub use config_model::{
     AdoptExtensions, AgentOverride, DashboardLayout, EnvBands, EnvCommand, EnvFormat, EnvValue,
     EnvVar, FileSizeLimits, GitIdentity, Keybindings, LoadMode, ModelTier, Nested, Ports,

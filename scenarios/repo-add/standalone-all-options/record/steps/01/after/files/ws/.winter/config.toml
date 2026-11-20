@@ -1,0 +1,12 @@
+# repositories
+[[project_repository]]
+url = "https://fixture.invalid/api.git"
+
+[[standalone_repository]]
+url = "git@fixture.invalid:tools/x.git"
+main_branch = "dev"
+path = "tools/x"
+prefix = "px"
+ref = "v1"
+git_excludes = ["a", "b"]
+cmd = ["make"]

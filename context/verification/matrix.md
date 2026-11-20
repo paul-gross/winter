@@ -131,6 +131,31 @@ on. A binary left waiting ends when the shell that holds descriptor 3 ends, sinc
 **Success.** Each case ends as stated, and `git status` of the scratch copy shows only `notice`: git does not list a
 pipe.
 
+### `workspace:manual-repo-add`
+
+Exercises `repo add` through the built binary. Use it when changing addition's checks, block layout, or command wiring.
+Component and scenario tests cover the same contract automatically.
+
+**Setup.** Build with `cargo build --workspace --locked`, then set `binary` to the absolute path of the resulting
+`target/debug/winter-workspace`. Create a fresh temporary directory outside any real workspace; verify that no ancestor
+holds `.winter/config.toml`. Work only in a new `workspace/` beneath it, with a `.winter/config.toml` made for this run.
+Keep evidence in a sibling `evidence/` directory. Set `OTEL_SDK_DISABLED=true` for every invocation.
+
+1. **Project add.** The shared file holds a comment line and one `[[project_repository]]`. Save a `find` listing of the
+   workspace. Run `"$binary" repo add https://fixture.invalid/web.git --json`. Expect exit 0, the document
+   `{"added": true, "kind": "project", "url": ...}` on stdout, and empty stderr. The file gains one block and keeps the
+   comment; a second `find` listing differs only in that file: no `projects/` entry, no lock or state file.
+2. **Local standalone.** Run
+   `repo add git@fixture.invalid:tools/x.git --standalone --path tools/x --git-exclude a --git-exclude b --local`. Expect
+   exit 0 and a created `.winter/config.local.toml`; `cmp` shows the shared file unchanged. `repo list --json` then
+   lists both entries.
+3. **Refusals preserve bytes.** Run a duplicate URL, `--standalone --pinned`, and, in a fresh shared file holding an
+   inline `project_repository = [{ ... }]`, a plain add. Each exits 1 with zero stdout bytes, and `cmp` shows every
+   configuration file unchanged.
+
+**Success.** The exits and streams are as stated, the before/after comparisons are kept as evidence, and nothing runs
+against a real workspace.
+
 ### `workspace:manual-repo-remove`
 
 Exercises `repo remove` against inline repository arrays and existing checkouts. Use it when changing removal's text

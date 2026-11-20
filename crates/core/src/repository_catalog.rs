@@ -1,9 +1,10 @@
-//! The repository catalog of a workspace: the removal of one repository block from a configuration file, and
-//! the list of the repositories a workspace holds.
+//! The repository catalog of a workspace: the addition and the removal of one repository block in a
+//! configuration file, and the list of the repositories a workspace holds.
 
 use std::path::{Path, PathBuf};
 
-use crate::config_edit::{self, BlockRemoval, CatalogError, RepositoryKind};
+pub(crate) use crate::config_edit::NewBlock;
+use crate::config_edit::{self, BlockRemoval, CatalogError, RepositoryKind, StandaloneOption};
 use crate::config_load;
 use crate::diagnostics::{self, Diagnostics};
 use crate::drift;
@@ -200,6 +201,267 @@ pub(crate) fn remove(
         .into()),
         Err(Unedited::Unwritten(cause)) => Err(ConfigError::FileWrite { path: file, cause }.into()),
     }
+}
+
+/// The repository an addition wrote to a configuration file.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Added {
+    pub kind: RepositoryKind,
+    pub url: String,
+}
+
+/// Why an addition did not happen.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AddError {
+    #[error(transparent)]
+    Catalog(#[from] CatalogError),
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+    #[error(transparent)]
+    Internal(#[from] InternalError),
+}
+
+/// The edited file does not exist and is the shared one.
+#[derive(Debug, thiserror::Error)]
+#[error("the configuration file {} does not exist", .path.display())]
+struct SharedFileMissing {
+    path: PathBuf,
+}
+
+/// Adds the repository `request` to a configuration file of the workspace of `start`: the machine-local file
+/// when `local` is set, else the shared one.
+///
+/// The workspace is loaded first, so a configuration the load refuses ends the addition with both files as
+/// they were. Then the checks run in order: the shape of the URL, the options that do not fit the kind, the
+/// `--path` rule, and a declared repository of the kind with the URL or with the name, the URL test first of
+/// each entry. Then the one file is replaced through the writer with its text and the block appended; only
+/// that file is read for the edit, and it is replaced once. The local file is created when absent. The shared
+/// file must exist.
+pub(crate) fn add(
+    files: &dyn ReadFiles,
+    writer: &dyn WriteFiles,
+    start: &Path,
+    request: &NewBlock<'_>,
+    local: bool,
+) -> Result<Added, AddError> {
+    let workspace = config_load::load(files, start)?;
+    if !url_shape_accepted(request.url) {
+        return Err(CatalogError::InvalidUrl {
+            url: request.url.to_owned(),
+        }
+        .into());
+    }
+    if request.kind == RepositoryKind::Standalone {
+        if request.pinned {
+            return Err(CatalogError::PinnedStandalone.into());
+        }
+    } else if let Some(option) = [
+        (request.path, StandaloneOption::Path),
+        (request.prefix, StandaloneOption::Prefix),
+        (request.r#ref, StandaloneOption::Ref),
+    ]
+    .into_iter()
+    .find_map(|(given, option)| given.map(|_| option))
+    {
+        return Err(CatalogError::StandaloneOnly { option }.into());
+    }
+    if let Some(path) = request.path
+        && !path_is_safe(path)
+    {
+        return Err(CatalogError::UnsafePath {
+            path: path.to_owned(),
+        }
+        .into());
+    }
+    let name = match request.name {
+        Some(name) if !name.is_empty() => name,
+        _ => config_edit::name_from_url(request.url),
+    };
+    let existing: Vec<&crate::config_model::RepositoryCommon> = match request.kind {
+        RepositoryKind::Project => workspace
+            .config
+            .project_repositories
+            .iter()
+            .map(|entry| &entry.common)
+            .collect(),
+        RepositoryKind::Standalone => workspace
+            .config
+            .standalone_repositories
+            .iter()
+            .map(|entry| &entry.common)
+            .collect(),
+    };
+    for entry in existing {
+        if entry.url.as_deref() == Some(request.url) {
+            return Err(CatalogError::DuplicateUrl {
+                kind: request.kind,
+                url: request.url.to_owned(),
+            }
+            .into());
+        }
+        if entry.name == name {
+            return Err(CatalogError::DuplicateName {
+                kind: request.kind,
+                name: name.to_owned(),
+            }
+            .into());
+        }
+    }
+
+    let file = workspace.root.join(if local {
+        LOCAL_CONFIG_FILE
+    } else {
+        CONFIG_FILE
+    });
+    write_block(writer, &file, request, local)?;
+    Ok(Added {
+        kind: request.kind,
+        url: request.url.to_owned(),
+    })
+}
+
+/// How the one update of an addition ended, when it ran.
+enum Appended {
+    Done,
+    Missing,
+    Invalid(TomlParseError),
+    NotArrayOfTables,
+}
+
+/// Replaces `file` with its text and the block of `request` appended.
+fn write_block(
+    writer: &dyn WriteFiles,
+    file: &Path,
+    request: &NewBlock<'_>,
+    local: bool,
+) -> Result<(), AddError> {
+    let mut ended = Appended::Done;
+    let updated = writer.update(file, &mut |current| {
+        let text = match current {
+            None if local => "",
+            None => {
+                ended = Appended::Missing;
+                return None;
+            }
+            Some(bytes) => {
+                if let Err(error) = toml::from_slice::<toml::Table>(bytes) {
+                    ended = Appended::Invalid(TomlParseError::from(error));
+                    return None;
+                }
+                let Ok(text) = std::str::from_utf8(bytes) else {
+                    return None;
+                };
+                text
+            }
+        };
+        match config_edit::append_repository_block(text, request) {
+            Ok(edited) => Some(edited.into_bytes()),
+            Err(config_edit::NotArrayOfTables) => {
+                ended = Appended::NotArrayOfTables;
+                None
+            }
+        }
+    });
+    let write_failed = |cause| ConfigError::FileWrite {
+        path: file.to_path_buf(),
+        cause,
+    };
+    updated.map_err(write_failed)?;
+    match ended {
+        Appended::Done => Ok(()),
+        Appended::Missing => Err(InternalError::unexpected(SharedFileMissing {
+            path: file.to_path_buf(),
+        })
+        .into()),
+        Appended::Invalid(error) => Err(ConfigError::FileRead {
+            path: file.to_path_buf(),
+            cause: FileCause::Toml(error),
+        }
+        .into()),
+        Appended::NotArrayOfTables => Err(CatalogError::NotArrayOfTables {
+            kind: request.kind,
+            path: file.to_path_buf(),
+        }
+        .into()),
+    }
+}
+
+/// A character of a word, as Python's `\w`: a letter or digit of any script, or `_`.
+fn is_word(c: char) -> bool {
+    c == '_' || c.is_alphanumeric()
+}
+
+/// Whether `url` is a git URL of the accepted shapes: `(http|https|ssh|git)://H[:D][/P][.git][/]` and
+/// `H@H:P[.git]`, the match ending at the end of the text or before one final newline.
+fn url_shape_accepted(url: &str) -> bool {
+    let body = url.strip_suffix('\n').unwrap_or(url);
+    scheme_form(body) || scp_form(body)
+}
+
+/// A host: one or more word characters, `.`, `+`, or `-`.
+fn is_host(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .chars()
+            .all(|c| is_word(c) || matches!(c, '.' | '+' | '-'))
+}
+
+/// A path of the scp form: one or more word characters, `.`, `/`, `+`, `~`, or `-`.
+fn is_scp_path(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .chars()
+            .all(|c| is_word(c) || matches!(c, '.' | '/' | '+' | '~' | '-'))
+}
+
+fn scheme_form(body: &str) -> bool {
+    let Some(rest) = ["http://", "https://", "ssh://", "git://"]
+        .iter()
+        .find_map(|scheme| body.strip_prefix(scheme))
+    else {
+        return false;
+    };
+    // After `H[:D][/P]` come an optional `.git` and an optional `/`: try each way the tail can be present.
+    let without_slash = rest.strip_suffix('/');
+    [Some(rest), without_slash]
+        .into_iter()
+        .flatten()
+        .flat_map(|text| [Some(text), text.strip_suffix(".git")])
+        .flatten()
+        .any(host_port_path)
+}
+
+/// `H[:D][/P]` with the characters of a host, decimal digits, and the characters of a path.
+fn host_port_path(text: &str) -> bool {
+    let (authority, path) = match text.split_once('/') {
+        Some((authority, path)) => (authority, Some(path)),
+        None => (text, None),
+    };
+    let host = match authority.split_once(':') {
+        Some((host, port)) => {
+            if port.is_empty() || !port.chars().all(char::is_numeric) {
+                return false;
+            }
+            host
+        }
+        None => authority,
+    };
+    is_host(host) && path.is_none_or(is_scp_path)
+}
+
+fn scp_form(body: &str) -> bool {
+    let Some((user, rest)) = body.split_once('@') else {
+        return false;
+    };
+    let Some((host, path)) = rest.split_once(':') else {
+        return false;
+    };
+    is_host(user) && is_host(host) && is_scp_path(path)
+}
+
+/// Whether a `--path` value is relative and has no `..` component.
+fn path_is_safe(path: &str) -> bool {
+    !path.starts_with('/') && !path.split('/').any(|component| component == "..")
 }
 
 /// The repository kind a type word of a target names.
@@ -1264,6 +1526,273 @@ name = \"web\"
                 "{listing:?}"
             );
             assert_eq!(written, "");
+        }
+    }
+
+    mod addition {
+        use super::*;
+        use crate::config_edit::{NewBlock, StandaloneOption};
+
+        fn request(url: &str) -> NewBlock<'_> {
+            NewBlock {
+                kind: RepositoryKind::Project,
+                name: None,
+                url,
+                main_branch: None,
+                pinned: false,
+                path: None,
+                prefix: None,
+                r#ref: None,
+                git_excludes: &[],
+                cmd: &[],
+            }
+        }
+
+        fn add_in(files: &Stored, block: &NewBlock<'_>, local: bool) -> Result<Added, AddError> {
+            add(files, files, Path::new("/ws/alpha"), block, local)
+        }
+
+        fn catalog(ended: Result<Added, AddError>) -> CatalogError {
+            match ended {
+                Err(AddError::Catalog(error)) => error,
+                other => panic!("expected a catalog error, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn the_url_shape_accepts_the_spec_forms() {
+            for url in [
+                "https://h.invalid/a/b.git",
+                "http://h.invalid",
+                "ssh://h.invalid:22/a",
+                "git://h.invalid/a.git/",
+                "https://h.invalid:8080",
+                "https://h.invalid:8080.git",
+                "git@h.invalid:a/b.git",
+                "a@b:c",
+                "https://h\u{e9}st.invalid/a",
+                "https://h.invalid/a.git\n",
+                "https://h.invalid/a/",
+            ] {
+                assert!(url_shape_accepted(url), "{url:?}");
+            }
+        }
+
+        #[test]
+        fn the_url_shape_refuses_everything_else() {
+            for url in [
+                "",
+                "ssh://user@h.invalid/path",
+                "https://h.invalid/a b",
+                "https://h.invalid/a\n\n",
+                "ftp://h.invalid/a",
+                "https://",
+                "https://h.invalid:/a",
+                "https://h.invalid:x/a",
+                "h.invalid:a",
+                "a@b:",
+                " https://h.invalid/a",
+            ] {
+                assert!(!url_shape_accepted(url), "{url:?}");
+            }
+        }
+
+        #[test]
+        fn the_path_rule_refuses_absolute_and_dot_dot_components() {
+            for path in ["/x", "a/../b", "a/..", ".."] {
+                assert!(!path_is_safe(path), "{path:?}");
+            }
+            for path in ["", "..a", "a..b/c", "a/b", "./a"] {
+                assert!(path_is_safe(path), "{path:?}");
+            }
+        }
+
+        #[test]
+        fn a_project_is_appended_to_the_shared_file_only() {
+            let files = workspace();
+
+            let added = add_in(&files, &request("https://h.invalid/new.git"), false);
+
+            assert_eq!(
+                added.expect("added"),
+                Added {
+                    kind: RepositoryKind::Project,
+                    url: "https://h.invalid/new.git".to_owned()
+                }
+            );
+            assert!(files.text(SHARED).expect("file").contains("new.git"));
+            assert_eq!(files.text(LOCAL).as_deref(), Some(TWO_BLOCKS));
+        }
+
+        #[test]
+        fn the_checks_run_in_order() {
+            let files = workspace();
+            let mut block = request("nope");
+            assert!(matches!(
+                catalog(add_in(&files, &block, false)),
+                CatalogError::InvalidUrl { .. }
+            ));
+
+            block = request("https://h.invalid/new.git");
+            block.kind = RepositoryKind::Standalone;
+            block.pinned = true;
+            assert!(matches!(
+                catalog(add_in(&files, &block, false)),
+                CatalogError::PinnedStandalone
+            ));
+
+            let mut block = request("https://h.invalid/new.git");
+            block.path = Some("/x");
+            block.r#ref = Some("r");
+            assert!(matches!(
+                catalog(add_in(&files, &block, false)),
+                CatalogError::StandaloneOnly {
+                    option: StandaloneOption::Path
+                }
+            ));
+            block.path = None;
+            assert!(matches!(
+                catalog(add_in(&files, &block, false)),
+                CatalogError::StandaloneOnly {
+                    option: StandaloneOption::Ref
+                }
+            ));
+
+            let mut block = request("https://h.invalid/new.git");
+            block.kind = RepositoryKind::Standalone;
+            block.path = Some("../x");
+            assert!(matches!(
+                catalog(add_in(&files, &block, false)),
+                CatalogError::UnsafePath { .. }
+            ));
+        }
+
+        #[test]
+        fn a_declared_name_is_refused_and_the_url_test_comes_first() {
+            let files = Stored::default()
+                .with(
+                    SHARED,
+                    "[[project_repository]]\nurl = \"https://h.invalid/api.git\"\n",
+                )
+                .with(LOCAL, "");
+
+            let by_name = add_in(&files, &request("https://other.invalid/api"), false);
+            let by_url = add_in(&files, &request("https://h.invalid/api.git"), false);
+            let named = NewBlock {
+                name: Some("api"),
+                ..request("https://h.invalid/api.git")
+            };
+            let both = add_in(&files, &named, false);
+            let other_kind = NewBlock {
+                kind: RepositoryKind::Standalone,
+                ..request("https://h.invalid/api.git")
+            };
+
+            assert!(matches!(
+                catalog(by_name),
+                CatalogError::DuplicateName { .. }
+            ));
+            assert!(matches!(catalog(by_url), CatalogError::DuplicateUrl { .. }));
+            assert!(matches!(catalog(both), CatalogError::DuplicateUrl { .. }));
+            assert!(add_in(&files, &other_kind, false).is_ok());
+        }
+
+        #[test]
+        fn an_empty_name_falls_back_to_the_derived_one_for_the_duplicate_test() {
+            let files = workspace();
+            let block = NewBlock {
+                name: Some(""),
+                ..request("https://h.invalid/api")
+            };
+
+            assert!(matches!(
+                catalog(add_in(&files, &block, false)),
+                CatalogError::DuplicateName { name, .. } if name == "api"
+            ));
+        }
+
+        #[test]
+        fn the_local_file_is_created_when_absent_and_the_shared_one_must_exist() {
+            let files = Stored::default().with(SHARED, "");
+            assert!(add_in(&files, &request("https://h.invalid/a"), true).is_ok());
+            assert!(
+                files
+                    .text(LOCAL)
+                    .expect("created")
+                    .contains("[[project_repository]]")
+            );
+            assert_eq!(files.text(SHARED).as_deref(), Some(""));
+
+            let held = Stored::default().with(SHARED, "");
+            let vanished = Held {
+                content: RefCell::new(Vec::new()),
+                replacements: Cell::new(0),
+            };
+            struct Gone(Held);
+            impl WriteFiles for Gone {
+                fn update(&self, _: &Path, edit: &mut Edit<'_>) -> std::io::Result<bool> {
+                    Ok(edit(None).is_some_and(|_| {
+                        self.0.replacements.set(1);
+                        true
+                    }))
+                }
+            }
+            let gone = Gone(vanished);
+
+            let ended = add(
+                &held,
+                &gone,
+                Path::new("/ws/alpha"),
+                &request("https://h.invalid/a"),
+                false,
+            );
+
+            assert!(
+                matches!(
+                    &ended,
+                    Err(AddError::Internal(InternalError::Unexpected { .. }))
+                ),
+                "{ended:?}"
+            );
+            assert_eq!(gone.0.replacements.get(), 0);
+        }
+
+        #[test]
+        fn a_writer_that_fails_is_a_file_write_error_naming_the_file() {
+            let files = workspace();
+            let writer = Failing(std::io::ErrorKind::PermissionDenied);
+
+            let ended = add(
+                &files,
+                &writer,
+                Path::new("/ws/alpha"),
+                &request("https://h.invalid/a"),
+                true,
+            );
+
+            assert!(
+                matches!(&ended, Err(AddError::Config(ConfigError::FileWrite { path, .. }))
+                    if path == Path::new(LOCAL)),
+                "{ended:?}"
+            );
+        }
+
+        #[test]
+        fn an_inline_array_is_refused_with_the_file_unchanged() {
+            let files = Stored::default()
+                .with(SHARED, "project_repository = []\n")
+                .with(LOCAL, "");
+
+            let ended = add_in(&files, &request("https://h.invalid/a"), false);
+
+            assert!(matches!(
+                catalog(ended),
+                CatalogError::NotArrayOfTables { .. }
+            ));
+            assert_eq!(
+                files.text(SHARED).as_deref(),
+                Some("project_repository = []\n")
+            );
         }
     }
 }

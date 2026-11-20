@@ -1,0 +1,13 @@
+summary = "Adding a project by URL appends one block to the shared file's array and keeps its comment."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "https://fixture.invalid/web.git", "--json"]
+stdout = "json"
+
+[[compare.file]]
+path = "ws/.winter/*.toml"
+mode = "toml"
+reason = "decision:toml-parity"

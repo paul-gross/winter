@@ -1,0 +1,13 @@
+summary = "An empty --name is written as an empty name and the name falls back to the one the URL gives for duplicates."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "https://fixture.invalid/web.git", "--name", "", "--json"]
+stdout = "json"
+
+[[compare.file]]
+path = "ws/.winter/*.toml"
+mode = "toml"
+reason = "decision:toml-parity"

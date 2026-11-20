@@ -1,0 +1,13 @@
+summary = "A URL declared as a project may be added once as a standalone."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "https://fixture.invalid/api.git", "--standalone", "--json"]
+stdout = "json"
+
+[[compare.file]]
+path = "ws/.winter/*.toml"
+mode = "toml"
+reason = "decision:toml-parity"
