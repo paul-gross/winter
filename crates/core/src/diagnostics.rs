@@ -1,8 +1,9 @@
-//! Writing a log record to the stderr handle.
+//! Writing to the stderr handle: a log record, and a notice that is none.
 //!
 //! The one owner of what the library writes there. A command, a domain module, and the runtime report a
-//! condition through [`record`] and never format a record themselves. A failed write is dropped: stderr never
-//! changes how an invocation ends.
+//! condition through [`record`] and never format a record themselves; a line that is no log record, such as a
+//! warning, goes through [`notice`]. A domain entry that reports is handed a [`Diagnostics`] by its command
+//! file. A failed write is dropped: stderr never changes how an invocation ends.
 
 use std::io::Write;
 
@@ -41,6 +42,32 @@ pub(crate) fn record(err: &mut dyn Write, log: Log, record: &Record<'_>) {
     };
     // What stderr refuses is lost and nothing else changes.
     let _ = err.write_all(line.as_bytes());
+}
+
+/// Writes `line` and one newline to `err`: a line that is no log record, written whatever the threshold and
+/// the format of the invocation's log.
+///
+/// The line and its newline are handed to `err` whole, in one `write_all`, and a write that fails is ignored.
+pub(crate) fn notice(err: &mut dyn Write, line: &str) {
+    let mut whole = String::with_capacity(line.len() + 1);
+    whole.push_str(line);
+    whole.push('\n');
+    // What stderr refuses is lost and nothing else changes.
+    let _ = err.write_all(whole.as_bytes());
+}
+
+/// What a domain entry that reports borrows from its command file: the stderr handle and the log of the
+/// invocation.
+///
+/// The command file builds it from its context and hands it to its one call. It is no port: nothing else
+/// carries it.
+pub(crate) struct Diagnostics<'a> {
+    pub err: &'a mut dyn Write,
+    #[allow(
+        dead_code,
+        reason = "the reporting contract: the log stays whether or not a present entry writes a record"
+    )]
+    pub log: Log,
 }
 
 /// The name a switched record carries for its level.
@@ -233,6 +260,40 @@ mod tests {
                 panic!("{log:?}: expected one write, got {}", err.writes.len());
             };
             assert!(whole.ends_with(b"the message\n"), "{log:?}: {whole:?}");
+        }
+    }
+
+    #[test]
+    fn a_notice_is_its_line_and_one_newline_in_one_write() {
+        let mut err = Counting::default();
+
+        notice(&mut err, "warning: something drifted");
+        notice(&mut err, "");
+
+        assert_eq!(
+            err.writes,
+            [b"warning: something drifted\n".to_vec(), b"\n".to_vec()]
+        );
+    }
+
+    #[test]
+    fn a_notice_on_a_handle_whose_writes_fail_is_ignored() {
+        notice(&mut Failing, "warning: something drifted");
+    }
+
+    #[test]
+    fn a_notice_through_the_borrow_is_written_whatever_the_log_asks_for() {
+        for log in [
+            Log::DEFAULT,
+            switched(Level::Debug),
+            switched(Level::Critical),
+        ] {
+            let mut err = Vec::new();
+            let diagnostics = Diagnostics { err: &mut err, log };
+
+            notice(diagnostics.err, "warning: something drifted");
+
+            assert_eq!(err, b"warning: something drifted\n", "{log:?}");
         }
     }
 

@@ -1,12 +1,131 @@
-//! The repository catalog of a workspace: the removal of one repository block from a configuration file.
+//! The repository catalog of a workspace: the removal of one repository block from a configuration file, and
+//! the list of the repositories a workspace holds.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config_edit::{self, BlockRemoval, CatalogError, RepositoryKind};
 use crate::config_load;
+use crate::diagnostics::{self, Diagnostics};
+use crate::drift;
 use crate::files::{ReadFiles, WriteFiles};
-use crate::termination::{ConfigError, FileCause, TomlParseError};
-use crate::workspace_files::{CONFIG_FILE, LOCAL_CONFIG_FILE};
+use crate::termination::{ConfigError, FileCause, InternalError, TomlParseError};
+use crate::workspace_files::{CONFIG_FILE, LOCAL_CONFIG_FILE, PROJECTS_DIR};
+
+/// The directory of the implicit repository `product`, relative to a workspace root.
+const PRODUCT_DIR: &str = "product";
+
+/// The directory of the implicit repository `harness`, relative to a workspace root.
+const HARNESS_DIR: &str = "context/harness";
+
+/// One repository of a workspace, as the list gives it. Every location is absolute, under the workspace root
+/// unless a name or a path of the configuration leads out of it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Listed {
+    /// An implicit repository, `product` or `harness`: one the workspace holds without declaring it.
+    Singleton { name: &'static str, path: PathBuf },
+    Standalone {
+        name: String,
+        url: Option<String>,
+        path: PathBuf,
+    },
+    Project {
+        name: String,
+        url: Option<String>,
+        main_path: PathBuf,
+        pinned: bool,
+    },
+}
+
+/// The list of the repositories of a workspace, with the root their locations are under.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Listing {
+    pub root: PathBuf,
+    /// The implicit repositories, then the standalone ones, then the projects.
+    pub entries: Vec<Listed>,
+}
+
+/// Why a list was not made.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ListError {
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+    #[error(transparent)]
+    Internal(#[from] InternalError),
+}
+
+/// The repositories of the workspace of `start`, and its root.
+///
+/// The workspace is loaded first. Then come the implicit repositories: `product` when `<root>/product` is a
+/// directory, and `harness` when `<root>/context/harness/.git` exists, each with symbolic links followed. Then
+/// the standalone repositories, and then the project repositories, each in the order the load gives them: two
+/// project entries of one name are both listed.
+///
+/// A standalone repository is at its `path` under the root, or at its name when it declares none, and a
+/// project at its name under `<root>/projects`. A location is joined and never resolved: a repeated `/`, a `.`
+/// part, and a trailing `/` are dropped, a `..` part is kept, and no symbolic link is followed.
+///
+/// When the declared projects and the directories under `<root>/projects` disagree, the notice of that is
+/// written through `diagnostics` before the list is returned. Nothing else is written, and no file is changed.
+pub(crate) fn list(
+    files: &dyn ReadFiles,
+    start: &Path,
+    diagnostics: &mut Diagnostics<'_>,
+) -> Result<Listing, ListError> {
+    let workspace = config_load::load(files, start)?;
+    let root = workspace.root;
+    let config = workspace.config;
+
+    let mut listed = Vec::new();
+    if files.is_dir(&root.join(PRODUCT_DIR)) {
+        listed.push(Listed::Singleton {
+            name: "product",
+            path: location(&root, Path::new(PRODUCT_DIR)),
+        });
+    }
+    if files.exists(&root.join(HARNESS_DIR).join(".git")) {
+        listed.push(Listed::Singleton {
+            name: "harness",
+            path: location(&root, Path::new(HARNESS_DIR)),
+        });
+    }
+
+    if let Some(line) =
+        drift::notice_line(&drift::detect(files, &root, &config.project_repositories)?)
+    {
+        diagnostics::notice(diagnostics.err, &line);
+    }
+
+    for standalone in config.standalone_repositories {
+        let relative = if standalone.path.is_empty() {
+            &standalone.common.name
+        } else {
+            &standalone.path
+        };
+        listed.push(Listed::Standalone {
+            path: location(&root, Path::new(relative)),
+            name: standalone.common.name,
+            url: standalone.common.url,
+        });
+    }
+    for project in config.project_repositories {
+        listed.push(Listed::Project {
+            main_path: location(&root, &Path::new(PROJECTS_DIR).join(&project.common.name)),
+            name: project.common.name,
+            url: project.common.url,
+            pinned: project.pinned,
+        });
+    }
+    Ok(Listing {
+        root,
+        entries: listed,
+    })
+}
+
+/// `relative` under `root`, as a join of the two and nothing more: a repeated `/`, a `.` part, and a trailing
+/// `/` are dropped, a `..` part is kept, and an absolute `relative` replaces the root.
+fn location(root: &Path, relative: &Path) -> PathBuf {
+    root.join(relative).components().collect()
+}
 
 /// The repository a removal took out of a configuration file: the two parts of its target.
 #[derive(Debug, PartialEq, Eq)]
@@ -179,7 +298,6 @@ mod tests {
 
     use super::*;
     use crate::files::{Edit, MemoryFiles};
-
     #[test]
     fn only_the_two_types_are_repository_kinds() {
         assert_eq!(repository_kind("project"), Some(RepositoryKind::Project));
@@ -414,6 +532,18 @@ name = \"web\"
 
         fn is_file(&self, path: &Path) -> bool {
             self.0.borrow().contains_key(path)
+        }
+
+        fn exists(&self, path: &Path) -> bool {
+            self.is_file(path)
+        }
+
+        fn is_dir(&self, _path: &Path) -> bool {
+            false
+        }
+
+        fn entries(&self, _path: &Path) -> std::io::Result<Vec<std::ffi::OsString>> {
+            Err(std::io::ErrorKind::NotADirectory.into())
         }
     }
 
@@ -712,5 +842,383 @@ name = \"web\"
             "{ended:?}"
         );
         assert_eq!(files.text(SHARED).as_deref(), Some(""));
+    }
+
+    /// The list of the repositories of a workspace.
+    mod listing {
+        use super::super::*;
+        use crate::files::MemoryFiles;
+        use crate::logging::{Level, Log};
+
+        const SHARED: &str = "/ws/.winter/config.toml";
+        const LOCAL: &str = "/ws/.winter/config.local.toml";
+
+        /// What `list` answers from `start`, and what it wrote through its diagnostics under `log`.
+        fn listed_under(
+            files: &MemoryFiles,
+            start: &str,
+            log: Log,
+        ) -> (Result<Listing, ListError>, String) {
+            let mut err = Vec::new();
+            let mut diagnostics = Diagnostics { err: &mut err, log };
+            let listing = list(files, Path::new(start), &mut diagnostics);
+            (listing, String::from_utf8(err).expect("UTF-8"))
+        }
+
+        /// The entries `list` answers for the workspace `/ws`, which must have written nothing.
+        fn entries(files: &MemoryFiles) -> Vec<Listed> {
+            let (listing, written) = listed_under(files, "/ws", Log::DEFAULT);
+            assert_eq!(written, "");
+            let listing = listing.expect("a list");
+            assert_eq!(listing.root, Path::new("/ws"));
+            listing.entries
+        }
+
+        /// The files of the workspace `/ws` with the two configuration texts and a directory for each of
+        /// `projects`.
+        fn workspace(shared: &str, local: &str, projects: &[&str]) -> MemoryFiles {
+            let files = MemoryFiles::default()
+                .with(SHARED, shared.as_bytes())
+                .with(LOCAL, local.as_bytes());
+            projects.iter().fold(files, |files, name| {
+                files.dir(&format!("/ws/projects/{name}"))
+            })
+        }
+
+        fn project(name: &str, url: Option<&str>, pinned: bool) -> Listed {
+            Listed::Project {
+                name: name.to_owned(),
+                url: url.map(str::to_owned),
+                main_path: format!("/ws/projects/{name}").into(),
+                pinned,
+            }
+        }
+
+        fn standalone(name: &str, url: Option<&str>, path: &str) -> Listed {
+            Listed::Standalone {
+                name: name.to_owned(),
+                url: url.map(str::to_owned),
+                path: path.into(),
+            }
+        }
+
+        #[test]
+        fn a_workspace_that_declares_and_holds_nothing_lists_nothing() {
+            assert_eq!(entries(&workspace("", "", &[])), []);
+        }
+
+        #[test]
+        fn the_projects_of_the_shared_file_come_before_those_of_the_local_file_each_in_file_order()
+        {
+            let files = workspace(
+                "[[project_repository]]\nname = \"web\"\n\n[[project_repository]]\nname = \"api\"\n",
+                "[[project_repository]]\nname = \"mine\"\n",
+                &["api", "mine", "web"],
+            );
+
+            assert_eq!(
+                entries(&files),
+                [
+                    project("web", None, false),
+                    project("api", None, false),
+                    project("mine", None, false),
+                ]
+            );
+        }
+
+        #[test]
+        fn an_entry_with_neither_a_name_nor_a_url_is_absent() {
+            let files = workspace(
+                "[[project_repository]]\npinned = true\n\n[[project_repository]]\nname = \"api\"\n\n\
+                 [[standalone_repository]]\npath = \"tools\"\n",
+                "",
+                &["api"],
+            );
+
+            assert_eq!(entries(&files), [project("api", None, false)]);
+        }
+
+        #[test]
+        fn an_empty_name_with_a_url_is_listed_by_the_name_of_the_url() {
+            let files = workspace(
+                "[[project_repository]]\nname = \"\"\nurl = \"https://fixture.invalid/api.git\"\n",
+                "",
+                &["api"],
+            );
+
+            assert_eq!(
+                entries(&files),
+                [project(
+                    "api",
+                    Some("https://fixture.invalid/api.git"),
+                    false
+                )]
+            );
+        }
+
+        #[test]
+        fn two_projects_of_one_resolved_name_are_both_listed() {
+            let files = workspace(
+                "[[project_repository]]\nname = \"api\"\n\n\
+                 [[project_repository]]\nurl = \"https://fixture.invalid/api.git\"\n",
+                "",
+                &["api"],
+            );
+
+            assert_eq!(
+                entries(&files),
+                [
+                    project("api", None, false),
+                    project("api", Some("https://fixture.invalid/api.git"), false),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_pinned_value_is_listed_as_the_load_coerces_it() {
+            let files = workspace(
+                "[[project_repository]]\nname = \"one\"\npinned = 1\n\n\
+                 [[project_repository]]\nname = \"zero\"\npinned = 0\n\n\
+                 [[project_repository]]\nname = \"yes\"\npinned = true\n",
+                "",
+                &["one", "yes", "zero"],
+            );
+
+            assert_eq!(
+                entries(&files),
+                [
+                    project("one", None, true),
+                    project("zero", None, false),
+                    project("yes", None, true),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_standalone_is_at_its_path_and_one_with_an_empty_path_at_its_name() {
+            let files = workspace(
+                "[[standalone_repository]]\nname = \"context\"\npath = \".winter/ext/context\"\n\
+                 url = \"https://fixture.invalid/ctx.git\"\n\n\
+                 [[standalone_repository]]\nname = \"tools\"\npath = \"\"\n\n\
+                 [[standalone_repository]]\nurl = \"https://fixture.invalid/kit.git\"\n",
+                "",
+                &[],
+            );
+
+            assert_eq!(
+                entries(&files),
+                [
+                    standalone(
+                        "context",
+                        Some("https://fixture.invalid/ctx.git"),
+                        "/ws/.winter/ext/context"
+                    ),
+                    standalone("tools", None, "/ws/tools"),
+                    standalone("kit", Some("https://fixture.invalid/kit.git"), "/ws/kit"),
+                ]
+            );
+        }
+
+        #[test]
+        fn the_implicit_repositories_come_first_then_the_standalones_then_the_projects() {
+            let files = workspace(
+                "[[project_repository]]\nname = \"api\"\n\n[[standalone_repository]]\nname = \"tools\"\n",
+                "",
+                &["api"],
+            )
+            .dir("/ws/product")
+            .dir("/ws/context/harness/.git");
+
+            assert_eq!(
+                entries(&files),
+                [
+                    Listed::Singleton {
+                        name: "product",
+                        path: "/ws/product".into()
+                    },
+                    Listed::Singleton {
+                        name: "harness",
+                        path: "/ws/context/harness".into()
+                    },
+                    standalone("tools", None, "/ws/tools"),
+                    project("api", None, false),
+                ]
+            );
+        }
+
+        #[test]
+        fn product_is_listed_for_a_directory_or_a_link_to_one_and_for_nothing_else() {
+            let singletons = |files: MemoryFiles| -> Vec<&'static str> {
+                entries(&files)
+                    .into_iter()
+                    .filter_map(|entry| match entry {
+                        Listed::Singleton { name, .. } => Some(name),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            let bare = || workspace("", "", &[]);
+
+            assert_eq!(singletons(bare().dir("/ws/product")), ["product"]);
+            assert_eq!(
+                singletons(bare().dir("/held").link("/ws/product", "/held")),
+                ["product"]
+            );
+            assert_eq!(singletons(bare().with("/ws/product", b"")), [] as [&str; 0]);
+            assert_eq!(
+                singletons(bare().link("/ws/product", "/gone")),
+                [] as [&str; 0]
+            );
+        }
+
+        #[test]
+        fn harness_is_listed_when_its_git_entry_exists_as_a_file_or_a_directory() {
+            let singletons = |files: MemoryFiles| -> Vec<&'static str> {
+                entries(&files)
+                    .into_iter()
+                    .filter_map(|entry| match entry {
+                        Listed::Singleton { name, .. } => Some(name),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            let bare = || workspace("", "", &[]);
+
+            assert_eq!(
+                singletons(bare().dir("/ws/context/harness/.git")),
+                ["harness"]
+            );
+            assert_eq!(
+                singletons(bare().with("/ws/context/harness/.git", b"gitdir: elsewhere\n")),
+                ["harness"]
+            );
+            assert_eq!(
+                singletons(bare().dir("/ws/context/harness")),
+                [] as [&str; 0]
+            );
+            assert_eq!(
+                singletons(bare().link("/ws/context/harness/.git", "/gone")),
+                [] as [&str; 0]
+            );
+        }
+
+        #[test]
+        fn a_location_is_joined_and_never_resolved() {
+            let root = Path::new("/ws");
+
+            for (relative, expected) in [
+                ("a//b", "/ws/a/b"),
+                ("./a/./b/", "/ws/a/b"),
+                ("a/../b", "/ws/a/../b"),
+                ("..", "/ws/.."),
+                ("x/", "/ws/x"),
+                ("/abs", "/abs"),
+            ] {
+                assert_eq!(
+                    location(root, Path::new(relative)),
+                    Path::new(expected),
+                    "{relative}"
+                );
+                assert_eq!(
+                    location(root, Path::new(relative)).as_os_str(),
+                    expected,
+                    "{relative}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_list_is_made_from_a_directory_below_the_root() {
+            let files = workspace("[[project_repository]]\nname = \"api\"\n", "", &["api"]);
+
+            let (listing, written) = listed_under(&files, "/ws/projects/api/src", Log::DEFAULT);
+
+            assert_eq!(
+                listing.expect("a list"),
+                Listing {
+                    root: "/ws".into(),
+                    entries: vec![project("api", None, false)],
+                }
+            );
+            assert_eq!(written, "");
+        }
+
+        #[test]
+        fn with_drift_the_notice_and_nothing_else_is_written_whatever_the_log_asks_for() {
+            let files = workspace(
+                "[[project_repository]]\nname = \"web\"\n\n[[project_repository]]\nname = \"api\"\n",
+                "",
+                &["old", ".hidden"],
+            );
+
+            for log in [
+                Log::DEFAULT,
+                Log {
+                    threshold: Level::Debug,
+                    switched: true,
+                },
+                Log {
+                    threshold: Level::Critical,
+                    switched: true,
+                },
+            ] {
+                let (listing, written) = listed_under(&files, "/ws", log);
+
+                assert_eq!(
+                    listing.expect("a list").entries,
+                    [project("web", None, false), project("api", None, false)],
+                    "{log:?}"
+                );
+                assert_eq!(
+                    written,
+                    "warning: Config and projects/ have drifted — missing from projects/: api, web; \
+                     undeclared in config: old\n",
+                    "{log:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn no_workspace_above_the_start_and_a_refused_configuration_are_the_load_s_errors() {
+            let (outside, written) =
+                listed_under(&workspace("", "", &[]), "/elsewhere", Log::DEFAULT);
+            assert!(
+                matches!(
+                    &outside,
+                    Err(ListError::Config(ConfigError::RootNotFound { start })) if start == Path::new("/elsewhere")
+                ),
+                "{outside:?}"
+            );
+            assert_eq!(written, "");
+
+            let refusing = workspace("project_repository = 1\n", "", &["old"]);
+            let (refused, written) = listed_under(&refusing, "/ws", Log::DEFAULT);
+            assert!(
+                matches!(
+                    &refused,
+                    Err(ListError::Config(ConfigError::RepositoriesNotArray { .. }))
+                ),
+                "{refused:?}"
+            );
+            assert_eq!(written, "");
+        }
+
+        #[test]
+        fn a_projects_directory_that_cannot_be_listed_is_an_internal_failure_with_nothing_written()
+        {
+            let files = workspace("", "", &[])
+                .failing_dir("/ws/projects", std::io::ErrorKind::PermissionDenied);
+
+            let (listing, written) = listed_under(&files, "/ws", Log::DEFAULT);
+
+            assert!(
+                matches!(
+                    &listing,
+                    Err(ListError::Internal(InternalError::Unexpected { .. }))
+                ),
+                "{listing:?}"
+            );
+            assert_eq!(written, "");
+        }
     }
 }

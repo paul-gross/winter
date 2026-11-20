@@ -53,6 +53,18 @@ mod tests {
         fn is_file(&self, _path: &Path) -> bool {
             true
         }
+
+        fn exists(&self, _path: &Path) -> bool {
+            true
+        }
+
+        fn is_dir(&self, _path: &Path) -> bool {
+            false
+        }
+
+        fn entries(&self, _path: &Path) -> std::io::Result<Vec<std::ffi::OsString>> {
+            Err(std::io::ErrorKind::NotADirectory.into())
+        }
     }
 
     #[test]

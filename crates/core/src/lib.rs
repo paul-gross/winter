@@ -15,6 +15,7 @@ mod diagnostics;
 #[cfg(test)]
 #[path = "../build/discover.rs"]
 mod discover;
+mod drift;
 mod env_index;
 mod files;
 mod groups;
