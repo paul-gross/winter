@@ -824,3 +824,146 @@ fn a_header_value_with_a_tab_and_a_byte_above_the_ascii_range_arrives_as_it_was_
     assert_eq!(header(request, "x-high"), ["caf\u{e9}"]);
     assert_eq!(header(request, "x-plain"), ["b"]);
 }
+
+/// A stand-in `git` that answers the commit count of a clean worktree and nothing else.
+const CLEAN_GIT: &str = "case \"$1\" in rev-list) printf '0\\t0\\n' ;; esac";
+/// A stand-in `git` that fails as git fails outside a repository.
+const FAILING_GIT: &str = "echo 'fatal: the stand-in fails' >&2\nexit 128";
+
+/// An isolated tree with a workspace of two projects, one environment holding a worktree of each, and a
+/// stand-in `git` that ends as `git_ending` says.
+fn probed_fixture(git_ending: &str) -> Fixture {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tree = TempTree::new().expect("an isolated tree");
+    let workspace = WorkspaceBuilder::new(&tree)
+        .config(
+            "[[project_repository]]\nname = \"api\"\n\n[[project_repository]]\nname = \"web\"\n",
+        )
+        .state("[env_index]\nalpha = 1\n")
+        .file("alpha/api/.git", b"gitdir: /nowhere\n")
+        .file("alpha/web/.git", b"gitdir: /nowhere\n")
+        .build()
+        .expect("a workspace");
+    let stub = tree.root().join("bin/git");
+    std::fs::write(&stub, format!("#!/bin/sh\n{git_ending}\n")).expect("the stand-in");
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).expect("a mode");
+    let trust_root = tree.root().join("tmp/trust-root.pem");
+    std::fs::write(&trust_root, TRUST_ROOT).expect("the certificate file of the tree");
+    let text = |path: PathBuf| {
+        path.to_str()
+            .expect("a path of plain characters")
+            .to_owned()
+    };
+    Fixture {
+        workspace: workspace.root.clone(),
+        trust_root: text(trust_root),
+        empty_store: String::new(),
+        tree,
+    }
+}
+
+fn export_of(collector: Collector) -> ReceivedExport {
+    let request = one_request(collector);
+    decode_export(&request.body).expect("a trace export")
+}
+
+fn attribute<'s>(span: &'s ReceivedSpan, key: &str) -> Option<&'s str> {
+    span.attributes
+        .iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.as_str())
+}
+
+#[test]
+fn a_status_listing_exports_one_git_status_span_per_probe_in_the_one_export() {
+    let fixture = probed_fixture(CLEAN_GIT);
+    let collector = collector(Answer::Ok);
+
+    let (ended, _) = fixture.traced(&collector.endpoint(), &["ws", "worktrees", "--status"], &[]);
+    let export = export_of(collector);
+
+    assert_eq!(ended.exit, Exit::Code(0), "{}", ended.stderr);
+    assert_eq!(export.spans.len(), 4, "{export:?}");
+    let command = export
+        .spans
+        .iter()
+        .find(|span| span.name == "winter ws worktrees")
+        .expect("the command span");
+    let children: Vec<&ReceivedSpan> = export
+        .spans
+        .iter()
+        .filter(|span| span.name == "git status")
+        .collect();
+    assert_eq!(children.len(), 3, "{export:?}");
+    let root_name = fixture
+        .workspace
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("a root name")
+        .to_owned();
+    let mut seen: Vec<Vec<(String, String)>> = Vec::new();
+    for child in &children {
+        assert_eq!(child.parent_span_id, command.span_id);
+        assert_eq!(child.trace_id, command.trace_id);
+        assert_ne!(
+            child.status.as_ref().map(|status| status.0),
+            Some(2),
+            "not failed"
+        );
+        seen.push(child.attributes.clone());
+    }
+    seen.sort();
+    let mut expected = vec![
+        pairs(&[("winter.repo", "api"), ("winter.env", "alpha")]),
+        pairs(&[("winter.repo", "web"), ("winter.env", "alpha")]),
+        pairs(&[("winter.repo", &root_name)]),
+    ];
+    expected.sort();
+    assert_eq!(seen, expected);
+}
+
+#[test]
+fn a_failing_worktree_probe_exports_its_span_failed_with_the_repo_error_type() {
+    let fixture = probed_fixture(FAILING_GIT);
+    let collector = collector(Answer::Ok);
+
+    let (ended, _) = fixture.traced(&collector.endpoint(), &["ws", "worktrees", "--status"], &[]);
+    let export = export_of(collector);
+
+    assert_ne!(ended.exit, Exit::Code(0));
+    let api = export
+        .spans
+        .iter()
+        .find(|span| attribute(span, "winter.repo") == Some("api"))
+        .expect("the span of the failing probe");
+    assert_eq!(api.name, "git status");
+    assert_eq!(attribute(api, "error.type"), Some("RepoError"));
+    let (code, message) = api.status.clone().expect("a status");
+    assert_eq!(code, 2, "ERROR");
+    assert_eq!(message, "");
+}
+
+#[test]
+fn without_status_or_without_tracing_no_operation_span_is_exported() {
+    let fixture = probed_fixture(CLEAN_GIT);
+    let collector = collector(Answer::Ok);
+    let (ended, _) = fixture.traced(&collector.endpoint(), &["ws", "worktrees"], &[]);
+    assert_eq!(ended.exit, Exit::Code(0), "{}", ended.stderr);
+    let export = export_of(collector);
+    assert_eq!(export.spans.len(), 1, "{export:?}");
+
+    let collector = collector_for_off();
+    let ended = fixture
+        .run(
+            &["ws", "worktrees", "--status"],
+            &[(ENDPOINT, &collector.endpoint())],
+        )
+        .0;
+    assert_eq!(ended.exit, Exit::Code(0), "{}", ended.stderr);
+    assert!(collector.requests().is_empty());
+}
+
+fn collector_for_off() -> Collector {
+    collector(Answer::Ok)
+}

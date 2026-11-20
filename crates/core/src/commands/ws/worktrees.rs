@@ -41,6 +41,7 @@ fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
     let listed = match locations::list(
         cx.files,
         cx.programs,
+        cx.tracer,
         &mut diagnostics,
         cx.cwd,
         matches.get_flag("status"),

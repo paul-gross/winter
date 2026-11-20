@@ -15,6 +15,7 @@ use crate::logging::Level;
 use crate::programs::RunPrograms;
 use crate::state_registry;
 use crate::termination::{ConfigError, InternalError, RepoError};
+use crate::trace::CommandTracer;
 use crate::workspace_files::location;
 
 /// What a location is.
@@ -85,6 +86,15 @@ impl From<probe::Failure> for ListError {
 /// The origin of the records this module writes.
 const ORIGIN: &str = "locations";
 
+/// The name of the operation span of one probe.
+const PROBE_SPAN: &str = "git status";
+/// The attribute that holds the resolved name of the repository a probe counts.
+const REPO_ATTRIBUTE: &str = "winter.repo";
+/// The attribute that holds the environment of a worktree probe.
+const ENV_ATTRIBUTE: &str = "winter.env";
+/// The `error.type` of a probe that ended in a [`RepoError`].
+const REPO_ERROR_TYPE: &str = "RepoError";
+
 /// The locations of the workspace of `start`: for each environment present, in order, a worktree for each
 /// project entry in merged order (pinned entries and entries of one name included); then a location for each
 /// standalone entry, at its `path` or else its name; then the workspace root, always.
@@ -100,9 +110,14 @@ const ORIGIN: &str = "locations";
 /// the first failure in project order then ends the listing: no later environment is probed. A standalone
 /// is not counted. The workspace is probed last, against the upstream of its branch, and a git call of that
 /// probe that fails is no failure and writes no record: the workspace then carries no count.
+///
+/// With `with_status`, each probe that runs is covered by a `git status` operation span of `tracer`, whether
+/// or not the probe makes a git call; a probe that ends in a [`RepoError`] marks its span failed. No span is
+/// opened without `with_status`.
 pub(crate) fn list(
     files: &dyn ReadFiles,
     programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
     diagnostics: &mut Diagnostics<'_>,
     start: &Path,
     with_status: bool,
@@ -120,6 +135,7 @@ pub(crate) fn list(
             let probed = probe_worktrees(
                 files,
                 programs,
+                tracer,
                 diagnostics,
                 &root,
                 env,
@@ -168,6 +184,11 @@ pub(crate) fn list(
         }
     }
     let workspace_counts = if with_status {
+        let base = root
+            .file_name()
+            .map(|base| base.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let _span = tracer.operation(PROBE_SPAN, &[(REPO_ATTRIBUTE, &base)]);
         Some(probe::workspace(files, programs, &root)?)
     } else {
         None
@@ -194,6 +215,7 @@ pub(crate) fn list(
 fn probe_worktrees<'p>(
     files: &dyn ReadFiles,
     programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
     diagnostics: &mut Diagnostics<'_>,
     root: &Path,
     env: &str,
@@ -204,7 +226,14 @@ fn probe_worktrees<'p>(
     for project in projects {
         let name = project.common.name.as_str();
         let path = location(root, &Path::new(env).join(name));
-        match probe::worktree(files, programs, &path, name, &project.common.main_branch) {
+        let mut span =
+            tracer.operation(PROBE_SPAN, &[(REPO_ATTRIBUTE, name), (ENV_ATTRIBUTE, env)]);
+        let probed = probe::worktree(files, programs, &path, name, &project.common.main_branch);
+        if matches!(probed, Err(probe::Failure::Repo(_))) {
+            span.failed(REPO_ERROR_TYPE);
+        }
+        drop(span);
+        match probed {
             Ok(counts) => {
                 counted.insert(name, counts);
             }
@@ -331,6 +360,7 @@ mod tests {
         let listed = list(
             files,
             programs,
+            &crate::trace::NoTrace,
             &mut diagnostics,
             Path::new("/ws"),
             with_status,

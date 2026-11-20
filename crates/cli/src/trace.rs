@@ -21,7 +21,9 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use opentelemetry::propagation::TextMapPropagator;
-use opentelemetry::trace::{Span as _, SpanKind, Status, Tracer as _, TracerProvider as _};
+use opentelemetry::trace::{
+    Span as _, SpanId, SpanKind, Status, TraceContextExt as _, Tracer as _, TracerProvider as _,
+};
 use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{Protocol, RetryPolicy, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
@@ -31,7 +33,7 @@ use opentelemetry_sdk::trace::{
     Sampler, SdkTracerProvider, Span, SpanData, SpanExporter, SpanLimits,
 };
 use winter_workspace_core::{
-    CommandTracer, ProcessEnv, TraceConfig, TraceLog, TraceSettings, span_name,
+    CommandTracer, OperationSpan, ProcessEnv, TraceConfig, TraceLog, TraceSettings, span_name,
 };
 
 /// The longest [`Tracer::finish`] waits for the export thread, from the start of that wait: the bound on what
@@ -267,6 +269,28 @@ fn take<T>(slot: &Mutex<Option<T>>) -> Option<T> {
 }
 
 impl<E: SpanExporter + 'static> CommandTracer for Tracer<E> {
+    /// Opens a child of the command span, recorded only when the command span is. The span is ended when the
+    /// handle drops, and is sent in the command span's one export.
+    fn operation(
+        &self,
+        name: &'static str,
+        attributes: &[(&'static str, &str)],
+    ) -> Box<dyn OperationSpan + '_> {
+        let Some((tracer, parent)) = self.operation_parent() else {
+            return Box::new(NotRecorded);
+        };
+        let span = tracer
+            .span_builder(name)
+            .with_kind(SpanKind::Internal)
+            .with_attributes(
+                attributes
+                    .iter()
+                    .map(|(key, value)| KeyValue::new(*key, (*value).to_owned())),
+            )
+            .start_with_context(&tracer, &parent);
+        Box::new(Operation { span })
+    }
+
     /// Builds the exporter and the provider and opens the command span, when tracing is on. A tracer that is
     /// unavailable keeps `log` for its record, and so does one whose exporter cannot be built, or whose
     /// building panics: the panic is caught here and leaves tracing unavailable, with its message as the cause.
@@ -304,6 +328,43 @@ impl<E: SpanExporter + 'static> CommandTracer for Tracer<E> {
     }
 }
 
+impl<E: SpanExporter + 'static> Tracer<E> {
+    /// The tracer and the context an operation span starts under, when the command span is open and
+    /// recording.
+    fn operation_parent(&self) -> Option<(opentelemetry_sdk::trace::SdkTracer, Context)> {
+        let state = self.state.borrow();
+        let State::Open { provider, span, .. } = &*state else {
+            return None;
+        };
+        if !span.is_recording() {
+            return None;
+        }
+        let context = Context::new().with_remote_span_context(span.span_context().clone());
+        Some((provider.tracer(SCOPE), context))
+    }
+}
+
+/// The operation span of a tracer whose command span is not open or not recording.
+struct NotRecorded;
+
+impl OperationSpan for NotRecorded {
+    fn failed(&mut self, _: &'static str) {}
+}
+
+/// An operation span of the binary's tracer: a child of the command span, ended when it drops. The span
+/// reaches the exporter, which holds it until the command span's export.
+struct Operation {
+    span: Span,
+}
+
+impl OperationSpan for Operation {
+    fn failed(&mut self, error_type: &'static str) {
+        self.span
+            .set_attribute(KeyValue::new(ERROR_TYPE_ATTRIBUTE, error_type));
+        self.span.set_status(Status::error(""));
+    }
+}
+
 /// Builds the provider over `exporter` and opens the command span of `command_path`.
 ///
 /// The sampler, the span limits, and the resource are each given, so the SDK reads no variable for any of them:
@@ -315,6 +376,7 @@ fn open<E: SpanExporter + 'static>(
     log: TraceLog,
 ) -> State<E> {
     let kept = Kept::default();
+    let command = Arc::new(Mutex::new(None));
     let resource = Resource::builder_empty()
         .with_attributes(
             config
@@ -327,6 +389,8 @@ fn open<E: SpanExporter + 'static>(
         .with_simple_exporter(Keeping {
             exporter,
             kept: Arc::clone(&kept),
+            command: Arc::clone(&command),
+            held: Mutex::default(),
         })
         .with_sampler(Sampler::ParentBased(Box::new(Sampler::AlwaysOn)))
         .with_span_limits(SpanLimits {
@@ -348,6 +412,7 @@ fn open<E: SpanExporter + 'static>(
         builder = builder.with_start_time(SystemTime::UNIX_EPOCH + Duration::from_nanos(launched));
     }
     let span = builder.start_with_context(&tracer, &parent(config.traceparent.as_deref()));
+    *command.lock().unwrap_or_else(PoisonError::into_inner) = Some(span.span_context().span_id());
     State::Open {
         provider,
         span: Box::new(span),
@@ -409,16 +474,41 @@ fn exporter_key(name: &str) -> String {
 /// An exporter that keeps what `exporter` answers to an export, for the export thread to read once the span has
 /// ended: the processor that calls it reports that answer to no one.
 #[derive(Debug)]
+///
+/// It also holds the operation spans, which end before the command span, until the command span's export, and
+/// sends them in it: the invocation makes one export.
 struct Keeping<E> {
     exporter: E,
     kept: Kept,
+    /// The id of the command span, once it is started.
+    command: Arc<Mutex<Option<SpanId>>>,
+    /// The ended spans of the operations, not yet exported.
+    held: Mutex<Vec<SpanData>>,
 }
 
 impl<E: SpanExporter> SpanExporter for Keeping<E> {
     fn export(&self, batch: Vec<SpanData>) -> impl Future<Output = OTelSdkResult> + Send {
-        let export = self.exporter.export(batch);
+        let command = *self.command.lock().unwrap_or_else(PoisonError::into_inner);
+        let ends_command = batch
+            .iter()
+            .any(|span| Some(span.span_context.span_id()) == command);
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        let batch = if ends_command {
+            let mut all = std::mem::take(&mut *held);
+            all.extend(batch);
+            all
+        } else {
+            held.extend(batch);
+            Vec::new()
+        };
+        drop(held);
+        let keeps = ends_command;
+        let export = keeps.then(|| self.exporter.export(batch));
         let kept = Arc::clone(&self.kept);
         async move {
+            let Some(export) = export else {
+                return Ok(());
+            };
             let result = export.await;
             let answer = match &result {
                 Ok(()) => Ok(()),

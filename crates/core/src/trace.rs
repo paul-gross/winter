@@ -120,6 +120,34 @@ pub trait CommandTracer {
     /// command runs, and before a command's help or a usage error of a command alike. An invocation that ends
     /// at the root never calls it.
     fn command_started(&self, command_path: &[String], log: TraceLog);
+
+    /// Opens an operation span, a child of the command span, that ends when the handle drops. With tracing
+    /// off, or the command span not recording, it records nothing. The default body returns a span that
+    /// records nothing, so a tracer that asserts nothing about operations needs no change.
+    ///
+    /// The attributes are names and values a command chose; none holds a path, an argument, or output.
+    fn operation(
+        &self,
+        name: &'static str,
+        attributes: &[(&'static str, &str)],
+    ) -> Box<dyn OperationSpan + '_> {
+        let _ = (name, attributes);
+        Box::new(Unrecorded)
+    }
+}
+
+/// An open operation span. Dropping it ends the span.
+pub trait OperationSpan {
+    /// Marks the span failed: an error status with no description, and the attribute `error.type` set to
+    /// `error_type`.
+    fn failed(&mut self, error_type: &'static str);
+}
+
+/// The operation span of a tracer that records nothing.
+struct Unrecorded;
+
+impl OperationSpan for Unrecorded {
+    fn failed(&mut self, _: &'static str) {}
 }
 
 /// The tracer that does nothing: for a host or a test that asserts nothing about tracing.

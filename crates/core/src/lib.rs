@@ -51,5 +51,6 @@ pub use termination::{
     UsageError, ValueType,
 };
 pub use trace::{
-    CommandTracer, NoTrace, TraceConfig, TraceLog, TraceSettings, settings, span_name,
+    CommandTracer, NoTrace, OperationSpan, TraceConfig, TraceLog, TraceSettings, settings,
+    span_name,
 };
