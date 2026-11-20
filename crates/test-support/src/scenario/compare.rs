@@ -1758,8 +1758,28 @@ fn same_toml(a: &[u8], b: &[u8]) -> bool {
         text.parse::<toml::Table>().ok()
     };
     match (parsed(a), parsed(b)) {
-        (Some(a), Some(b)) => a == b,
+        (Some(a), Some(b)) => same_toml_table(&a, &b),
         _ => false,
+    }
+}
+
+fn same_toml_table(a: &toml::Table, b: &toml::Table) -> bool {
+    a.len() == b.len()
+        && a.iter().all(|(key, value)| {
+            b.get(key)
+                .is_some_and(|other| same_toml_value(value, other))
+        })
+}
+
+fn same_toml_value(a: &toml::Value, b: &toml::Value) -> bool {
+    match (a, b) {
+        // TOML's NaNs denote the same value for this comparison, regardless of sign.
+        (toml::Value::Float(a), toml::Value::Float(b)) => a == b || (a.is_nan() && b.is_nan()),
+        (toml::Value::Array(a), toml::Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_toml_value(a, b))
+        }
+        (toml::Value::Table(a), toml::Value::Table(b)) => same_toml_table(a, b),
+        _ => a == b,
     }
 }
 
