@@ -397,3 +397,75 @@ fn the_counts_of_a_worktree_come_from_the_git_of_the_host() {
         ])
     );
 }
+
+#[test]
+fn the_counts_of_the_workspace_come_from_the_git_of_the_host() {
+    let tree = TempTree::new().expect("an isolated tree");
+    let root = WorkspaceBuilder::new(&tree)
+        .config("")
+        .build()
+        .expect("a workspace")
+        .root;
+    let git = Git::new(&tree).expect("the git of the host");
+    let commit = |message: &str, files: &[&str]| CommitSpec {
+        message: message.to_owned(),
+        files: files
+            .iter()
+            .map(|file| ((*file).to_owned(), b"content\n".to_vec()))
+            .collect(),
+        ..CommitSpec::default()
+    };
+    let counts = || {
+        let document = InProcess::new(&["ws", "worktrees", "--status", "--json"])
+            .cwd(&root)
+            .pinned(&tree.env())
+            .run()
+            .document("worktrees");
+        let workspace = &document[0];
+        assert_eq!(workspace["kind"], "workspace");
+        json!([workspace["ahead"], workspace["behind"], workspace["dirty"]])
+    };
+
+    git.run(&root, &["init", "--quiet", "--initial-branch=main"])
+        .expect("a repository at the root");
+    std::fs::write(root.join("first.txt"), b"").expect("an untracked file");
+    git.run(&root, &["add", "first.txt"])
+        .expect("a staged file");
+    assert_eq!(counts(), json!([0, 0, 1]), "no commit yet");
+
+    git.commit(
+        &root,
+        &commit("First", &["old.txt", "both.txt", "changed.txt"]),
+    )
+    .expect("a commit at the root");
+    git.run(&root, &["mv", "old.txt", "new.txt"])
+        .expect("a staged rename");
+    std::fs::write(root.join("both.txt"), b"staged\n").expect("a changed file");
+    git.run(&root, &["add", "both.txt"]).expect("a staged file");
+    std::fs::write(root.join("both.txt"), b"changed again\n").expect("a changed file");
+    std::fs::write(root.join("changed.txt"), b"changed\n").expect("a changed file");
+    std::fs::create_dir(root.join("new")).expect("a directory");
+    for name in ["new/one", "new/two"] {
+        std::fs::write(root.join(name), b"").expect("an untracked file");
+    }
+    assert_eq!(counts(), json!([0, 0, 5]), "no upstream");
+
+    git.run(&root, &["update-ref", "refs/remotes/origin/main", "HEAD"])
+        .expect("a branch of the remote");
+    git.run(&root, &["config", "branch.main.remote", "origin"])
+        .expect("a remote setting");
+    git.run(&root, &["config", "branch.main.merge", "refs/heads/main"])
+        .expect("a merge setting");
+    git.commit(&root, &commit("Ahead", &[])).expect("a commit");
+    assert_eq!(counts(), json!([1, 0, 0]), "an upstream");
+
+    git.run(&root, &["config", "branch.main.remote", "."])
+        .expect("a local upstream");
+    assert_eq!(counts(), json!([null, null, null]), "a local upstream");
+
+    git.run(&root, &["config", "branch.main.remote", "origin"])
+        .expect("a remote setting");
+    git.run(&root, &["checkout", "--quiet", "--detach"])
+        .expect("a detached HEAD");
+    assert_eq!(counts(), json!([null, null, null]), "a detached HEAD");
+}

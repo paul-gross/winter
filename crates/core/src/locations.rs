@@ -98,7 +98,8 @@ const ORIGIN: &str = "locations";
 /// the probe of its name, and of two entries with one name the later probe is the one both show. A git call
 /// that fails is written as a record through `diagnostics`, every probe of that environment still runs, and
 /// the first failure in project order then ends the listing: no later environment is probed. A standalone
-/// and the workspace are not counted.
+/// is not counted. The workspace is probed last, against the upstream of its branch, and a git call of that
+/// probe that fails is no failure and writes no record: the workspace then carries no count.
 pub(crate) fn list(
     files: &dyn ReadFiles,
     programs: &dyn RunPrograms,
@@ -166,6 +167,11 @@ pub(crate) fn list(
             });
         }
     }
+    let workspace_counts = if with_status {
+        Some(probe::workspace(files, programs, &root)?)
+    } else {
+        None
+    };
     listed.push(Location {
         kind: LocationKind::Workspace,
         env: None,
@@ -175,7 +181,7 @@ pub(crate) fn list(
             .map(|base| base.to_string_lossy().into_owned()),
         label: "<workspace>".to_owned(),
         path: root,
-        status: uncounted,
+        status: workspace_counts,
     });
     Ok(listed)
 }
@@ -694,5 +700,260 @@ mod tests {
             ]
         );
         assert_eq!(programs.calls().len(), 4, "each entry is probed");
+    }
+
+    /// A workspace with no project whose root is a repository.
+    fn root_repository() -> MemoryFiles {
+        MemoryFiles::default()
+            .with(CONFIG, b"")
+            .with("/ws/.git", b"gitdir: /nowhere\n")
+    }
+
+    /// A git whose repository is on the branch `main`, which follows `origin/main`: two paths staged, two
+    /// changed, one of them both, three files untracked, three commits ahead and one behind.
+    fn following(args: &[String], _: &Path) -> io::Result<Finished> {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        match args.as_slice() {
+            ["symbolic-ref", ..] => ended(0, b"main\n", b""),
+            ["rev-parse", ..] => ended(0, b"1234\n", b""),
+            ["diff", "--cached", ..] => ended(0, b"both.txt\0new name.txt\0", b""),
+            ["diff", ..] => ended(0, b"both.txt\0changed.txt\0", b""),
+            ["ls-files", ..] => ended(0, b"new.txt\0dir/one\0dir/two\0", b""),
+            ["config", "--get", "branch.main.remote"] => ended(0, b"origin\n", b""),
+            ["config", "--get", "branch.main.merge"] => ended(0, b"refs/heads/main\n", b""),
+            ["rev-list", "--count", "origin/main..HEAD"] => ended(0, b"3\n", b""),
+            ["rev-list", "--count", "HEAD..origin/main"] => ended(0, b"1\n", b""),
+            other => panic!("a call the probe does not make: {other:?}"),
+        }
+    }
+
+    /// The calls of a port, each as one line.
+    fn lines(calls: &[Called]) -> Vec<String> {
+        calls.iter().map(|(args, _)| args.join(" ")).collect()
+    }
+
+    /// The counts of the workspace of a listing that succeeded and wrote nothing to stderr, under a log
+    /// whose format is switched.
+    fn workspace_counts(programs: &dyn RunPrograms) -> (Option<u64>, Option<u64>, Option<u64>) {
+        let (listed, stderr) = listing(&root_repository(), programs, true, true);
+        let listed = listed.expect("locations");
+        assert_eq!(stderr, "");
+        let [("<workspace>", ahead, behind, dirty)] = counts(&listed)[..] else {
+            panic!("{listed:?}");
+        };
+        (ahead, behind, dirty)
+    }
+
+    #[test]
+    fn the_workspace_is_counted_by_its_calls_in_order_against_the_upstream_of_its_branch() {
+        let programs = Scripted::new(following);
+
+        assert_eq!(workspace_counts(&programs), (Some(3), Some(1), Some(6)));
+        assert_eq!(
+            lines(&programs.calls()),
+            [
+                "symbolic-ref --quiet --short HEAD",
+                "rev-parse --verify --quiet HEAD",
+                "diff --cached --name-only -z -M HEAD",
+                "diff --name-only -z",
+                "ls-files --others --exclude-standard -z",
+                "config --get branch.main.remote",
+                "config --get branch.main.merge",
+                "rev-list --count origin/main..HEAD",
+                "rev-list --count HEAD..origin/main",
+            ]
+        );
+        assert!(
+            programs
+                .calls()
+                .iter()
+                .all(|(_, cwd)| cwd == Path::new("/ws"))
+        );
+    }
+
+    #[test]
+    fn the_workspace_is_probed_after_every_worktree() {
+        let files = two_environments().with("/ws/.git", b"gitdir: /nowhere\n");
+        let programs = Scripted::new(|args: &[String], cwd: &Path| {
+            if cwd == Path::new("/ws") {
+                following(args, cwd)
+            } else {
+                clean(args, cwd)
+            }
+        });
+
+        let (listed, _) = listing(&files, &programs, true, false);
+
+        assert_eq!(
+            counts(&listed.expect("locations"))[4..],
+            [
+                ("ctx", None, None, None),
+                ("<workspace>", Some(3), Some(1), Some(6)),
+            ]
+        );
+        let calls = programs.calls();
+        assert_eq!(calls.len(), 17);
+        assert!(calls[..8].iter().all(|(_, cwd)| cwd != Path::new("/ws")));
+    }
+
+    #[test]
+    fn a_workspace_call_that_fails_gives_no_count_writes_no_record_and_ends_the_probe() {
+        for failing in 0..9 {
+            let made = RefCell::new(0);
+            let programs = Scripted::new(|args: &[String], cwd: &Path| {
+                let call = made.replace_with(|made| *made + 1);
+                if call == failing {
+                    ended(128, b"", b"fatal: the call fails\n")
+                } else {
+                    following(args, cwd)
+                }
+            });
+
+            assert_eq!(
+                workspace_counts(&programs),
+                (None, None, None),
+                "call {failing}"
+            );
+            assert_eq!(programs.calls().len(), failing + 1, "call {failing}");
+        }
+    }
+
+    #[test]
+    fn a_workspace_call_ended_by_a_signal_gives_no_count() {
+        let programs = Scripted::new(|args: &[String], cwd: &Path| match args[0].as_str() {
+            "ls-files" => Ok(Finished {
+                exit: Exit::Signal(9),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            }),
+            _ => following(args, cwd),
+        });
+
+        assert_eq!(workspace_counts(&programs), (None, None, None));
+    }
+
+    #[test]
+    fn a_detached_head_gives_the_workspace_no_count_after_one_call() {
+        let programs = Scripted::new(|args: &[String], cwd: &Path| match args[0].as_str() {
+            "symbolic-ref" => ended(1, b"", b""),
+            _ => following(args, cwd),
+        });
+
+        assert_eq!(workspace_counts(&programs), (None, None, None));
+        assert_eq!(
+            lines(&programs.calls()),
+            ["symbolic-ref --quiet --short HEAD"]
+        );
+    }
+
+    #[test]
+    fn a_head_without_a_commit_skips_the_staged_call_and_stages_no_path() {
+        let programs = Scripted::new(|args: &[String], cwd: &Path| match args[0].as_str() {
+            "rev-parse" => ended(1, b"", b""),
+            "diff" if args[1] == "--cached" => panic!("the staged call was made"),
+            "config" => ended(1, b"", b""),
+            _ => following(args, cwd),
+        });
+
+        assert_eq!(workspace_counts(&programs), (Some(0), Some(0), Some(5)));
+        assert_eq!(
+            lines(&programs.calls()),
+            [
+                "symbolic-ref --quiet --short HEAD",
+                "rev-parse --verify --quiet HEAD",
+                "diff --name-only -z",
+                "ls-files --others --exclude-standard -z",
+                "config --get branch.main.remote",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_branch_without_a_merge_setting_is_level_and_no_rev_list_is_made() {
+        let programs = Scripted::new(|args: &[String], cwd: &Path| match args[0].as_str() {
+            "config" if args[2] == "branch.main.merge" => ended(1, b"", b""),
+            "rev-list" => panic!("rev-list was made"),
+            _ => following(args, cwd),
+        });
+
+        assert_eq!(workspace_counts(&programs), (Some(0), Some(0), Some(6)));
+        assert_eq!(
+            lines(&programs.calls())[5..],
+            [
+                "config --get branch.main.remote",
+                "config --get branch.main.merge"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_branch_without_a_remote_setting_is_level_and_its_merge_setting_is_not_read() {
+        let programs = Scripted::new(|args: &[String], cwd: &Path| match args[0].as_str() {
+            "config" if args[2] == "branch.main.remote" => ended(1, b"", b""),
+            "config" => panic!("the merge setting was read"),
+            "rev-list" => panic!("rev-list was made"),
+            _ => following(args, cwd),
+        });
+
+        assert_eq!(workspace_counts(&programs), (Some(0), Some(0), Some(6)));
+    }
+
+    #[test]
+    fn a_local_upstream_is_counted_against_an_operand_git_refuses_and_gives_no_count() {
+        let programs = Scripted::new(|args: &[String], cwd: &Path| match args[0].as_str() {
+            "symbolic-ref" => ended(0, b"topic\n", b""),
+            "config" if args[2] == "branch.topic.remote" => ended(0, b".\n", b""),
+            "config" if args[2] == "branch.topic.merge" => ended(0, b"refs/heads/main\n", b""),
+            "rev-list" => ended(128, b"", b"fatal: ambiguous argument\n"),
+            _ => following(args, cwd),
+        });
+
+        assert_eq!(workspace_counts(&programs), (None, None, None));
+        assert_eq!(
+            lines(&programs.calls())[7..],
+            ["rev-list --count ./main..HEAD"]
+        );
+    }
+
+    #[test]
+    fn a_merge_setting_outside_the_branch_namespace_is_the_operand_as_written() {
+        let programs = Scripted::new(|args: &[String], cwd: &Path| match args[0].as_str() {
+            "config" if args[2] == "branch.main.merge" => ended(0, b"refs/tags/v1\n", b""),
+            "rev-list" => ended(0, b"0\n", b""),
+            _ => following(args, cwd),
+        });
+
+        assert_eq!(workspace_counts(&programs), (Some(0), Some(0), Some(6)));
+        assert_eq!(
+            lines(&programs.calls())[7..],
+            [
+                "rev-list --count origin/refs/tags/v1..HEAD",
+                "rev-list --count HEAD..origin/refs/tags/v1"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_workspace_count_that_does_not_read_is_an_internal_failure() {
+        let programs = Scripted::new(|args: &[String], cwd: &Path| match args[0].as_str() {
+            "rev-list" => ended(0, b"many\n", b""),
+            _ => following(args, cwd),
+        });
+
+        let (listed, stderr) = listing(&root_repository(), &programs, true, true);
+
+        assert!(matches!(listed, Err(ListError::Internal(_))), "{listed:?}");
+        assert_eq!(stderr, "");
+    }
+
+    #[test]
+    fn a_program_that_cannot_be_started_for_the_workspace_is_an_internal_failure() {
+        let programs = Scripted::new(|_: &[String], _: &Path| {
+            Err(io::Error::new(io::ErrorKind::NotFound, "no git"))
+        });
+
+        let (listed, _) = listing(&root_repository(), &programs, true, false);
+
+        assert!(matches!(listed, Err(ListError::Internal(_))), "{listed:?}");
     }
 }
