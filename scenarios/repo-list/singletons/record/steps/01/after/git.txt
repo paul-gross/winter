@@ -1,0 +1,26 @@
+repository
+    ws/context/harness
+    kind: main
+dot-git
+    directory
+head
+    unborn
+    refs/heads/master
+refs
+worktrees
+    worktree <ROOT>/ws/context/harness
+    HEAD 0000000000000000000000000000000000000000
+    branch refs/heads/master
+    
+status
+    # branch.oid (initial)
+    # branch.head master
+stash
+config
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log

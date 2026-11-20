@@ -1,0 +1,5 @@
+summary = "A standalone repository is listed at its path under the root, and one that declares no path at its name."
+
+[[step]]
+args = ["repo", "list", "--json"]
+stdout = "json"

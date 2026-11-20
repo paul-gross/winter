@@ -1,0 +1,7 @@
+[[standalone_repository]]
+name = "context"
+url = "https://fixture.invalid/ctx.git"
+path = ".winter/ext/context"
+
+[[standalone_repository]]
+url = "https://fixture.invalid/tools.git"

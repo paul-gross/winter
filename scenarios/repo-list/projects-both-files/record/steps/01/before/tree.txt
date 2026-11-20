@@ -1,0 +1,15 @@
+f - 89fbd3cff0c0ae16c92e2e63569c5c6f170cdfd2 gitconfig
+d home
+d home/.config
+d remotes
+d ws
+d ws/.winter
+f - 27e88de381421641109b5b96bf9802cc914fd7f6 ws/.winter/config.local.toml
+f - 31b15427996518daefdd398038a8bb74e17b25c5 ws/.winter/config.toml
+d ws/projects
+d ws/projects/api
+f - da39a3ee5e6b4b0d3255bfef95601890afd80709 ws/projects/api/.gitkeep
+d ws/projects/mine
+f - da39a3ee5e6b4b0d3255bfef95601890afd80709 ws/projects/mine/.gitkeep
+d ws/projects/web
+f - da39a3ee5e6b4b0d3255bfef95601890afd80709 ws/projects/web/.gitkeep

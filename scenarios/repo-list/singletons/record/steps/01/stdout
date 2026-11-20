@@ -1,0 +1,23 @@
+[
+  {
+    "name": "product",
+    "type": "singleton",
+    "path": "<ROOT>/ws/product"
+  },
+  {
+    "name": "harness",
+    "type": "singleton",
+    "path": "<ROOT>/ws/context/harness"
+  },
+  {
+    "name": "tools",
+    "type": "standalone",
+    "path": "<ROOT>/ws/tools"
+  },
+  {
+    "name": "api",
+    "type": "project",
+    "main_path": "<ROOT>/ws/projects/api",
+    "pinned": false
+  }
+]

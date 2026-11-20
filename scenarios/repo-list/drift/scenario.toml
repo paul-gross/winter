@@ -1,0 +1,5 @@
+summary = "A declared project with no directory and a directory no project declares are named in a warning on stderr, a dot-directory is not, and the document is the list alone."
+
+[[step]]
+args = ["repo", "list", "--json"]
+stdout = "json"
