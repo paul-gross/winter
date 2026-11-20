@@ -36,7 +36,8 @@ in review: the scan for tokens does not see it.
 
 The library opens no socket, reads no clock, and names no tracing crate. What it knows of tracing is in
 `crates/core/src/trace.rs`: the settings, read from the environment snapshot at an instant the binary gives it, and the
-port `CommandTracer`, which `run` announces the command to. The binary implements that port in
+port `CommandTracer`, which `run` announces the command to and which opens an operation span, a child of the command
+span, for a command that wraps the calls of one operation. The binary implements that port in
 `crates/cli/src/trace.rs`, the one source file that names a tracing crate. No source of the library or of the binary
 names an asynchronous runtime or starts one: the HTTP client of the exporter runs its own. This is checked in review.
 

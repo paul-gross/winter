@@ -225,6 +225,7 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
                 files: &OsFiles,
                 file_writer: &OsFiles,
                 programs: &programs,
+                tracer,
                 invoked: &invoked,
                 root: &options,
                 log,
