@@ -947,23 +947,20 @@ fn a_failing_worktree_probe_exports_its_span_failed_with_the_repo_error_type() {
 #[test]
 fn without_status_or_without_tracing_no_operation_span_is_exported() {
     let fixture = probed_fixture(CLEAN_GIT);
-    let collector = collector(Answer::Ok);
-    let (ended, _) = fixture.traced(&collector.endpoint(), &["ws", "worktrees"], &[]);
+    let listening = collector(Answer::Ok);
+    let (ended, _) = fixture.traced(&listening.endpoint(), &["ws", "worktrees"], &[]);
     assert_eq!(ended.exit, Exit::Code(0), "{}", ended.stderr);
-    let export = export_of(collector);
+    let export = export_of(listening);
     assert_eq!(export.spans.len(), 1, "{export:?}");
 
-    let collector = collector_for_off();
+    // The pinned environment sets the kill switch, so a run handed only an endpoint has tracing off.
+    let silent = collector(Answer::Ok);
     let ended = fixture
         .run(
             &["ws", "worktrees", "--status"],
-            &[(ENDPOINT, &collector.endpoint())],
+            &[(ENDPOINT, &silent.endpoint())],
         )
         .0;
     assert_eq!(ended.exit, Exit::Code(0), "{}", ended.stderr);
-    assert!(collector.requests().is_empty());
-}
-
-fn collector_for_off() -> Collector {
-    collector(Answer::Ok)
+    assert!(silent.requests().is_empty());
 }

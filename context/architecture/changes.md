@@ -83,9 +83,9 @@ Logic that two commands share lives in a domain module, never under `commands/`.
   arguments do not hold that value the fault is the node's own parser, so `required` answers an internal failure, which
   `run` returns; a command file builds no usage error for it;
 - one call into a domain module, which is handed `cx.files`, `cx.file_writer`, and `cx.cwd` as they are, and
-  `cx.programs` as well when it starts a program, and `cx.tracer` when it opens an operation span. For a domain entry that reports on stderr, the file builds a
-  `Diagnostics` from `cx.err` and `cx.log` and hands it to that call. The entry writes its notices and records through
-  it, and the command file writes none;
+  `cx.programs` as well when it starts a program, and `cx.tracer` when it opens an operation span. For a domain entry
+  that reports on stderr, the file builds a `Diagnostics` from `cx.err` and `cx.log` and hands it to that call. The
+  entry writes its notices and records through it, and the command file writes none;
 - the mapping of that call's typed outcome to a `Termination`;
 - the text of the human line and the fields of the `--json` document, written as [below](#writing-the-result).
 
