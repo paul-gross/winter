@@ -1,0 +1,42 @@
+[
+  {
+    "kind": "worktree",
+    "env": "early",
+    "repo": "web",
+    "name": null,
+    "label": "early/web",
+    "path": "<ROOT>/ws/early/web"
+  },
+  {
+    "kind": "worktree",
+    "env": "alpha",
+    "repo": "web",
+    "name": null,
+    "label": "alpha/web",
+    "path": "<ROOT>/ws/alpha/web"
+  },
+  {
+    "kind": "worktree",
+    "env": "feature-x",
+    "repo": "web",
+    "name": null,
+    "label": "feature-x/web",
+    "path": "<ROOT>/ws/feature-x/web"
+  },
+  {
+    "kind": "worktree",
+    "env": "feature-x",
+    "repo": "api",
+    "name": null,
+    "label": "feature-x/api",
+    "path": "<ROOT>/ws/feature-x/api"
+  },
+  {
+    "kind": "workspace",
+    "env": null,
+    "repo": null,
+    "name": "ws",
+    "label": "<workspace>",
+    "path": "<ROOT>/ws"
+  }
+]

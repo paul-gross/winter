@@ -18,9 +18,6 @@ pub(crate) const REGISTRATION: Registration = Registration::Command {
     hidden: false,
 };
 
-/// How far apart two columns of the human table are.
-const GAP: &str = "  ";
-
 /// What the arguments ask for.
 #[derive(Debug, PartialEq, Eq)]
 struct Params {
@@ -100,31 +97,7 @@ fn table(listing: &Listing) -> String {
         .iter()
         .map(|entry| row(&listing.root, entry))
         .collect();
-    let width = |column: usize| {
-        rows.iter()
-            .filter_map(|row| row.get(column))
-            .map(|cell| cell.chars().count())
-            .max()
-            .unwrap_or(0)
-    };
-    let widths: Vec<usize> = (0..4).map(width).collect();
-    let mut table = String::new();
-    for row in &rows {
-        let mut line = String::new();
-        for (cell, width) in row.iter().zip(&widths) {
-            if !line.is_empty() {
-                line.push_str(GAP);
-            }
-            line.push_str(cell);
-            line.extend(std::iter::repeat_n(
-                ' ',
-                width.saturating_sub(cell.chars().count()),
-            ));
-        }
-        table.push_str(line.trim_end());
-        table.push('\n');
-    }
-    table
+    output::table(&rows)
 }
 
 /// The cells of one repository. The mark of a pinned project is a fourth cell, which no other row has.

@@ -37,6 +37,42 @@ pub(crate) fn document(out: &mut dyn Write, document: &serde_json::Value) -> Ter
     ending(out.write_all(&encoded))
 }
 
+/// How far apart two columns of a table are.
+const GAP: &str = "  ";
+
+/// `rows` as aligned text: one line per row, each ended by a newline, the cells of a column padded to the
+/// widest cell of that column counted in characters, two spaces between columns, and no line ending in a
+/// space. No rows is an empty text.
+pub(crate) fn table(rows: &[Vec<String>]) -> String {
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let widths: Vec<usize> = (0..columns)
+        .map(|column| {
+            rows.iter()
+                .filter_map(|row| row.get(column))
+                .map(|cell| cell.chars().count())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let mut table = String::new();
+    for row in rows {
+        let mut line = String::new();
+        for (cell, width) in row.iter().zip(&widths) {
+            if !line.is_empty() {
+                line.push_str(GAP);
+            }
+            line.push_str(cell);
+            line.extend(std::iter::repeat_n(
+                ' ',
+                width.saturating_sub(cell.chars().count()),
+            ));
+        }
+        table.push_str(line.trim_end());
+        table.push('\n');
+    }
+    table
+}
+
 /// The ending of a write of a result: success, or what [`Termination::from_write_error`] makes of its error.
 fn ending(written: std::io::Result<()>) -> Termination {
     written.map_or_else(Termination::from_write_error, |()| Termination::Success)

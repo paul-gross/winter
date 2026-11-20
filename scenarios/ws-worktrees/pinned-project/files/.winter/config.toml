@@ -1,0 +1,4 @@
+# workspace configuration
+[[project_repository]]
+name = "web"
+pinned = true

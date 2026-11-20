@@ -1,0 +1,18 @@
+[
+  {
+    "kind": "worktree",
+    "env": "alpha",
+    "repo": "web",
+    "name": null,
+    "label": "alpha/web",
+    "path": "<ROOT>/ws/alpha/web"
+  },
+  {
+    "kind": "workspace",
+    "env": null,
+    "repo": null,
+    "name": "ws",
+    "label": "<workspace>",
+    "path": "<ROOT>/ws"
+  }
+]

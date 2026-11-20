@@ -69,6 +69,12 @@ fn suggested(name: &str, aliases: i64, envs_per_workspace: u32) -> i64 {
     (aliases + 2) + i64::from(hash) % band_size
 }
 
+/// `envs_per_workspace` as the `u32` the lookup takes. A band wider than the 65536 values of the hash gives
+/// every name the slot a still wider band gives it, so a count beyond `u32` is the largest `u32`.
+pub(crate) fn slot_count(envs_per_workspace: i64) -> u32 {
+    u32::try_from(envs_per_workspace).unwrap_or(u32::MAX)
+}
+
 fn count(length: usize) -> i64 {
     i64::try_from(length).unwrap_or(i64::MAX)
 }

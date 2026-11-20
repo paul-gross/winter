@@ -26,6 +26,15 @@ pub(crate) fn read(
     files: &dyn ReadFiles,
     root: &Path,
 ) -> Result<BTreeMap<String, i64>, ConfigError> {
+    Ok(read_in_order(files, root)?.into_iter().collect())
+}
+
+/// The registry entries of the workspace at `root` in the order the state file gives them, with exactly the
+/// refusals of [`read`].
+pub(crate) fn read_in_order(
+    files: &dyn ReadFiles,
+    root: &Path,
+) -> Result<Vec<(String, i64)>, ConfigError> {
     let path = root.join(STATE_FILE);
     let file_read = |cause: FileCause| ConfigError::FileRead {
         path: path.clone(),
@@ -33,7 +42,7 @@ pub(crate) fn read(
     };
     let bytes = match files.read(&path) {
         Ok(Some(bytes)) => bytes,
-        Ok(None) => return Ok(BTreeMap::new()),
+        Ok(None) => return Ok(Vec::new()),
         Err(error) => return Err(file_read(FileCause::Io(error))),
     };
     let text = String::from_utf8(bytes)
@@ -41,7 +50,7 @@ pub(crate) fn read(
     let document = toml::from_str::<toml::Table>(&text)
         .map_err(|error| file_read(FileCause::Toml(TomlParseError::from(error))))?;
     let Some(toml::Value::Table(recorded)) = document.get(TABLE) else {
-        return Ok(BTreeMap::new());
+        return Ok(Vec::new());
     };
     Ok(recorded
         .iter()
@@ -96,6 +105,42 @@ mod tests {
                 ("far", 5_000_000_000),
             ])
         );
+    }
+
+    fn pairs(state: &[u8]) -> Result<Vec<(String, i64)>, ConfigError> {
+        let files = MemoryFiles::default().with(STATE, state);
+        read_in_order(&files, Path::new("/ws"))
+    }
+
+    #[test]
+    fn the_entries_come_back_in_the_order_of_the_file() {
+        let registry = pairs(b"[env_index]\nzeta = 3\nalpha = 1\nskipped = \"x\"\nmid = 2\n")
+            .expect("entries");
+
+        assert_eq!(
+            registry,
+            vec![
+                ("zeta".to_owned(), 3),
+                ("alpha".to_owned(), 1),
+                ("mid".to_owned(), 2)
+            ]
+        );
+    }
+
+    #[test]
+    fn in_order_a_missing_file_is_empty_and_a_bad_file_names_itself() {
+        assert!(
+            read_in_order(&MemoryFiles::default(), Path::new("/ws"))
+                .expect("entries")
+                .is_empty()
+        );
+        for bytes in [&b"[env_index\n"[..], &[0xff, 0xfe][..]] {
+            let error = pairs(bytes).expect_err("a refusal");
+            assert!(
+                matches!(&error, ConfigError::FileRead { path, .. } if path == Path::new(STATE)),
+                "{error:?}"
+            );
+        }
     }
 
     #[test]

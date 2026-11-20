@@ -103,7 +103,7 @@ A command file names none of these:
 | Area                                 | Names a command file may not hold                                                                                                           |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | The file port                        | `ReadFiles`, `WriteFiles`, `OsFiles`                                                                                                        |
-| Modules a domain entry stands on     | `workspace_root`, `workspace_files`, `config_file`, `config_load`, `config_merge`, `config_model`, `config_edit`, `state_registry`, `drift` |
+| Modules a domain entry stands on     | `workspace_root`, `workspace_files`, `config_file`, `config_load`, `config_merge`, `config_model`, `config_edit`, `state_registry`, `environments`, `drift` |
 | File formats                         | `toml::`, `toml_edit`                                                                                                                       |
 | Writing, and how a failed write ends | `writeln!`, `write!(`, `to_writer`, `InternalError`, `Backtrace`                                                                            |
 
@@ -169,7 +169,7 @@ The function a command file calls, the module's entry, returns a typed value or 
 `Termination`. The command file maps the failure: `repository_catalog::remove` fails with `RemoveError`, a sum of the
 module's own that the command file takes apart into `Termination::Command` and `Termination::Config`,
 `index_lookup::answer` fails with `ConfigError` alone, which becomes `Termination::Config`, and
-`repository_catalog::list` fails with `ListError`, whose two variants become `Termination::Config` and
+`repository_catalog::list` and `locations::list` each fail with a `ListError`, whose two variants become `Termination::Config` and
 `Termination::Internal`: the command file boxes what each variant carries, and so never names the type of an internal
 failure.
 

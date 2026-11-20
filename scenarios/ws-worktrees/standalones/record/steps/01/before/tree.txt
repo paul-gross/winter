@@ -1,0 +1,15 @@
+f - 89fbd3cff0c0ae16c92e2e63569c5c6f170cdfd2 gitconfig
+d home
+d home/.config
+d remotes
+d ws
+d ws/.winter
+f - 8012d15d751b6885bfc6a1dfa99fa9e6782b9a2d ws/.winter/config.toml
+d ws/.winter/ext
+d ws/.winter/ext/context
+f - da39a3ee5e6b4b0d3255bfef95601890afd80709 ws/.winter/ext/context/.gitkeep
+d ws/alpha
+d ws/alpha/web
+f - da39a3ee5e6b4b0d3255bfef95601890afd80709 ws/alpha/web/.gitkeep
+d ws/tools
+f - da39a3ee5e6b4b0d3255bfef95601890afd80709 ws/tools/.gitkeep

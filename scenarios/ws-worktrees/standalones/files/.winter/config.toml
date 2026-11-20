@@ -1,0 +1,16 @@
+# workspace configuration
+[[project_repository]]
+name = "web"
+
+[[project_repository]]
+name = "api"
+
+[[standalone_repository]]
+name = "ctx"
+path = ".winter/ext/context"
+
+[[standalone_repository]]
+name = "gone"
+
+[[standalone_repository]]
+name = "tools"
