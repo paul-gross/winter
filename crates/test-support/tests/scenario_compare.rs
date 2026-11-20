@@ -1127,6 +1127,89 @@ fn fixture_toml_hashes_remain_byte_strict_even_without_stored_content() {
 }
 
 #[test]
+fn toml_nan_values_compare_semantically_at_every_depth() {
+    for (path, rules) in [
+        (STATE, Compare::default()),
+        (
+            "ws/settings",
+            file_rules(&[("ws/settings", FileMode::Toml)]),
+        ),
+    ] {
+        for (before, after) in [
+            ("value = nan\n", "# layout\nvalue=nan\n"),
+            ("value = +nan\n", "value = -nan\n"),
+            (
+                "[outer]\nvalues = [nan, [1, { inner = nan, flag = true }]]\n",
+                "outer = { values = [+nan, [1, { flag = true, inner = -nan }]] }\n",
+            ),
+            ("[[rows]]\nvalue = nan\n", "rows = [{ value = nan }]\n"),
+        ] {
+            let recorded = step_with(with_file(base(), path, before.as_bytes()));
+            let observed = step_with(with_file(base(), path, after.as_bytes()));
+            assert_eq!(
+                compared(StdoutMode::Text, rules.clone(), &recorded, &observed),
+                [],
+                "{path}: {before} versus {after}"
+            );
+            assert_eq!(
+                named(&compared(
+                    StdoutMode::Text,
+                    file_rules(&[(path, FileMode::Bytes)]),
+                    &recorded,
+                    &observed,
+                )),
+                [
+                    (Dimension::Tree, Some(1), path),
+                    (Dimension::Files, Some(1), path)
+                ]
+            );
+        }
+    }
+}
+
+#[test]
+fn toml_nan_does_not_hide_other_differences_or_change_invalid_byte_fallback() {
+    for (path, rules) in [
+        (STATE, Compare::default()),
+        (
+            "ws/settings",
+            file_rules(&[("ws/settings", FileMode::Toml)]),
+        ),
+    ] {
+        for (before, after) in [
+            ("v = nan", "v = 1.0"),
+            ("v = nan", "v = inf"),
+            ("v = nan", "v = 'nan'"),
+            ("v = [nan, 1]", "v = [nan, 1.0]"),
+            ("v = [nan, 1]", "v = [1, nan]"),
+            ("v = [nan, 1]", "v = [nan]"),
+            ("v = { a = nan }", "v = { b = nan }"),
+            ("v = { a = nan }", "v = { a = nan, b = 1 }"),
+            ("v = { a = nan, b = true }", "v = { a = nan, b = false }"),
+            ("v = [nan, inf]", "v = [nan, -inf]"),
+            ("v = [nan, 1979-05-27]", "v = [nan, 1979-05-28]"),
+            ("v = [nan, 1.5]", "v = [nan, 2.5]"),
+            ("v = nan", "v = nan\n[broken"),
+            ("v = nan\n[broken", "# layout\nv = nan\n[broken"),
+        ] {
+            let recorded = step_with(with_file(base(), path, before.as_bytes()));
+            let observed = step_with(with_file(base(), path, after.as_bytes()));
+            for (a, b) in [(&recorded, &observed), (&observed, &recorded)] {
+                assert_eq!(
+                    named(&compared(StdoutMode::Text, rules.clone(), a, b)),
+                    [(Dimension::Files, Some(1), path)],
+                    "{path}: {before} versus {after}"
+                );
+            }
+            assert_eq!(
+                compared(StdoutMode::Text, rules.clone(), &observed, &observed),
+                []
+            );
+        }
+    }
+}
+
+#[test]
 fn a_file_compared_as_toml_is_equal_when_its_values_are() {
     let rules = || file_rules(&[(STATE, FileMode::Toml)]);
     let recorded = step_with(with_file(base(), STATE, b"[env_index]\none = 1\ntwo = 2\n"));
