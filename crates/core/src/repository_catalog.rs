@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 pub(crate) use crate::config_edit::NewBlock;
 use crate::config_edit::{self, BlockRemoval, CatalogError, RepositoryKind, StandaloneOption};
 use crate::config_load;
+use crate::config_model::{RepositoryCommon, Workspace};
 use crate::diagnostics::{self, Diagnostics};
 use crate::drift;
 use crate::files::{ReadFiles, WriteFiles};
-use crate::termination::{ConfigError, FileCause, InternalError, TomlParseError};
+use crate::termination::{ConfigError, ConfigFileName, FileCause, InternalError, TomlParseError};
 use crate::workspace_files::{CONFIG_FILE, LOCAL_CONFIG_FILE, PROJECTS_DIR, location};
 
 /// The directory of the implicit repository `product`, relative to a workspace root.
@@ -278,7 +279,30 @@ pub(crate) fn add(
         Some(name) if !name.is_empty() => name,
         _ => config_edit::name_from_url(request.url),
     };
-    let existing: Vec<&crate::config_model::RepositoryCommon> = match request.kind {
+    check_not_declared(files, &workspace, request, name)?;
+
+    let file = workspace.root.join(if local {
+        LOCAL_CONFIG_FILE
+    } else {
+        CONFIG_FILE
+    });
+    write_block(files, writer, &workspace.root, &file, request, local)?;
+    Ok(Added {
+        kind: request.kind,
+        url: request.url.to_owned(),
+    })
+}
+
+/// Checks 5 and 6 of an addition on `workspace`: no declared repository of the kind with the URL or the name
+/// of `request`, the URL test first of each entry, and, for a standalone, none declared at the same location
+/// with symbolic links followed. `name` is the name the block would carry.
+fn check_not_declared(
+    files: &dyn ReadFiles,
+    workspace: &Workspace,
+    request: &NewBlock<'_>,
+    name: &str,
+) -> Result<(), CatalogError> {
+    let existing: Vec<&RepositoryCommon> = match request.kind {
         RepositoryKind::Project => workspace
             .config
             .project_repositories
@@ -297,15 +321,13 @@ pub(crate) fn add(
             return Err(CatalogError::DuplicateUrl {
                 kind: request.kind,
                 url: request.url.to_owned(),
-            }
-            .into());
+            });
         }
         if entry.name == name {
             return Err(CatalogError::DuplicateName {
                 kind: request.kind,
                 name: name.to_owned(),
-            }
-            .into());
+            });
         }
     }
 
@@ -320,57 +342,64 @@ pub(crate) fn add(
             if files.resolve(&declared) == new {
                 return Err(CatalogError::DuplicatePath {
                     path: given.to_owned(),
-                }
-                .into());
+                });
             }
         }
     }
-
-    let file = workspace.root.join(if local {
-        LOCAL_CONFIG_FILE
-    } else {
-        CONFIG_FILE
-    });
-    write_block(writer, &file, request, local)?;
-    Ok(Added {
-        kind: request.kind,
-        url: request.url.to_owned(),
-    })
+    Ok(())
 }
 
 /// How the one update of an addition ended, when it ran.
 enum Appended {
     Done,
     Missing,
-    Invalid(TomlParseError),
+    Refused(AddError),
     NotArrayOfTables,
 }
 
 /// Replaces `file` with its text and the block of `request` appended.
+///
+/// Inside the lock of the update the configuration is loaded again, with the bytes the update is given in
+/// place of the file, and checks 5 and 6 run again on it: a file written since the first load ends the
+/// addition as the load or the check refuses it, and nothing is written.
 fn write_block(
+    files: &dyn ReadFiles,
     writer: &dyn WriteFiles,
+    root: &Path,
     file: &Path,
     request: &NewBlock<'_>,
     local: bool,
 ) -> Result<(), AddError> {
+    let edited = if local {
+        ConfigFileName::Local
+    } else {
+        ConfigFileName::Shared
+    };
+    let name = match request.name {
+        Some(name) if !name.is_empty() => name,
+        _ => config_edit::name_from_url(request.url),
+    };
     let mut ended = Appended::Done;
     let updated = writer.update(file, &mut |current| {
-        let text = match current {
-            None if local => "",
+        let bytes = match current {
+            None if local => &[][..],
             None => {
                 ended = Appended::Missing;
                 return None;
             }
-            Some(bytes) => {
-                if let Err(error) = toml::from_slice::<toml::Table>(bytes) {
-                    ended = Appended::Invalid(TomlParseError::from(error));
-                    return None;
-                }
-                let Ok(text) = std::str::from_utf8(bytes) else {
-                    return None;
-                };
-                text
-            }
+            Some(bytes) => bytes,
+        };
+        let rechecked = config_load::reload(files, root, edited, bytes)
+            .map_err(AddError::from)
+            .and_then(|workspace| {
+                check_not_declared(files, &workspace, request, name).map_err(AddError::from)
+            });
+        if let Err(error) = rechecked {
+            ended = Appended::Refused(error);
+            return None;
+        }
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            return None;
         };
         match config_edit::append_repository_block(text, request) {
             Ok(edited) => Some(edited.into_bytes()),
@@ -391,11 +420,7 @@ fn write_block(
             path: file.to_path_buf(),
         })
         .into()),
-        Appended::Invalid(error) => Err(ConfigError::FileRead {
-            path: file.to_path_buf(),
-            cause: FileCause::Toml(error),
-        }
-        .into()),
+        Appended::Refused(error) => Err(error),
         Appended::NotArrayOfTables => Err(CatalogError::NotArrayOfTables {
             kind: request.kind,
             path: file.to_path_buf(),
@@ -1836,6 +1861,116 @@ path = \"vendor\"
                     if path == Path::new(LOCAL)),
                 "{ended:?}"
             );
+        }
+
+        /// A writer whose update hands the edit `bytes`, as another process may have left the file since the
+        /// first load, and keeps what the edit returns.
+        struct Raced {
+            bytes: Vec<u8>,
+            written: RefCell<Option<Vec<u8>>>,
+        }
+
+        impl Raced {
+            fn with(bytes: &str) -> Self {
+                Self {
+                    bytes: bytes.as_bytes().to_vec(),
+                    written: RefCell::new(None),
+                }
+            }
+        }
+
+        impl WriteFiles for Raced {
+            fn update(&self, _path: &Path, edit: &mut Edit<'_>) -> std::io::Result<bool> {
+                let replacement = edit(Some(&self.bytes));
+                let replaced = replacement.is_some();
+                *self.written.borrow_mut() = replacement;
+                Ok(replaced)
+            }
+        }
+
+        fn add_raced(raced: &Raced, block: &NewBlock<'_>) -> Result<Added, AddError> {
+            let files = Stored::default().with(SHARED, "").with(LOCAL, "");
+            add(&files, raced, Path::new("/ws/alpha"), block, false)
+        }
+
+        #[test]
+        fn a_url_the_file_gained_since_the_load_is_a_duplicate_and_nothing_is_written() {
+            let raced = Raced::with("[[project_repository]]\nurl = \"https://h.invalid/a\"\n");
+
+            let ended = add_raced(&raced, &request("https://h.invalid/a"));
+
+            assert!(matches!(
+                catalog(ended),
+                CatalogError::DuplicateUrl { url, .. } if url == "https://h.invalid/a"
+            ));
+            assert!(raced.written.borrow().is_none());
+        }
+
+        #[test]
+        fn an_unrelated_block_the_file_gained_since_the_load_is_kept_and_appended_to() {
+            let raced = Raced::with("[[project_repository]]\nurl = \"https://h.invalid/other\"\n");
+
+            let ended = add_raced(&raced, &request("https://h.invalid/a"));
+
+            assert!(ended.is_ok(), "{ended:?}");
+            let written = raced.written.borrow().clone().expect("written");
+            let text = String::from_utf8(written).expect("text");
+            assert!(
+                text.starts_with("[[project_repository]]\nurl = \"https://h.invalid/other\"\n")
+            );
+            assert!(text.contains("https://h.invalid/a"));
+        }
+
+        #[test]
+        fn bytes_that_are_not_valid_toml_under_the_lock_are_a_toml_file_read_error() {
+            let raced = Raced::with("a = [\n");
+
+            let ended = add_raced(&raced, &request("https://h.invalid/a"));
+
+            assert!(
+                matches!(
+                    &ended,
+                    Err(AddError::Config(ConfigError::FileRead { path, cause: FileCause::Toml(_) }))
+                        if path == Path::new(SHARED)
+                ),
+                "{ended:?}"
+            );
+            assert!(raced.written.borrow().is_none());
+        }
+
+        #[test]
+        fn a_standalone_the_file_gained_at_the_new_location_since_the_load_is_a_duplicate_path() {
+            let raced =
+                Raced::with("[[standalone_repository]]\nname = \"lib\"\npath = \"vendor\"\n");
+            let block = NewBlock {
+                kind: RepositoryKind::Standalone,
+                path: Some("vendor"),
+                ..request("https://h.invalid/x.git")
+            };
+
+            let ended = add_raced(&raced, &block);
+
+            assert!(matches!(
+                catalog(ended),
+                CatalogError::DuplicatePath { path } if path == "vendor"
+            ));
+            assert!(raced.written.borrow().is_none());
+        }
+
+        #[test]
+        fn a_repository_key_that_is_no_array_under_the_lock_is_refused_and_nothing_is_written() {
+            let raced = Raced::with("project_repository = \"abc\"\n");
+
+            let ended = add_raced(&raced, &request("https://h.invalid/a"));
+
+            assert!(
+                matches!(
+                    &ended,
+                    Err(AddError::Config(ConfigError::RepositoriesNotArray { .. }))
+                ),
+                "{ended:?}"
+            );
+            assert!(raced.written.borrow().is_none());
         }
 
         #[test]
