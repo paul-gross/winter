@@ -23,12 +23,20 @@ pub(crate) fn read(files: &dyn ReadFiles, path: &Path) -> Result<Table, ConfigEr
         return Ok(Table::new());
     }
     match files.read(path) {
-        Ok(Some(bytes)) => toml::from_slice(&bytes)
-            .map_err(|error| file_read(FileCause::Toml(TomlParseError::from(error)))),
+        Ok(Some(bytes)) => parse(path, &bytes),
         // The file went away between the two calls of the port.
         Ok(None) => Err(file_read(FileCause::Io(ErrorKind::NotFound.into()))),
         Err(error) => Err(file_read(FileCause::Io(error))),
     }
+}
+
+/// The table of `bytes` as the content of the configuration file at `path`. Bytes that are not UTF-8 or not
+/// valid TOML are [`ConfigError::FileRead`] with the `Toml` cause.
+pub(crate) fn parse(path: &Path, bytes: &[u8]) -> Result<Table, ConfigError> {
+    toml::from_slice(bytes).map_err(|error| ConfigError::FileRead {
+        path: path.to_path_buf(),
+        cause: FileCause::Toml(TomlParseError::from(error)),
+    })
 }
 
 #[cfg(test)]
