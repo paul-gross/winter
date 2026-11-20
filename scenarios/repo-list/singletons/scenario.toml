@@ -1,0 +1,9 @@
+summary = "The implicit repositories are listed first: product for its directory, then harness for the git directory of context/harness."
+
+[[fixture.git]]
+cwd = "."
+args = ["init", "context/harness"]
+
+[[step]]
+args = ["repo", "list", "--json"]
+stdout = "json"

@@ -1,0 +1,5 @@
+summary = "The projects of the shared file come before those of the local file, each in file order: a pinned one, one named by its URL under an empty name, and two of one name are all listed."
+
+[[step]]
+args = ["repo", "list", "--json"]
+stdout = "json"

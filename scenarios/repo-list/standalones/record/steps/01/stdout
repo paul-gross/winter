@@ -1,0 +1,12 @@
+[
+  {
+    "name": "context",
+    "type": "standalone",
+    "path": "<ROOT>/ws/.winter/ext/context"
+  },
+  {
+    "name": "tools",
+    "type": "standalone",
+    "path": "<ROOT>/ws/tools"
+  }
+]

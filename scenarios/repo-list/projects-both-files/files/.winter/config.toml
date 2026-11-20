@@ -1,0 +1,11 @@
+[[project_repository]]
+name = "web"
+url = "https://fixture.invalid/web.git"
+pinned = true
+
+[[project_repository]]
+name = ""
+url = "https://fixture.invalid/api.git"
+
+[[project_repository]]
+name = "api"

@@ -1,0 +1,20 @@
+[
+  {
+    "name": "web",
+    "type": "project",
+    "main_path": "<ROOT>/ws/projects/web",
+    "pinned": false
+  },
+  {
+    "name": "api",
+    "type": "project",
+    "main_path": "<ROOT>/ws/projects/api",
+    "pinned": false
+  },
+  {
+    "name": "kept",
+    "type": "project",
+    "main_path": "<ROOT>/ws/projects/kept",
+    "pinned": false
+  }
+]

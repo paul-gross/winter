@@ -1,0 +1,10 @@
+f - 89fbd3cff0c0ae16c92e2e63569c5c6f170cdfd2 gitconfig
+d home
+d home/.config
+d remotes
+d ws
+d ws/projects
+d ws/projects/.hidden
+f - da39a3ee5e6b4b0d3255bfef95601890afd80709 ws/projects/.hidden/.gitkeep
+d ws/projects/old
+f - da39a3ee5e6b4b0d3255bfef95601890afd80709 ws/projects/old/.gitkeep

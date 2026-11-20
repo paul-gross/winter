@@ -1,0 +1,5 @@
+summary = "A workspace that declares no repository and holds no implicit one lists an empty array."
+
+[[step]]
+args = ["repo", "list", "--json"]
+stdout = "json"

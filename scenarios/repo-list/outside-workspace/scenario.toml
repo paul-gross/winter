@@ -1,0 +1,5 @@
+summary = "Outside a workspace the list exits 1 and prints no document, whatever lies under projects/."
+
+[[step]]
+args = ["repo", "list", "--json"]
+stdout = "json"
