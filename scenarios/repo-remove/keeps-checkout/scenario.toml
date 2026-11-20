@@ -1,0 +1,22 @@
+summary = "Removing a project declaration leaves its checkout, worktree, branches, and git state unchanged."
+
+[[fixture.remote]]
+name = "api"
+
+[[fixture.remote.commit]]
+message = "Initial API"
+files = { "README.md" = "API fixture\n" }
+
+[[fixture.checkout]]
+remote = "api"
+path = "projects/api"
+
+[[fixture.worktree]]
+checkout = "projects/api"
+path = "alpha/api"
+branch = "alpha"
+start = "main"
+
+[[step]]
+args = ["repo", "remove", "project/api", "--json"]
+stdout = "json"

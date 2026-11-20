@@ -28,12 +28,13 @@ A test file narrower than a row is selected with `--test <subject>` in place of 
 
 ## Manual testing
 
-Three behaviours are exercised by hand. Two cannot be tests of the tree they change, and the third needs SIGINT sent to
-the running binary, which [no test sends](../standards/testing.md#what-a-test-never-does). All run in a scratch copy of
-the checkout under a temporary directory, never in the checkout itself. A method that starts the built binary starts it
-by its path, as [development.md](../tooling/development.md#running-the-built-binary) says.
+The gates and registration exercises cannot be tests of the tree they change; the interrupt exercise needs SIGINT sent
+to the running binary, which [no test sends](../standards/testing.md#what-a-test-never-does). Repository removal also has
+a manual exercise of configuration refusal and checkout preservation. All run in a scratch copy or scratch workspace
+under a temporary directory, never in the checkout itself. A method that starts the built binary starts it by its path,
+as [development.md](../tooling/development.md#running-the-built-binary) says.
 
-The scratch copy needs a git directory of its own, since each method ends by reading its `git status`. A clone of the
+The scratch copy needs a git directory of its own for the checks of its `git status`. A clone of the
 checkout with the change under test applied has one. A plain copy does not when the checkout is a git worktree: its
 `.git` is then a file that points back to the original repository.
 
@@ -129,6 +130,54 @@ on. A binary left waiting ends when the shell that holds descriptor 3 ends, sinc
 
 **Success.** Each case ends as stated, and `git status` of the scratch copy shows only `notice`: git does not list a
 pipe.
+
+### `workspace:manual-repo-remove`
+
+Exercises `repo remove` against inline repository arrays and existing checkouts. Use it when changing removal's text
+edit, file replacement, or command wiring. Component and executable tests cover the same contract automatically; this
+exercise checks the built binary with disposable git repositories.
+
+**Setup.** Build with `cargo build --workspace --locked`, then set `binary` to the absolute path of the resulting
+`target/debug/winter-workspace`. Create a fresh temporary directory outside any real workspace; verify that no ancestor
+holds `.winter/config.toml`. Work only in a new `workspace/` beneath it, with a `.winter/config.toml` made for this run.
+Keep evidence in a sibling `evidence/` directory. Set `OTEL_SDK_DISABLED=true` for every invocation. Never use the
+installed `winter`, a real remote, or an existing checkout or worktree as a fixture.
+
+1. **Shared inline refusal.** Write this as `.winter/config.toml`:
+
+   ```toml
+   project_repository = [{ name = "api", url = "https://fixture.invalid/api.git" }, { name = "web", url = "https://fixture.invalid/web.git" }]
+   ```
+
+   Save a byte-for-byte copy in `../evidence/shared.before`. Run
+   `OTEL_SDK_DISABLED=true "$binary" repo remove project/web --json >../evidence/stdout 2>../evidence/stderr`.
+   Expect exit 1, zero stdout bytes, and a stderr diagnostic naming `project`, `.winter/config.toml`, and
+   `not written as blocks`.
+   `cmp .winter/config.toml ../evidence/shared.before` must exit 0. The URL is only configuration text; do not fetch it.
+2. **Local inline refusal.** Replace the shared file with an empty file and put the same inline declaration in
+   `.winter/config.local.toml`. Save both files in `../evidence/`. Run the same invocation with `--local --json`.
+   Expect exit 1, zero stdout bytes (not a JSON success document), and a diagnostic naming `project`,
+   `.winter/config.local.toml`, and `not written as blocks`. Compare both files with
+   their saved copies using `cmp`: neither may change, including whitespace and comments.
+3. **Checkout preservation.** In the temporary directory create a disposable local git repository with one committed
+   file, clone it to `workspace/projects/docs`, and add a linked worktree using
+   `git -C projects/docs worktree add -b probe ../../env/docs`. Use only this local repository as the remote. Remove
+   the local configuration fixture and write a shared `[[project_repository]]` block with `name = "docs"` and `url`
+   set to that remote's absolute path. Add a tracked modification and an untracked file in each checkout.
+
+   Before removal, save `git -C <checkout> status --porcelain=v1 --untracked-files=all`,
+   `git -C <checkout> show-ref`, and `git -C projects/docs worktree list --porcelain` in `../evidence/`, for both
+   `projects/docs` and `env/docs`. Save copies of both checkout trees, including their `.git` directory or file, outside
+   the workspace. Snapshot the disposable remote's refs too. Run
+   `OTEL_SDK_DISABLED=true "$binary" repo remove project/docs >../evidence/stdout 2>../evidence/stderr`.
+   Expect exit 0, stdout `Removed project repository docs` followed by a newline, and empty stderr. The configuration
+   loses only the selected block. Repeat the git observations and compare with `cmp`; compare each checkout with its
+   saved copy using `diff -r`. Both directories, all tracked and untracked contents, refs, dirty status, and linked
+   worktree registration must remain unchanged; the remote's refs must also remain unchanged.
+
+**Success.** Both refusals preserve configuration bytes and emit no stdout; the successful removal changes only the
+configuration block, not the checkout or worktree state. Keep exit codes, streams, and before/after comparisons as
+evidence. No command in this exercise runs against the real workspace.
 
 ## Tools
 

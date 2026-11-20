@@ -248,12 +248,26 @@ fn the_matrix_declares_its_manual_methods_each_with_its_setup_its_success_and_wh
         [
             "workspace:manual-gates",
             "workspace:manual-registration",
-            "workspace:manual-interrupt"
+            "workspace:manual-interrupt",
+            "workspace:manual-repo-remove"
         ]
     );
     for (id, text) in &methods {
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        for stated in ["**Setup.**", "**Success.**", "scratch copy of the checkout"] {
+        for stated in ["**Setup.**", "**Success.**"] {
+            assert!(text.contains(stated), "{id} does not state {stated}");
+        }
+        let location: &[&str] = if id == "workspace:manual-repo-remove" {
+            &[
+                "fresh temporary directory outside any real workspace",
+                "verify that no ancestor holds `.winter/config.toml`",
+                "Work only in a new `workspace/` beneath it",
+                "with a `.winter/config.toml` made for this run",
+            ]
+        } else {
+            &["scratch copy of the checkout"]
+        };
+        for stated in location {
             assert!(text.contains(stated), "{id} does not state {stated}");
         }
     }

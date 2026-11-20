@@ -1,0 +1,1 @@
+project_repository = [{ url = "https://fixture.invalid/api.git" }, { url = "https://fixture.invalid/web.git" }]

@@ -1,0 +1,16 @@
+summary = "Removing a repository from an inline array is refused without changing the file or git state."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "remove", "project/web", "--json"]
+stdout = "json"
+
+[[compare.file]]
+path = "ws/.winter/config.toml"
+mode = "bytes"
+reason = "decision:parallel-workspaces/repository-catalog/refused-edits leaves the refused file byte-unchanged"
+
+[deviation]
+decision = "decision:parallel-workspaces/repository-catalog/refused-edits"
