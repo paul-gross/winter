@@ -26,8 +26,11 @@ the library is checked like the rest, and so is a comment. A failure names the f
 
 A module reports a condition by handing a `Record` to `diagnostics::record` in `crates/core/src/diagnostics.rs`, with
 the stderr handle and the `Log` of the invocation. That function alone decides whether the record is written and in
-which format; no other module formats a log record or writes one to the stderr handle itself. This rule is checked in
-review: the scan for tokens does not see it.
+which format. A line that is no log record, such as the warning that the declared projects and the directories under
+`projects/` have drifted, goes through `diagnostics::notice` in the same file, which writes it whatever the threshold
+and the format. No other module formats a log record or writes to the stderr handle itself. A domain entry that reports
+takes both the handle and the `Log` as the `Diagnostics` its command file built from its `Context`. This rule is checked
+in review: the scan for tokens does not see it.
 
 The library opens no socket, reads no clock, and names no tracing crate. What it knows of tracing is in
 `crates/core/src/trace.rs`: the settings, read from the environment snapshot at an instant the binary gives it, and the
@@ -89,6 +92,10 @@ Five items of the library carry `#[allow(dead_code, reason = "…")]` permanentl
 `Registration`, and `Entry`. They are contracts that command files fill, and command files are discovered at build time,
 so a tree with no command or no alias reads only part of them and must still pass a gate that denies warnings.
 `#[expect(dead_code)]` is never used on them, because the first command would turn the expectation into a failure.
+
+One field carries the same attribute, for the same reason: `log` of `Diagnostics`, the borrow a command file hands a
+domain entry that reports. An entry that writes only a notice reads the stderr handle alone, and the borrow keeps the
+log for the entry that writes a record.
 
 No other item of the library carries a lint attribute for code that nothing uses. Such code is not written until
 something uses it.

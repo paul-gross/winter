@@ -65,6 +65,18 @@ mod tests {
         fn is_file(&self, path: &Path) -> bool {
             self.files.is_file(path)
         }
+
+        fn exists(&self, path: &Path) -> bool {
+            self.files.exists(path)
+        }
+
+        fn is_dir(&self, path: &Path) -> bool {
+            self.files.is_dir(path)
+        }
+
+        fn entries(&self, path: &Path) -> std::io::Result<Vec<std::ffi::OsString>> {
+            self.files.entries(path)
+        }
     }
 
     #[test]

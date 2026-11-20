@@ -15,6 +15,18 @@ pub(crate) trait ReadFiles {
 
     /// Whether `path` is a regular file, with symbolic links followed.
     fn is_file(&self, path: &Path) -> bool;
+
+    /// Whether there is an entry at `path`, with symbolic links followed: a link whose target is gone does
+    /// not exist.
+    fn exists(&self, path: &Path) -> bool;
+
+    /// Whether `path` is a directory, with symbolic links followed.
+    fn is_dir(&self, path: &Path) -> bool;
+
+    /// The names of the entries of the directory `path`, with symbolic links followed, in no fixed order. A
+    /// name that starts with `.` is among them; `.` and `..` are not. A `path` that is no directory, or one
+    /// that cannot be listed, is an error.
+    fn entries(&self, path: &Path) -> io::Result<Vec<OsString>>;
 }
 
 /// What one update does to a file: it gets the current bytes, `None` when no such file exists, and returns the
@@ -53,6 +65,20 @@ impl ReadFiles for OsFiles {
 
     fn is_file(&self, path: &Path) -> bool {
         std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        std::fs::metadata(path).is_ok()
+    }
+
+    fn is_dir(&self, path: &Path) -> bool {
+        std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
+    }
+
+    fn entries(&self, path: &Path) -> io::Result<Vec<OsString>> {
+        std::fs::read_dir(path)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect()
     }
 }
 
@@ -162,9 +188,13 @@ fn write_whole(mut file: std::fs::File, mode: Option<u32>, content: &[u8]) -> io
 }
 
 /// Files held in memory, for the unit tests of the modules that read through the port.
+///
+/// Each path holds one entry. Every directory above an added path is a directory, unless an entry was added
+/// there. The reads follow a symbolic link, at any part of a path, as [`OsFiles`] does: its target text is read
+/// from the directory that holds the link.
 #[cfg(test)]
 #[derive(Default)]
-pub(crate) struct MemoryFiles(std::collections::BTreeMap<std::path::PathBuf, MemoryEntry>);
+pub(crate) struct MemoryFiles(std::collections::BTreeMap<PathBuf, MemoryEntry>);
 
 /// One entry of [`MemoryFiles`].
 #[cfg(test)]
@@ -173,49 +203,154 @@ enum MemoryEntry {
     File(Vec<u8>),
     /// A regular file whose every read fails.
     FailingFile(io::ErrorKind),
-    /// An entry that is no regular file, and whose every read fails.
+    /// An entry that is no regular file and no directory, and whose every read fails.
     NotAFile(io::ErrorKind),
+    /// A directory.
+    Dir,
+    /// A directory whose listing fails.
+    FailingDir(io::ErrorKind),
+    /// A symbolic link with its target text.
+    Link(PathBuf),
 }
 
 #[cfg(test)]
 impl MemoryFiles {
+    /// How many symbolic links one read follows before it takes the path for one that leads nowhere.
+    const LINKS_FOLLOWED: usize = 40;
+
     /// Adds the regular file `path` with `content`.
-    pub(crate) fn with(mut self, path: &str, content: &[u8]) -> Self {
-        self.0
-            .insert(path.into(), MemoryEntry::File(content.to_vec()));
-        self
+    pub(crate) fn with(self, path: &str, content: &[u8]) -> Self {
+        self.holding(path, MemoryEntry::File(content.to_vec()))
     }
 
     /// Adds the regular file `path`, which fails every read with `kind`.
-    pub(crate) fn failing(mut self, path: &str, kind: io::ErrorKind) -> Self {
-        self.0.insert(path.into(), MemoryEntry::FailingFile(kind));
+    pub(crate) fn failing(self, path: &str, kind: io::ErrorKind) -> Self {
+        self.holding(path, MemoryEntry::FailingFile(kind))
+    }
+
+    /// Adds an entry at `path` that exists, is no regular file and no directory, and fails every read with
+    /// `kind`.
+    pub(crate) fn unreadable(self, path: &str, kind: io::ErrorKind) -> Self {
+        self.holding(path, MemoryEntry::NotAFile(kind))
+    }
+
+    /// Adds the directory `path`.
+    pub(crate) fn dir(self, path: &str) -> Self {
+        self.holding(path, MemoryEntry::Dir)
+    }
+
+    /// Adds the directory `path`, whose listing fails with `kind`.
+    pub(crate) fn failing_dir(self, path: &str, kind: io::ErrorKind) -> Self {
+        self.holding(path, MemoryEntry::FailingDir(kind))
+    }
+
+    /// Adds the symbolic link `path` with the target text `target`.
+    pub(crate) fn link(self, path: &str, target: &str) -> Self {
+        self.holding(path, MemoryEntry::Link(target.into()))
+    }
+
+    /// Puts `entry` at `path`, and a directory at every path above it that holds no entry yet.
+    fn holding(mut self, path: &str, entry: MemoryEntry) -> Self {
+        let path = PathBuf::from(path);
+        for above in path.ancestors().skip(1) {
+            if !above.as_os_str().is_empty() {
+                self.0
+                    .entry(above.to_path_buf())
+                    .or_insert(MemoryEntry::Dir);
+            }
+        }
+        self.0.insert(path, entry);
         self
     }
 
-    /// Adds an entry at `path` that exists, is no regular file, and fails every read with `kind`.
-    pub(crate) fn unreadable(mut self, path: &str, kind: io::ErrorKind) -> Self {
-        self.0.insert(path.into(), MemoryEntry::NotAFile(kind));
-        self
+    /// Where `path` leads with every symbolic link followed, or `None` when it follows more links than a read
+    /// does. The path answered need not hold an entry.
+    fn followed(&self, path: &Path) -> Option<PathBuf> {
+        let mut ahead: std::collections::VecDeque<PathBuf> = parts(path).collect();
+        let mut at = PathBuf::new();
+        let mut links = 0;
+        while let Some(part) = ahead.pop_front() {
+            if part == Path::new("..") {
+                at.pop();
+                continue;
+            }
+            // A root replaces what was walked so far, which is how an absolute target leaves its directory.
+            at.push(part);
+            if let Some(MemoryEntry::Link(target)) = self.0.get(&at) {
+                links += 1;
+                if links > Self::LINKS_FOLLOWED {
+                    return None;
+                }
+                at.pop();
+                for part in parts(target).rev() {
+                    ahead.push_front(part);
+                }
+            }
+        }
+        Some(at)
     }
+
+    /// The entry `path` leads to with every symbolic link followed, and the path that holds it.
+    fn entry(&self, path: &Path) -> Option<(PathBuf, &MemoryEntry)> {
+        let at = self.followed(path)?;
+        let entry = self.0.get(&at)?;
+        Some((at, entry))
+    }
+}
+
+/// The parts of `path` a walk takes one at a time: its root, its names, and each `..`.
+#[cfg(test)]
+fn parts(path: &Path) -> impl DoubleEndedIterator<Item = PathBuf> + '_ {
+    path.components()
+        .filter(|part| !matches!(part, std::path::Component::CurDir))
+        .map(|part| PathBuf::from(part.as_os_str()))
 }
 
 #[cfg(test)]
 impl ReadFiles for MemoryFiles {
     fn read(&self, path: &Path) -> io::Result<Option<Vec<u8>>> {
-        match self.0.get(path) {
-            Some(MemoryEntry::File(bytes)) => Ok(Some(bytes.clone())),
-            Some(MemoryEntry::FailingFile(kind) | MemoryEntry::NotAFile(kind)) => {
+        match self.entry(path) {
+            Some((_, MemoryEntry::File(bytes))) => Ok(Some(bytes.clone())),
+            Some((_, MemoryEntry::FailingFile(kind) | MemoryEntry::NotAFile(kind))) => {
                 Err(io::Error::from(*kind))
             }
-            None => Ok(None),
+            Some((_, MemoryEntry::Dir | MemoryEntry::FailingDir(_))) => {
+                Err(io::Error::from(io::ErrorKind::IsADirectory))
+            }
+            Some((_, MemoryEntry::Link(_))) | None => Ok(None),
         }
     }
 
     fn is_file(&self, path: &Path) -> bool {
         matches!(
-            self.0.get(path),
-            Some(MemoryEntry::File(_) | MemoryEntry::FailingFile(_))
+            self.entry(path),
+            Some((_, MemoryEntry::File(_) | MemoryEntry::FailingFile(_)))
         )
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        self.entry(path).is_some()
+    }
+
+    fn is_dir(&self, path: &Path) -> bool {
+        matches!(
+            self.entry(path),
+            Some((_, MemoryEntry::Dir | MemoryEntry::FailingDir(_)))
+        )
+    }
+
+    fn entries(&self, path: &Path) -> io::Result<Vec<OsString>> {
+        match self.entry(path) {
+            Some((directory, MemoryEntry::Dir)) => Ok(self
+                .0
+                .keys()
+                .filter(|held| held.parent() == Some(directory.as_path()))
+                .filter_map(|held| held.file_name().map(OsString::from))
+                .collect()),
+            Some((_, MemoryEntry::FailingDir(kind))) => Err(io::Error::from(*kind)),
+            Some(_) => Err(io::Error::from(io::ErrorKind::NotADirectory)),
+            None => Err(io::Error::from(io::ErrorKind::NotFound)),
+        }
     }
 }
 
@@ -444,5 +579,168 @@ mod tests {
         assert_eq!(asked, 0, "the edit was asked before the lock was taken");
         assert_eq!(std::fs::read(&target).expect("the target"), b"a = 1\n");
         assert_eq!(names(&directory), ["config.toml"]);
+    }
+
+    /// A tree of each kind of entry the reads tell apart, on the file system, and its root.
+    fn kinds_on_disk(tree: &TempTree) -> PathBuf {
+        let root = tree.root().join("kinds");
+        std::fs::create_dir_all(root.join("dir/inner")).expect("directories");
+        std::fs::write(root.join("file"), b"content").expect("a file");
+        std::fs::write(root.join("dir/plain"), b"").expect("a file");
+        std::fs::write(root.join("dir/.hidden"), b"").expect("a dot-entry");
+        for (link, target) in [("to-file", "file"), ("to-dir", "dir"), ("dangling", "gone")] {
+            std::os::unix::fs::symlink(target, root.join(link)).expect("a link");
+        }
+        root
+    }
+
+    /// The same tree held in memory.
+    fn kinds_in_memory() -> (MemoryFiles, PathBuf) {
+        let files = MemoryFiles::default()
+            .with("/kinds/file", b"content")
+            .dir("/kinds/dir/inner")
+            .with("/kinds/dir/plain", b"")
+            .with("/kinds/dir/.hidden", b"")
+            .link("/kinds/to-file", "file")
+            .link("/kinds/to-dir", "dir")
+            .link("/kinds/dangling", "gone");
+        (files, PathBuf::from("/kinds"))
+    }
+
+    /// Asserts what the reads of `files` answer for each kind of entry under `root`.
+    fn assert_the_reads_tell_the_kinds_apart(files: &dyn ReadFiles, root: &Path) {
+        for (name, exists, is_file, is_dir) in [
+            ("file", true, true, false),
+            ("dir", true, false, true),
+            ("to-file", true, true, false),
+            ("to-dir", true, false, true),
+            ("dangling", false, false, false),
+            ("absent", false, false, false),
+        ] {
+            let path = root.join(name);
+            assert_eq!(files.exists(&path), exists, "exists: {name}");
+            assert_eq!(files.is_file(&path), is_file, "is_file: {name}");
+            assert_eq!(files.is_dir(&path), is_dir, "is_dir: {name}");
+        }
+        for directory in ["dir", "to-dir"] {
+            let mut entries = files
+                .entries(&root.join(directory))
+                .expect("a listed directory");
+            entries.sort();
+            assert_eq!(entries, [".hidden", "inner", "plain"], "{directory}");
+        }
+        for (name, kind) in [
+            ("absent", io::ErrorKind::NotFound),
+            ("dangling", io::ErrorKind::NotFound),
+            ("file", io::ErrorKind::NotADirectory),
+        ] {
+            assert_eq!(
+                files
+                    .entries(&root.join(name))
+                    .map_err(|error| error.kind()),
+                Err(kind),
+                "{name}"
+            );
+        }
+        assert!(files.is_file(&root.join("to-dir/plain")), "through a link");
+        assert_eq!(
+            files
+                .read(&root.join("to-file"))
+                .expect("a read through a link"),
+            Some(b"content".to_vec())
+        );
+        assert!(matches!(files.read(&root.join("dangling")), Ok(None)));
+    }
+
+    #[test]
+    fn the_reads_of_the_file_system_tell_a_file_a_directory_and_a_link_to_each_apart() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let root = kinds_on_disk(&tree);
+
+        assert_the_reads_tell_the_kinds_apart(&OsFiles, &root);
+    }
+
+    #[test]
+    fn the_reads_of_the_memory_files_tell_a_file_a_directory_and_a_link_to_each_apart() {
+        let (files, root) = kinds_in_memory();
+
+        assert_the_reads_tell_the_kinds_apart(&files, &root);
+    }
+
+    #[test]
+    fn a_directory_above_an_added_path_is_a_directory_of_the_memory_files() {
+        let files = MemoryFiles::default().with("/ws/.winter/config.toml", b"");
+
+        for above in ["/", "/ws", "/ws/.winter"] {
+            assert!(files.is_dir(Path::new(above)), "{above}");
+            assert!(!files.is_file(Path::new(above)), "{above}");
+        }
+        assert_eq!(
+            files.entries(Path::new("/ws")).expect("a listing"),
+            [".winter"]
+        );
+        assert_eq!(
+            files
+                .read(Path::new("/ws/.winter"))
+                .map_err(|error| error.kind()),
+            Err(io::ErrorKind::IsADirectory)
+        );
+    }
+
+    #[test]
+    fn an_entry_that_fails_reads_is_no_directory_and_a_failing_directory_is_one() {
+        let files = MemoryFiles::default()
+            .unreadable("/ws/odd", io::ErrorKind::PermissionDenied)
+            .failing("/ws/file", io::ErrorKind::PermissionDenied)
+            .failing_dir("/ws/shut", io::ErrorKind::PermissionDenied);
+
+        for (path, exists, is_file, is_dir, listing) in [
+            ("/ws/odd", true, false, false, io::ErrorKind::NotADirectory),
+            ("/ws/file", true, true, false, io::ErrorKind::NotADirectory),
+            (
+                "/ws/shut",
+                true,
+                false,
+                true,
+                io::ErrorKind::PermissionDenied,
+            ),
+        ] {
+            let path = Path::new(path);
+            assert_eq!(files.exists(path), exists, "{path:?}");
+            assert_eq!(files.is_file(path), is_file, "{path:?}");
+            assert_eq!(files.is_dir(path), is_dir, "{path:?}");
+            assert_eq!(
+                files.entries(path).map_err(|error| error.kind()),
+                Err(listing),
+                "{path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_link_of_the_memory_files_is_followed_from_its_own_directory_and_a_loop_leads_nowhere() {
+        let files = MemoryFiles::default()
+            .with("/ws/real/file", b"x")
+            .link("/ws/links/up", "../real")
+            .link("/ws/links/absolute", "/ws/real/file")
+            .link("/ws/links/again", "up/file")
+            .link("/ws/links/loop", "loop");
+
+        for path in [
+            "/ws/links/up/file",
+            "/ws/links/absolute",
+            "/ws/links/again",
+            "/ws/links/./up/../real/file",
+        ] {
+            assert!(files.is_file(Path::new(path)), "{path}");
+        }
+        // `..` after a link is the directory above the link's target, not the one that holds the link.
+        assert!(!files.exists(Path::new("/ws/links/up/../up")));
+        assert!(!files.exists(Path::new("/ws/links/loop")));
+        let mut entries = files
+            .entries(Path::new("/ws/links"))
+            .expect("a listed directory");
+        entries.sort();
+        assert_eq!(entries, ["absolute", "again", "loop", "up"]);
     }
 }

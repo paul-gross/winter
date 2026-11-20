@@ -82,7 +82,9 @@ Logic that two commands share lives in a domain module, never under `commands/`.
   Termination>` and reads a value the node's parser requires or defaults through `arguments::required`. When the parsed
   arguments do not hold that value the fault is the node's own parser, so `required` answers an internal failure, which
   `run` returns; a command file builds no usage error for it;
-- one call into a domain module, which is handed `cx.files`, `cx.file_writer`, and `cx.cwd` as they are;
+- one call into a domain module, which is handed `cx.files`, `cx.file_writer`, and `cx.cwd` as they are. For a domain
+  entry that reports on stderr, the file builds a `Diagnostics` from `cx.err` and `cx.log` and hands it to that call.
+  The entry writes its notices and records through it, and the command file writes none;
 - the mapping of that call's typed outcome to a `Termination`;
 - the text of the human line and the fields of the `--json` document, written as [below](#writing-the-result).
 
@@ -98,12 +100,12 @@ handler, and there `pending` stays false.
 
 A command file names none of these:
 
-| Area                                 | Names a command file may not hold                                                                                                  |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| The file port                        | `ReadFiles`, `WriteFiles`, `OsFiles`                                                                                               |
-| Modules a domain entry stands on     | `workspace_root`, `workspace_files`, `config_file`, `config_load`, `config_merge`, `config_model`, `config_edit`, `state_registry` |
-| File formats                         | `toml::`, `toml_edit`                                                                                                              |
-| Writing, and how a failed write ends | `writeln!`, `write!(`, `to_writer`, `InternalError`, `Backtrace`                                                                   |
+| Area                                 | Names a command file may not hold                                                                                                           |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| The file port                        | `ReadFiles`, `WriteFiles`, `OsFiles`                                                                                                        |
+| Modules a domain entry stands on     | `workspace_root`, `workspace_files`, `config_file`, `config_load`, `config_merge`, `config_model`, `config_edit`, `state_registry`, `drift` |
+| File formats                         | `toml::`, `toml_edit`                                                                                                                       |
+| Writing, and how a failed write ends | `writeln!`, `write!(`, `to_writer`, `InternalError`, `Backtrace`                                                                            |
 
 The architecture test checks the names by scanning each file under `crates/core/src/commands/` as text. A test module
 and a comment are checked like the rest, and a failure names the file, the line, and the name.
@@ -135,8 +137,9 @@ The verifiability matrix has a manual method for a change to discovery itself:
 ### Writing the result
 
 `run` ends by writing its result through `crates/core/src/output.rs`, and returns what that call returns:
-`output::document` with the document under `--json`, and `output::line` with the human line otherwise. The command file
-builds the value and the text, and never writes to a handle itself or inspects a write error. The parser writes nothing:
+`output::document` with the document under `--json`, and otherwise `output::line` with the human line, or `output::text`
+with a human result of several lines, each ended by its newline, and of no line at all. The command file builds the
+value and the text, and never writes to a handle itself or inspects a write error. The parser writes nothing:
 `crates/core/src/process.rs` writes the help and the version line the parser answers through the same module, with
 `output::text` and `output::line`.
 
@@ -164,8 +167,15 @@ name from `lib.rs`.
 
 The function a command file calls, the module's entry, returns a typed value or the module's failure, never a
 `Termination`. The command file maps the failure: `repository_catalog::remove` fails with `RemoveError`, a sum of the
-module's own that the command file takes apart into `Termination::Command` and `Termination::Config`, and
-`index_lookup::answer` fails with `ConfigError` alone, which becomes `Termination::Config`.
+module's own that the command file takes apart into `Termination::Command` and `Termination::Config`,
+`index_lookup::answer` fails with `ConfigError` alone, which becomes `Termination::Config`, and
+`repository_catalog::list` fails with `ListError`, whose two variants become `Termination::Config` and
+`Termination::Internal`: the command file boxes what each variant carries, and so never names the type of an internal
+failure.
+
+An entry that reports a condition on stderr takes a `&mut Diagnostics`, the borrow of the stderr handle and the log its
+command file built, and writes through `crates/core/src/diagnostics.rs`: `repository_catalog::list` writes the drift
+notice that way before it returns its list. `Diagnostics` is no port: no `Context` and no `Invocation` carries it.
 
 ## An error
 

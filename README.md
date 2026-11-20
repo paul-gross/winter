@@ -78,6 +78,10 @@ Log records go to stderr. Without a switch the threshold is `WARNING`. `-v` logs
 `WINTER_LOG_LEVEL` sets the threshold by name, in any letter case: `DEBUG`, `INFO`, `WARNING` or `WARN`, `ERROR`,
 `CRITICAL` or `FATAL`, and `NOTSET`, which leaves the threshold at `WARNING`. Any other value is ignored silently.
 
+A warning that is no log record is written to stderr whatever the threshold. `repo list` writes one when the projects
+the configuration declares and the directories under `projects/` disagree: one line that names the declared projects
+with no directory and the directories no project declares.
+
 ## Contributing
 
 [AGENTS.md](./AGENTS.md) is the entry point for contributors and their agents. [PRINCIPLES.md](./PRINCIPLES.md) states
