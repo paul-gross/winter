@@ -1,0 +1,6 @@
+# workspace configuration
+[[project_repository]]
+name = "web"
+
+[[project_repository]]
+name = "api"

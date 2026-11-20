@@ -9,7 +9,7 @@ use crate::diagnostics::{self, Diagnostics};
 use crate::drift;
 use crate::files::{ReadFiles, WriteFiles};
 use crate::termination::{ConfigError, FileCause, InternalError, TomlParseError};
-use crate::workspace_files::{CONFIG_FILE, LOCAL_CONFIG_FILE, PROJECTS_DIR};
+use crate::workspace_files::{CONFIG_FILE, LOCAL_CONFIG_FILE, PROJECTS_DIR, location};
 
 /// The directory of the implicit repository `product`, relative to a workspace root.
 const PRODUCT_DIR: &str = "product";
@@ -119,12 +119,6 @@ pub(crate) fn list(
         root,
         entries: listed,
     })
-}
-
-/// `relative` under `root`, as a join of the two and nothing more: a repeated `/`, a `.` part, and a trailing
-/// `/` are dropped, a `..` part is kept, and an absolute `relative` replaces the root.
-fn location(root: &Path, relative: &Path) -> PathBuf {
-    root.join(relative).components().collect()
 }
 
 /// The repository a removal took out of a configuration file: the two parts of its target.

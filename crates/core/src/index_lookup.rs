@@ -21,9 +21,7 @@ pub(crate) fn answer(
     let workspace = config_load::load(files, start)?;
     let registry = state_registry::read(files, &workspace.root)?;
     let ports = &workspace.config.ports;
-    // A band wider than the 65536 values of the hash gives every name the slot a still wider band gives it,
-    // so a count beyond `u32` is looked up as the largest `u32`.
-    let envs_per_workspace = u32::try_from(ports.envs_per_workspace).unwrap_or(u32::MAX);
+    let envs_per_workspace = env_index::slot_count(ports.envs_per_workspace);
     Ok(env_index::lookup(
         name,
         &ports.env_aliases,

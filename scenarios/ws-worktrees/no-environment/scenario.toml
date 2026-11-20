@@ -1,0 +1,5 @@
+summary = "A workspace with no environment lists only the workspace."
+
+[[step]]
+args = ["ws", "worktrees", "--json"]
+stdout = "json"

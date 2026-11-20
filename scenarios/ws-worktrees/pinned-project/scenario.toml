@@ -1,0 +1,5 @@
+summary = "A pinned project is listed like any other."
+
+[[step]]
+args = ["ws", "worktrees", "--json"]
+stdout = "json"
