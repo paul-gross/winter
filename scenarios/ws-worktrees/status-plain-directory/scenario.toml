@@ -1,0 +1,5 @@
+summary = "A worktree location that is a plain directory has the counts zero."
+
+[[step]]
+args = ["ws", "worktrees", "--status", "--json"]
+stdout = "json"

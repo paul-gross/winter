@@ -1,0 +1,30 @@
+repository
+    ws
+    kind: main
+dot-git
+    directory
+head
+    9aac8bad83a86904e6db3417ecaa23ff8af7cd9b
+    refs/heads/main
+refs
+    refs/heads/main 9aac8bad83a86904e6db3417ecaa23ff8af7cd9b  
+worktrees
+    worktree <ROOT>/ws
+    HEAD 9aac8bad83a86904e6db3417ecaa23ff8af7cd9b
+    branch refs/heads/main
+    
+status
+    # branch.oid 9aac8bad83a86904e6db3417ecaa23ff8af7cd9b
+    # branch.head main
+    1 AM N... 000000 100644 100644 0000000000000000000000000000000000000000 19d9cc8584ac2c7dcf57d2680375e80f099dc481 draft.txt
+stash
+config
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    9aac8bad83a86904e6db3417ecaa23ff8af7cd9b  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Workspace root

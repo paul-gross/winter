@@ -1,0 +1,31 @@
+summary = "The workspace root on a branch with an upstream counts its commits ahead of and behind that upstream."
+
+[fixture]
+workspace_git = true
+
+[[fixture.remote]]
+name = "hub"
+
+[[fixture.remote.commit]]
+message = "Initial hub"
+files = { "README.md" = "hub fixture\n" }
+
+[[fixture.remote.commit]]
+message = "Second hub"
+files = { "notes.txt" = "hub notes\n" }
+
+[[fixture.git]]
+cwd = "."
+args = ["remote", "add", "origin", "https://fixture.invalid/hub.git"]
+
+[[fixture.git]]
+cwd = "."
+args = ["fetch", "--quiet", "origin"]
+
+[[fixture.git]]
+cwd = "."
+args = ["branch", "--quiet", "--set-upstream-to=origin/main"]
+
+[[step]]
+args = ["ws", "worktrees", "--status", "--json"]
+stdout = "json"

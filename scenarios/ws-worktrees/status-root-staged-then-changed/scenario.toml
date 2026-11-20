@@ -1,0 +1,13 @@
+summary = "A file of the workspace root that is staged and then changed counts as one dirty path."
+
+[fixture]
+workspace_git = true
+gitignore = "draft.txt\n"
+
+[[fixture.git]]
+cwd = "."
+args = ["add", "--force", "draft.txt"]
+
+[[step]]
+args = ["ws", "worktrees", "--status", "--json"]
+stdout = "json"

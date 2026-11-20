@@ -15,9 +15,10 @@ cargo build
 
 The binary is written to `target/debug/winter-workspace`.
 
-`repo add` and `repo remove` edit the workspace configuration it finds at or above the working directory. [AGENTS.md](./AGENTS.md)
-states where the binary may run. It is on no `PATH`: from a directory that rule permits, it is started by its path, as
-in `<checkout>/target/debug/winter-workspace --help`, where `<checkout>` is the path of the repository root.
+`repo add` and `repo remove` edit the workspace configuration it finds at or above the working directory.
+[AGENTS.md](./AGENTS.md) states where the binary may run. It is on no `PATH`: from a directory that rule permits, it is
+started by its path, as in `<checkout>/target/debug/winter-workspace --help`, where `<checkout>` is the path of the
+repository root.
 
 `repo remove <type>/<name>` removes a `[[project_repository]]` or `[[standalone_repository]]` block from the shared
 configuration (`--local` selects the local file). Inline arrays such as `project_repository = [{ ... }]` are refused:
@@ -28,6 +29,15 @@ checkouts, linked worktrees, their contents, and git state are preserved.
 block with `--standalone`; `--local` writes the machine-local file, which is created when absent. Inline arrays such as
 `project_repository = [{ ... }]` are refused without changing the file. Adding edits configuration only: nothing is
 cloned.
+
+`ws worktrees --status` adds the git counts of each location: the commits ahead of and behind the main branch of
+`origin` and the number of dirty files for a worktree, the same against the upstream of its branch for the workspace
+root, and none for a standalone. It runs the `git` found on `PATH`, searching `/bin` and then `/usr/bin` when `PATH` is
+unset. Git gets the environment the binary was given, less `WINTER_LAUNCH_TIME`, with `GIT_SSH_COMMAND` set to `ssh -o
+ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3` unless the environment already sets it, an empty
+value included, and with `LANGUAGE` and `LC_ALL` set to `C`. A git call that fails for a worktree ends the command with
+exit code 1: nothing is written to stdout, and the failure is written once to stderr, and once more as a log record
+under `-v`.
 
 ## Tracing, exit codes, and logging
 
@@ -73,11 +83,11 @@ and it is off unless the environment switches it on.
 
 ### Exit codes
 
-| Code | Meaning     | When                                                                                                          |
-| ---- | ----------- | ------------------------------------------------------------------------------------------------------------- |
-| `0`  | Success     | A command completed; `--help`; `--version`.                                                                   |
-| `1`  | Failure     | A command failed; a configuration error; a stdout that cannot be written; an internal failure; an interrupt.  |
-| `2`  | Usage error | An unknown command or option, a missing or unexpected argument, or no command: the bare root or a bare group. |
+| Code | Meaning     | When                                                                                                                            |
+| ---- | ----------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | Success     | A command completed; `--help`; `--version`.                                                                                     |
+| `1`  | Failure     | A command failed; a configuration error; a failed git call; a stdout that cannot be written; an internal failure; an interrupt. |
+| `2`  | Usage error | An unknown command or option, a missing or unexpected argument, or no command: the bare root or a bare group.                   |
 
 An interrupt, Ctrl-C, ends the invocation at once with the notice `aborted` on stderr and exit code 1, not 130. A
 process that was started with the interrupt signal ignored leaves it ignored, and an interrupt does nothing to it.

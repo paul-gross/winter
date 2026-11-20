@@ -1,0 +1,20 @@
+summary = "A standalone has no counts, though it is a repository with an untracked file."
+
+[[fixture.remote]]
+name = "tools"
+
+[[fixture.remote.commit]]
+message = "Initial tools"
+files = { "README.md" = "tools fixture\n" }
+
+[[fixture.remote.commit]]
+message = "Second tools"
+files = { "notes.txt" = "tools notes\n" }
+
+[[fixture.checkout]]
+remote = "tools"
+path = "tools"
+
+[[step]]
+args = ["ws", "worktrees", "--status", "--json"]
+stdout = "json"

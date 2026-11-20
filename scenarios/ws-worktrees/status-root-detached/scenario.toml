@@ -1,0 +1,12 @@
+summary = "The workspace root with a detached HEAD has no counts."
+
+[fixture]
+workspace_git = true
+
+[[fixture.git]]
+cwd = "."
+args = ["checkout", "--quiet", "--detach"]
+
+[[step]]
+args = ["ws", "worktrees", "--status", "--json"]
+stdout = "json"

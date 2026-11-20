@@ -1,0 +1,10 @@
+f - 89fbd3cff0c0ae16c92e2e63569c5c6f170cdfd2 gitconfig
+d home
+d home/.config
+d remotes
+d ws
+d ws/.git
+f - ae64568cd5fa6eb4d26ec20c836eb2865df4b1e9 ws/.gitignore
+d ws/.winter
+f - ddbe62bbc9b869f2abcb5abd536e0827590788de ws/.winter/config.toml
+f - 2f6933b5ee0f5fdd823d9717d8729f3c2523811b ws/draft.txt

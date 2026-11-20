@@ -1,0 +1,16 @@
+summary = "The workspace root on a branch whose upstream is a local branch has no counts."
+
+[fixture]
+workspace_git = true
+
+[[fixture.git]]
+cwd = "."
+args = ["branch", "side"]
+
+[[fixture.git]]
+cwd = "."
+args = ["branch", "--quiet", "--set-upstream-to=side"]
+
+[[step]]
+args = ["ws", "worktrees", "--status", "--json"]
+stdout = "json"

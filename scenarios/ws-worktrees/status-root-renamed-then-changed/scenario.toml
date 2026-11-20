@@ -1,0 +1,12 @@
+summary = "A file renamed in the index of the workspace root and then changed under its new name counts as one dirty path."
+
+[fixture]
+workspace_git = true
+
+[[fixture.git]]
+cwd = "."
+args = ["mv", "old.txt", "new.txt"]
+
+[[step]]
+args = ["ws", "worktrees", "--status", "--json"]
+stdout = "json"

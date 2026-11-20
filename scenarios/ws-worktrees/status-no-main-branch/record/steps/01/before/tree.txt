@@ -1,0 +1,18 @@
+f - 89fbd3cff0c0ae16c92e2e63569c5c6f170cdfd2 gitconfig
+d home
+d home/.config
+d remotes
+d remotes/web.git
+d ws
+d ws/.winter
+f - ccdd6da43a7c68060bdeec6e4c8333f7a41a4c14 ws/.winter/config.toml
+d ws/alpha
+d ws/alpha/web
+f - 5778fd4c2860b4c68d9d76a3b8f7cd441c3f2662 ws/alpha/web/.git
+f - f190251830ebb1021414f94b51e978da5df3c3c4 ws/alpha/web/README.md
+f - 3a1cc0773990297ecda98ac5980e10c5e294292b ws/alpha/web/notes.txt
+d ws/projects
+d ws/projects/web
+d ws/projects/web/.git
+f - f190251830ebb1021414f94b51e978da5df3c3c4 ws/projects/web/README.md
+f - 3a1cc0773990297ecda98ac5980e10c5e294292b ws/projects/web/notes.txt

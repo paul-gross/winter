@@ -1,0 +1,35 @@
+f - 89fbd3cff0c0ae16c92e2e63569c5c6f170cdfd2 gitconfig
+d home
+d home/.config
+d remotes
+d remotes/api.git
+d remotes/lib.git
+d remotes/web.git
+d ws
+d ws/.winter
+f - 38126d2ff3e389eb46e65037457d61b9d28da79c ws/.winter/config.toml
+d ws/alpha
+d ws/alpha/api
+f - d85d51708ebd1761babf94b3d6ce7df436b32fc9 ws/alpha/api/.git
+f - c998aa1f9237caabbd4fac35daa3a48ce8ff4ba7 ws/alpha/api/README.md
+d ws/alpha/lib
+f - 51fcab0c2d917de35ba6df4d4857a5df186b82a1 ws/alpha/lib/.git
+f - 3b782138930ab1c12cb49cd77ba066ebe0fd3ef0 ws/alpha/lib/README.md
+f - e95197dd7988bd896dc29644f23b7105c0bd7663 ws/alpha/lib/notes.txt
+d ws/alpha/web
+f - 5778fd4c2860b4c68d9d76a3b8f7cd441c3f2662 ws/alpha/web/.git
+f - f190251830ebb1021414f94b51e978da5df3c3c4 ws/alpha/web/README.md
+f - 3a1cc0773990297ecda98ac5980e10c5e294292b ws/alpha/web/notes.txt
+d ws/projects
+d ws/projects/api
+d ws/projects/api/.git
+f - c998aa1f9237caabbd4fac35daa3a48ce8ff4ba7 ws/projects/api/README.md
+f - e1f852d641101f91e257b6bb80d3429e8ee3eace ws/projects/api/notes.txt
+d ws/projects/lib
+d ws/projects/lib/.git
+f - 3b782138930ab1c12cb49cd77ba066ebe0fd3ef0 ws/projects/lib/README.md
+f - e95197dd7988bd896dc29644f23b7105c0bd7663 ws/projects/lib/notes.txt
+d ws/projects/web
+d ws/projects/web/.git
+f - f190251830ebb1021414f94b51e978da5df3c3c4 ws/projects/web/README.md
+f - 3a1cc0773990297ecda98ac5980e10c5e294292b ws/projects/web/notes.txt

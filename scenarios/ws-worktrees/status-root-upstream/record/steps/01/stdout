@@ -1,0 +1,13 @@
+[
+  {
+    "kind": "workspace",
+    "env": null,
+    "repo": null,
+    "name": "ws",
+    "label": "<workspace>",
+    "path": "<ROOT>/ws",
+    "ahead": 1,
+    "behind": 2,
+    "dirty": 0
+  }
+]
