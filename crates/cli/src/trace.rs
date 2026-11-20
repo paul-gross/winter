@@ -473,10 +473,10 @@ fn exporter_key(name: &str) -> String {
 
 /// An exporter that keeps what `exporter` answers to an export, for the export thread to read once the span has
 /// ended: the processor that calls it reports that answer to no one.
-#[derive(Debug)]
 ///
 /// It also holds the operation spans, which end before the command span, until the command span's export, and
 /// sends them in it: the invocation makes one export.
+#[derive(Debug)]
 struct Keeping<E> {
     exporter: E,
     kept: Kept,

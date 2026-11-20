@@ -12,7 +12,8 @@ use crate::termination::Usage;
 use crate::trace::CommandTracer;
 
 /// The working directory, environment, identity, and stream handles of one invocation, its file and program
-/// ports, the tracer, the node being run, the root option values, what is logged, and the interrupt state of the process.
+/// ports, the tracer, the node being run, the root option values, what is logged, and the interrupt state of the
+/// process.
 #[allow(
     dead_code,
     reason = "the command contract: a field stays whether or not a present command reads it"
