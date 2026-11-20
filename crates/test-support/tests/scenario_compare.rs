@@ -588,6 +588,7 @@ fn an_entry_of_another_kind_flag_or_target_is_a_difference_of_the_tree() {
 
 #[test]
 fn one_byte_of_a_file_compared_by_its_bytes_is_one_difference_of_the_files() {
+    const STATE: &str = "ws/state.txt";
     let recorded = step_with(with_file(base(), STATE, b"[env_index]\none = 1\n"));
     let observed = step_with(with_file(base(), STATE, b"[env_index]\none = 2\n"));
 
@@ -617,6 +618,7 @@ fn one_byte_of_a_file_compared_by_its_bytes_is_one_difference_of_the_files() {
 
 #[test]
 fn a_file_that_is_not_utf8_is_shown_byte_for_byte() {
+    const STATE: &str = "ws/state.bin";
     let recorded = step_with(with_file(base(), STATE, &[0xff, 0x00]));
     let observed = step_with(with_file(base(), STATE, &[0xfe, 0x00]));
 
@@ -629,6 +631,7 @@ fn a_file_that_is_not_utf8_is_shown_byte_for_byte() {
 
 #[test]
 fn a_file_only_one_run_changed_is_compared_by_its_hash() {
+    const STATE: &str = "ws/state.txt";
     // The record wrote the file in this step; the observation had the same content before it.
     let content = b"[env_index]\none = 1\n";
     let recorded = step_with(with_file(base(), STATE, content));
@@ -1058,6 +1061,72 @@ fn a_rule_that_relaxes_nothing_is_a_difference() {
 }
 
 #[test]
+fn default_file_modes_depend_on_the_exact_extension() {
+    for path in [
+        STATE,
+        "ws/nested/settings.toml",
+        "ws/settings.TOML",
+        "ws/settings.toml.bak",
+        "ws/settings",
+    ] {
+        let recorded = step_with(with_file(base(), path, b"one = 1\ntwo = 2\n"));
+        let observed = step_with(with_file(base(), path, b"# reordered\ntwo=2\none=1\n"));
+        let found = compared(StdoutMode::Text, Compare::default(), &recorded, &observed);
+        if path.ends_with(".toml") {
+            assert_eq!(found, [], "{path}");
+        } else {
+            assert_eq!(
+                named(&found),
+                [
+                    (Dimension::Tree, Some(1), path),
+                    (Dimension::Files, Some(1), path)
+                ]
+            );
+        }
+    }
+}
+
+#[test]
+fn default_toml_still_detects_values_types_invalid_content_and_structure() {
+    let recorded = step_with(with_file(base(), STATE, b"one = 1\n"));
+    for content in [b"one = 2\n".as_slice(), b"one = 1.0\n", b"[broken", b"\xff"] {
+        let observed = step_with(with_file(base(), STATE, content));
+        let found = compared(StdoutMode::Text, Compare::default(), &recorded, &observed);
+        assert_eq!(named(&found), [(Dimension::Files, Some(1), STATE)]);
+        assert_eq!(
+            compared(StdoutMode::Text, Compare::default(), &observed, &observed),
+            []
+        );
+    }
+    let mut executable = recorded.clone();
+    for entry in &mut executable.after.tree {
+        if entry.path == STATE {
+            entry.kind = EntryKind::File {
+                executable: true,
+                hash: sha1(b"one = 1\n"),
+            };
+        }
+    }
+    let found = compared(StdoutMode::Text, Compare::default(), &recorded, &executable);
+    assert_eq!(named(&found), [(Dimension::Tree, Some(1), STATE)]);
+    let absent = step_with(base());
+    assert!(!compared(StdoutMode::Text, Compare::default(), &recorded, &absent).is_empty());
+}
+
+#[test]
+fn fixture_toml_hashes_remain_byte_strict_even_without_stored_content() {
+    let mut recorded = with_file(base(), STATE, b"one = 1\n");
+    let mut observed = with_file(base(), STATE, b"# same value\none=1\n");
+    let found = fixture(&recorded, &observed).expect("different fixture hashes");
+    assert_eq!(found.dimension, Dimension::Fixture);
+    assert_eq!(found.subject, format!("tree.txt {STATE}"));
+    recorded.files.clear();
+    observed.files.clear();
+    let found = fixture(&recorded, &observed).expect("hashes alone remain strict");
+    assert_eq!(found.subject, format!("tree.txt {STATE}"));
+}
+
+#[test]
 fn a_file_compared_as_toml_is_equal_when_its_values_are() {
     let rules = || file_rules(&[(STATE, FileMode::Toml)]);
     let recorded = step_with(with_file(base(), STATE, b"[env_index]\none = 1\ntwo = 2\n"));
@@ -1068,8 +1137,9 @@ fn a_file_compared_as_toml_is_equal_when_its_values_are() {
 
     let reordered = b"# written by another writer\nenv_index = { two = 2, one = 1 }\n";
     assert_eq!(found(rules(), reordered), []);
+    assert_eq!(found(Compare::default(), reordered), []);
     assert_eq!(
-        named(&found(Compare::default(), reordered)),
+        named(&found(file_rules(&[(STATE, FileMode::Bytes)]), reordered)),
         [
             (Dimension::Tree, Some(1), STATE),
             (Dimension::Files, Some(1), STATE)
@@ -1086,7 +1156,7 @@ fn a_file_compared_as_toml_is_equal_when_its_values_are() {
 
 #[test]
 fn a_toml_file_only_one_run_changed_is_parsed_from_the_step_that_stored_it() {
-    let rules = || file_rules(&[(STATE, FileMode::Toml)]);
+    let rules = Compare::default;
     let scenario = scenario(&[StdoutMode::Text, StdoutMode::Text], rules());
     let first = b"[env_index]\none = 1\n";
     let reordered = b"env_index = { one = 1 }\n";
@@ -1333,7 +1403,10 @@ fn expected_content_and_its_listing_replace_the_recorded_state() {
         ],
     );
     let expected = overlay(&record, &files).expect("it reads");
-    let scenario = scenario(&[StdoutMode::Text], Compare::default());
+    let scenario = scenario(
+        &[StdoutMode::Text],
+        file_rules(&[(CONFIG, FileMode::Bytes)]),
+    );
 
     let as_expected = [step_with(with_file(base(), CONFIG, expected_content))];
     assert_eq!(expected, as_expected);

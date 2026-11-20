@@ -88,8 +88,23 @@ What to know when writing one:
   differently.
 - A `message_text` pointer, a fan-out, or a file rule that does not read, or that relaxes nothing in the scenario, fails
   the comparison, and the record command refuses the scenario for it. Such a rule is never dropped in silence, so remove
-  one that no longer applies. `git_config_ignore` is the exception: a key that does not read fails likewise, and a key
+  one that no longer applies. An explicit byte rule is a strictness override, as described below.
+  `git_config_ignore` is the exception: a key that does not read fails likewise, and a key
   that no repository of the scenario has is not reported.
+
+### File comparison
+
+After a step, an unmatched file whose name ends in `.toml` compares as parsed TOML; every other file compares by
+bytes. TOML comparison ignores formatting, comments, and table key order, but preserves values and array order. If
+either file is not valid TOML, the comparison falls back to bytes.
+
+`[[compare.file]]` overrides the default. Its `path` is a glob over ROOT-relative paths: `*` matches within a segment,
+and `**` across segments. The first matching rule wins. Use `mode = "bytes"` when the behaviour pins exact text, and
+give its reason; an explicit byte rule is a strictness override, not an unused relaxation. A rule that matches no file
+still fails the comparison.
+
+The initial fixture comparison stays byte-strict, including TOML files, and does not apply file rules. Semantic
+comparison after a step must not hide a changed starting fixture.
 
 ## Add and record a scenario
 
@@ -238,7 +253,8 @@ the recorded value `absent`.
 
 What replay compares, and what it does not:
 
-- Compared: the exit code, the parsed JSON, the listing of the tree, the bytes of the files, and the git state.
+- Compared: the exit code, the parsed JSON, the listing of the tree, the files under the
+  [file comparison rules](#file-comparison), and the git state.
 - Never compared: stderr, and stdout as text. That covers all of a `text` step's stdout, and the white space and key
   order of a JSON one. A message on stderr or in a `text` stdout that the binary words differently does not fail replay.
   A string inside compared JSON does, unless a `message_text` pointer names it.
