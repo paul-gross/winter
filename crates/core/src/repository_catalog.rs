@@ -2,7 +2,6 @@
 
 use std::path::Path;
 
-use crate::config;
 use crate::config_edit::{self, BlockRemoval, CatalogError, RepositoryKind};
 use crate::files::{ReadFiles, WriteFiles};
 use crate::termination::{ConfigError, FileCause, TomlParseError};
@@ -28,10 +27,10 @@ pub(crate) enum RemoveError {
 /// Removes the repository `target`, spelled `<type>/<name>`, from a configuration file of the workspace of
 /// `start`: the machine-local file when `local` is set, else the shared one.
 ///
-/// A target without `/` is refused before any file is read. Then the workspace root is found, then the
-/// configuration is loaded and its first refusal ends the removal, then the type is checked to be one of the
-/// two words, and then the first block of that type whose effective name is the name is removed from the
-/// one file. Only that file is searched, and it is replaced only when a block was removed.
+/// A target without `/` is refused before any file is read. Then the workspace root is found, then the type
+/// is checked to be one of the two words, and then the first block of that type whose effective name is the
+/// name is removed from the one file. Only that file is searched, and it is replaced only when a block was
+/// removed.
 pub(crate) fn remove(
     files: &dyn ReadFiles,
     writer: &dyn WriteFiles,
@@ -46,7 +45,6 @@ pub(crate) fn remove(
         .into());
     };
     let root = workspace_root::find(files, start)?;
-    config::load(files, &root)?;
     let Some(kind) = repository_kind(word) else {
         return Err(CatalogError::UnknownKind {
             kind: word.to_owned(),

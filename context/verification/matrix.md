@@ -28,14 +28,13 @@ A test file narrower than a row is selected with `--test <subject>` in place of 
 
 ## Manual testing
 
-Four behaviours are exercised by hand. Two cannot be tests of the tree they change, the third needs SIGINT sent to the
-running binary, which [no test sends](../standards/testing.md#what-a-test-never-does), and the fourth rests on judgment:
-whether a diagnostic tells its reader what to change. Each runs outside the checkout, in a scratch copy of it or in a
-scratch workspace under a temporary directory. A method that starts the built binary starts it by its path, as
-[development.md](../tooling/development.md#running-the-built-binary) says.
+Three behaviours are exercised by hand. Two cannot be tests of the tree they change, and the third needs SIGINT sent to
+the running binary, which [no test sends](../standards/testing.md#what-a-test-never-does). All run in a scratch copy of
+the checkout under a temporary directory, never in the checkout itself. A method that starts the built binary starts it
+by its path, as [development.md](../tooling/development.md#running-the-built-binary) says.
 
-A scratch copy needs a git directory of its own, since a method run in one ends by reading its `git status`. A clone of
-the checkout with the change under test applied has one. A plain copy does not when the checkout is a git worktree: its
+The scratch copy needs a git directory of its own, since each method ends by reading its `git status`. A clone of the
+checkout with the change under test applied has one. A plain copy does not when the checkout is a git worktree: its
 `.git` is then a file that points back to the original repository.
 
 ### `workspace:manual-gates`
@@ -130,42 +129,6 @@ on. A binary left waiting ends when the shell that holds descriptor 3 ends, sinc
 
 **Success.** Each case ends as stated, and `git status` of the scratch copy shows only `notice`: git does not list a
 pipe.
-
-### `workspace:manual-diagnostics`
-
-Exercises the text of the configuration diagnostics, which no automatic method reads whole: replay does not compare
-stderr, as [scenarios.md](./scenarios.md) says, and a component test asserts only that a message names its key or file.
-Use it when a change adds or rewords a `ConfigError` variant, or changes which one the load returns.
-
-**Setup.** Run `cargo build --workspace --locked` in the checkout. Make a scratch workspace under a temporary directory,
-where no directory at or above it holds a `.winter/config.toml` other than its own, as the built-binary rule of
-[AGENTS.md](../../AGENTS.md#standing-rules) has it. Its `.winter/config.toml` holds one project entry:
-
-```toml
-[[project_repository]]
-name = "web"
-url = "https://example.invalid/web.git"
-```
-
-Run each case from the scratch workspace's root, starting the binary by its path, and restore both configuration files
-before the next case. A case's fault is added to the file the table names, a top-level key above the file's first table;
-the shared file is `.winter/config.toml` and the local file `.winter/config.local.toml`.
-
-| Fault                                                                                          | File   | Command                   | The diagnostic names                                               |
-| ---------------------------------------------------------------------------------------------- | ------ | ------------------------- | ------------------------------------------------------------------ |
-| `session_prefix = "x"`                                                                         | local  | `ws index feature-x`      | `session_prefix` and its replacement `service_prefix`              |
-| `session_prefix = "x"`                                                                         | local  | `repo remove project/web` | `session_prefix` and its replacement `service_prefix`              |
-| A line holding only `[`                                                                        | local  | `ws index feature-x`      | `.winter/config.local.toml`, then the parser's excerpt of the line |
-| `adopt_extensions = "some"`                                                                    | shared | `ws index feature-x`      | `adopt_extensions` and the value `some`                            |
-| `[[standalone_repository]]` with `url = "https://example.invalid/ctx.git"` and `path = "/abs"` | shared | `ws index feature-x`      | the standalone by its URL, and its `path`                          |
-| `[env.workspace.vars]` with `WINTER_X = { command = "c" }`                                     | shared | `ws index feature-x`      | the band `workspace`, the key `WINTER_X`, and why it is refused    |
-| `[agent_model_overrides]` with `a = "turbo"`                                                   | shared | `ws index feature-x`      | the agent `a`, the label `turbo`, and the known labels             |
-| None; run from the temporary directory, outside the scratch workspace                          | —      | `ws index feature-x`      | the start directory and `.winter/config.toml`                      |
-
-**Success.** Each case exits 1 with an empty stdout and a diagnostic on stderr whose first line names what its row says,
-and which is that one line unless the row names an excerpt, in words a reader who knows only the configuration file can
-act on. After each case both configuration files are byte-equal to their state before it, and the scratch workspace
-holds no other new file.
 
 ## Tools
 

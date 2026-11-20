@@ -1,5 +1,0 @@
-summary = "A command entry under a WINTER_ variable of an env band ends the load: ws index exits 1 and nothing changes."
-
-[[step]]
-args = ["ws", "index", "feature-x", "--json"]
-stdout = "json"

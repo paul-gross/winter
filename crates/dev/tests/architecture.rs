@@ -248,23 +248,13 @@ fn the_matrix_declares_its_manual_methods_each_with_its_setup_its_success_and_wh
         [
             "workspace:manual-gates",
             "workspace:manual-registration",
-            "workspace:manual-interrupt",
-            "workspace:manual-diagnostics"
+            "workspace:manual-interrupt"
         ]
     );
     for (id, text) in &methods {
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        for stated in ["**Setup.**", "**Success.**"] {
+        for stated in ["**Setup.**", "**Success.**", "scratch copy of the checkout"] {
             assert!(text.contains(stated), "{id} does not state {stated}");
         }
-        assert!(
-            [
-                "scratch copy of the checkout",
-                "scratch workspace under a temporary directory"
-            ]
-            .iter()
-            .any(|place| text.contains(place)),
-            "{id} does not state where it runs"
-        );
     }
 }

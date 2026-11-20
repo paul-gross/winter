@@ -76,7 +76,7 @@ const COMMAND_FILE_NAMES: [&str; 15] = [
     // The modules a domain entry stands on.
     "workspace_root",
     "workspace_files",
-    "config::",
+    "config_raw",
     "config_edit",
     "state_registry",
     // The file formats.
@@ -1350,7 +1350,7 @@ mod tests {
                 "OsFiles",
                 "workspace_root",
                 "workspace_files",
-                "config::",
+                "config_raw",
                 "config_edit",
                 "state_registry",
                 "toml::",

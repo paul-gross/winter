@@ -98,18 +98,15 @@ handler, and there `pending` stays false.
 
 A command file names none of these:
 
-| Area                                 | Names a command file may not hold                                                |
-| ------------------------------------ | -------------------------------------------------------------------------------- |
-| The file port                        | `ReadFiles`, `WriteFiles`, `OsFiles`                                             |
-| Modules a domain entry stands on     | `workspace_root`, `workspace_files`, `config::`, `config_edit`, `state_registry` |
-| File formats                         | `toml::`, `toml_edit`                                                            |
-| Writing, and how a failed write ends | `writeln!`, `write!(`, `to_writer`, `InternalError`, `Backtrace`                 |
+| Area                                 | Names a command file may not hold                                                  |
+| ------------------------------------ | ---------------------------------------------------------------------------------- |
+| The file port                        | `ReadFiles`, `WriteFiles`, `OsFiles`                                               |
+| Modules a domain entry stands on     | `workspace_root`, `workspace_files`, `config_raw`, `config_edit`, `state_registry` |
+| File formats                         | `toml::`, `toml_edit`                                                              |
+| Writing, and how a failed write ends | `writeln!`, `write!(`, `to_writer`, `InternalError`, `Backtrace`                   |
 
 The architecture test checks the names by scanning each file under `crates/core/src/commands/` as text. A test module
 and a comment are checked like the rest, and a failure names the file, the line, and the name.
-
-The scan is a substring match, so the entry for the configuration module is `config::`: a bare `config` would match
-"configuration" in a file that has nothing to do with the module.
 
 The list is a deny-list, and the scan sees nothing but these names. It cannot tell one call from logic of its own that
 is written without them, and it does not see a module that is not on the list. A file that holds none of the names can

@@ -1,1 +1,0 @@
-error: [agent_model_overrides] entry 'planner': 'turbo' is not a recognised tier label; valid tier labels: 'fable', 'haiku', 'opus', 'sonnet'. To use a concrete model id, use the per-vendor table form: { claude = 'turbo' }

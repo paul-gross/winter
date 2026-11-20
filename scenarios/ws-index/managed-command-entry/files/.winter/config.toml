@@ -1,4 +1,0 @@
-# workspace configuration
-
-[env.workspace.vars]
-WINTER_ROOT = { command = "echo hi" }

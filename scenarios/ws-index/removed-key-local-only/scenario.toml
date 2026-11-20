@@ -1,5 +1,0 @@
-summary = "A removed key that only the local file holds ends the load: ws index exits 1 and nothing changes."
-
-[[step]]
-args = ["ws", "index", "feature-x", "--json"]
-stdout = "json"

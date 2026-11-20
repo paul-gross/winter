@@ -5,10 +5,7 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 
 use serde_json::{Value, json};
-use winter_workspace_core::{
-    ConfigError, EnvVarFault, FileCause, ParseFault, PathField, RemovedKey, RepoKind,
-    RepositoryFault, Termination, TypedKey, Usage, UsageError, ValueType,
-};
+use winter_workspace_core::{ConfigError, FileCause, ParseFault, Termination, Usage, UsageError};
 use winter_workspace_test_support::{TempTree, WorkspaceBuilder, snapshot};
 
 #[path = "support/in_process.rs"]
@@ -246,25 +243,6 @@ fn the_local_alias_list_replaces_the_shared_one() {
 }
 
 #[test]
-fn aliases_set_only_in_the_local_file_decide_the_alias_index_and_change_nothing() {
-    let tree = TempTree::new().expect("an isolated tree");
-    let workspace = WorkspaceBuilder::new(&tree)
-        .config(DEFAULTS)
-        .local_config("env_aliases = [\"one\", \"two\"]\n")
-        .build()
-        .expect("a workspace");
-    let before = snapshot(&workspace.root);
-
-    // `alpha` is the first of the default aliases, and `two` the second of the local ones.
-    assert_eq!(
-        document(&workspace.root, "two"),
-        json!({"name": "two", "index": 2, "source": "suggested"})
-    );
-    assert_ne!(document(&workspace.root, "alpha")["index"], json!(1));
-    assert_eq!(snapshot(&workspace.root), before);
-}
-
-#[test]
 fn a_bare_empty_string_of_aliases_leaves_no_alias() {
     let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
@@ -422,91 +400,6 @@ fn a_local_configuration_file_that_is_not_valid_toml_is_a_file_read_error() {
 }
 
 #[test]
-fn a_local_file_that_is_not_valid_toml_exits_1_naming_that_file_and_changes_nothing() {
-    let tree = TempTree::new().expect("an isolated tree");
-    let workspace = WorkspaceBuilder::new(&tree)
-        .config(DEFAULTS)
-        .local_config("envs_per_workspace = = 3\n")
-        .build()
-        .expect("a workspace");
-    let before = snapshot(&workspace.root);
-
-    let ended = InProcess::new(&["ws", "index", "feature-x", "--json"])
-        .cwd(&workspace.root)
-        .run();
-
-    let termination = ended.wrote_nothing(1, "ws index feature-x --json");
-    let diagnostic = termination.diagnostic().expect("a diagnostic");
-    assert!(
-        diagnostic.contains(".winter/config.local.toml"),
-        "{diagnostic}"
-    );
-    assert_eq!(snapshot(&workspace.root), before);
-}
-
-#[test]
-fn a_shared_value_the_layering_cannot_read_is_refused_naming_the_key_and_the_shared_file() {
-    let tree = TempTree::new().expect("an isolated tree");
-    let workspace = WorkspaceBuilder::new(&tree)
-        .config("git = \"x\"\n")
-        .local_config("[git]\nuser = { name = \"B\" }\n")
-        .build()
-        .expect("a workspace");
-    let before = snapshot(&workspace.root);
-
-    let error = config_error(&workspace.root);
-
-    assert!(
-        matches!(
-            &error,
-            ConfigError::ValueType { key: TypedKey::Git, owner: None, path: Some(path), found: ValueType::String }
-                if *path == workspace.root.join(".winter/config.toml")
-        ),
-        "{error:?}"
-    );
-    assert_eq!(snapshot(&workspace.root), before);
-}
-
-#[test]
-fn an_agent_model_overrides_that_is_not_a_table_is_refused_naming_the_file_that_holds_it() {
-    let tree = TempTree::new().expect("an isolated tree");
-    let workspace = WorkspaceBuilder::new(&tree)
-        .config(DEFAULTS)
-        .local_config("agent_model_overrides = 1\n")
-        .build()
-        .expect("a workspace");
-
-    let error = config_error(&workspace.root);
-
-    assert!(
-        matches!(
-            &error,
-            ConfigError::AgentOverridesNotTable { path, found: ValueType::Integer }
-                if *path == workspace.root.join(".winter/config.local.toml")
-        ),
-        "{error:?}"
-    );
-}
-
-#[test]
-fn the_missing_root_diagnostic_names_the_start_directory_and_the_file_discovery_looks_for() {
-    let tree = TempTree::new().expect("an isolated tree");
-    let outside = tree.root().join("home");
-
-    let ended = InProcess::new(&["ws", "index", "feature-x"])
-        .cwd(&outside)
-        .run();
-
-    let termination = ended.wrote_nothing(1, "ws index feature-x");
-    let diagnostic = termination.diagnostic().expect("a diagnostic");
-    assert!(
-        diagnostic.contains(&outside.display().to_string()),
-        "{diagnostic}"
-    );
-    assert!(diagnostic.contains(".winter/config.toml"), "{diagnostic}");
-}
-
-#[test]
 fn a_configuration_file_that_is_not_utf_8_is_a_file_read_error_with_the_toml_cause() {
     let tree = TempTree::new().expect("an isolated tree");
     let workspace = WorkspaceBuilder::new(&tree)
@@ -567,140 +460,6 @@ fn a_slot_count_smaller_than_the_aliases_allow_is_refused() {
                 envs_per_workspace: 3,
                 aliases: 2
             }
-        ),
-        "{error:?}"
-    );
-}
-
-#[test]
-fn an_absolute_standalone_path_exits_1_naming_the_standalone_and_changes_nothing() {
-    let tree = TempTree::new().expect("an isolated tree");
-    let workspace = WorkspaceBuilder::new(&tree)
-        .config("[[standalone_repository]]\nname = \"ctx\"\npath = \"/abs/ctx\"\n")
-        .build()
-        .expect("a workspace");
-    let before = snapshot(&workspace.root);
-
-    let ended = InProcess::new(&["ws", "index", "feature-x", "--json"])
-        .cwd(&workspace.root)
-        .run();
-
-    let termination = ended.wrote_nothing(1, "ws index feature-x --json");
-    let diagnostic = termination.diagnostic().expect("a diagnostic");
-    assert!(
-        diagnostic.contains("standalone") && diagnostic.contains("ctx"),
-        "{diagnostic}"
-    );
-    assert!(
-        matches!(
-            termination,
-            Termination::Config(ref error)
-                if matches!(
-                    &**error,
-                    ConfigError::Repository {
-                        kind: RepoKind::Standalone,
-                        label,
-                        fault: RepositoryFault::Path { field: PathField::Path, value },
-                    } if label == "ctx" && value == "/abs/ctx"
-                )
-        ),
-        "{diagnostic}"
-    );
-    assert_eq!(snapshot(&workspace.root), before);
-}
-
-#[test]
-fn a_removed_session_prefix_exits_1_naming_its_replacement_and_writes_nothing() {
-    let tree = TempTree::new().expect("an isolated tree");
-    let workspace = WorkspaceBuilder::new(&tree)
-        .config("session_prefix = \"x\"\n")
-        .build()
-        .expect("a workspace");
-    let before = snapshot(&workspace.root);
-
-    let ended = InProcess::new(&["ws", "index", "feature-x", "--json"])
-        .cwd(&workspace.root)
-        .run();
-
-    let termination = ended.wrote_nothing(1, "ws index feature-x --json");
-    let diagnostic = termination.diagnostic().expect("a diagnostic");
-    assert!(diagnostic.contains("service_prefix"), "{diagnostic}");
-    assert!(
-        matches!(
-            termination,
-            Termination::Config(ref error)
-                if matches!(**error, ConfigError::RemovedKey(RemovedKey::SessionPrefix))
-        ),
-        "{diagnostic}"
-    );
-    assert_eq!(snapshot(&workspace.root), before);
-}
-
-#[test]
-fn a_command_entry_in_an_env_band_is_checked_and_never_run() {
-    let tree = TempTree::new().expect("an isolated tree");
-    let marker = tree.root().join("marker");
-    let config = format!(
-        "[env.feature.vars]\nX = {{ command = \"touch {path}\" }}\n\
-         [env.workspace.vars]\nY = {{ command = \"touch {path}\", shell = true }}\n\
-         [env.alpha.vars]\nZ = {{ command = \"touch {path}\", format = \"json\" }}\n",
-        path = marker.display()
-    );
-    let workspace = WorkspaceBuilder::new(&tree)
-        .config(&config)
-        .build()
-        .expect("a workspace");
-    let before = snapshot(&workspace.root);
-
-    let document = document(&workspace.root, "feature-x");
-
-    assert_eq!(document["name"], "feature-x");
-    assert!(!marker.exists(), "a command entry ran");
-    assert_eq!(snapshot(&workspace.root), before);
-}
-
-#[test]
-fn a_faulty_env_band_value_exits_1_naming_the_band_and_the_key_and_runs_nothing() {
-    let tree = TempTree::new().expect("an isolated tree");
-    let marker = tree.root().join("marker");
-    let config = format!(
-        "[env.alpha.vars]\nX = {{ command = \"touch {}\", extra = 1 }}\n",
-        marker.display()
-    );
-    let workspace = WorkspaceBuilder::new(&tree)
-        .config(&config)
-        .build()
-        .expect("a workspace");
-    let before = snapshot(&workspace.root);
-
-    let error = config_error(&workspace.root);
-
-    assert!(
-        matches!(
-            &error,
-            ConfigError::EnvVar { band, key, fault: EnvVarFault::UnknownFields { fields } }
-                if band == "alpha" && key == "X" && *fields == ["extra"]
-        ),
-        "{error:?}"
-    );
-    assert!(!marker.exists(), "a command entry ran");
-    assert_eq!(snapshot(&workspace.root), before);
-}
-
-#[test]
-fn a_removed_env_vars_table_exits_1_listing_its_keys() {
-    let tree = TempTree::new().expect("an isolated tree");
-    let workspace = WorkspaceBuilder::new(&tree)
-        .config("[env.vars]\nB = \"2\"\nA = \"1\"\n")
-        .build()
-        .expect("a workspace");
-
-    let error = config_error(&workspace.root);
-
-    assert!(
-        matches!(
-            &error,
-            ConfigError::RemovedKey(RemovedKey::EnvVars { keys }) if *keys == ["B", "A"]
         ),
         "{error:?}"
     );

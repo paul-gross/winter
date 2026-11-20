@@ -1,8 +1,0 @@
-summary = "A git_excludes that is a bare string: the reference tool reads one entry per character and answers; the binary refuses it, a registered deviation."
-
-[[step]]
-args = ["ws", "index", "feature-x", "--json"]
-stdout = "json"
-
-[deviation]
-decision = "decision:parallel-workspaces/workspace-configuration/element-type-validation"

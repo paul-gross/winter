@@ -5,8 +5,8 @@
 //! returned [`Termination`] to an exit code.
 
 mod arguments;
-mod config;
 mod config_edit;
+mod config_raw;
 mod context;
 mod diagnostics;
 #[cfg(test)]
@@ -31,10 +31,8 @@ mod workspace_root;
 pub use config_edit::{CatalogError, RepositoryKind};
 pub use process::{Identity, Interrupts, Invocation, ProcessEnv, run};
 pub use termination::{
-    AgentOverrideFault, ChoiceKey, CommandError, ConfigError, ConfigValue, EntryIdent, EnvVarFault,
-    FileCause, InternalError, ModelTierFault, NestedExcludedKey, NestedOnlyKey, ParseFault,
-    PathField, RemovedKey, RepoKind, RepoRef, RepositoryFault, Termination, TomlParseError,
-    TypedKey, Usage, UsageError, ValueType,
+    CommandError, ConfigError, FileCause, InternalError, ParseFault, Termination, TomlParseError,
+    Usage, UsageError,
 };
 pub use trace::{
     CommandTracer, NoTrace, TraceConfig, TraceLog, TraceSettings, settings, span_name,
