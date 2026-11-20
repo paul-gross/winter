@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use winter_workspace_core::{ConfigError, Termination};
+use winter_workspace_core::{CatalogError, CommandError, ConfigError, Termination};
 use winter_workspace_test_support::{TempTree, WorkspaceBuilder, snapshot};
 
 #[path = "support/in_process.rs"]
@@ -119,4 +119,100 @@ fn local_creates_the_local_file_and_leaves_the_shared_file_as_it_was() {
     assert_eq!(listed.termination.exit_code(), 0, "{}", listed.stderr);
     assert!(!root.join(".winter/config.lock").exists());
     assert!(!root.join(".winter/state.toml").exists());
+}
+
+/// The catalog error a refused `repo add` ended with, which wrote nothing to either stream beside its diagnostic.
+#[track_caller]
+fn catalog_error(cwd: &Path, args: &[&str]) -> CatalogError {
+    let ended = InProcess::new(&[&["repo", "add"], args].concat())
+        .cwd(cwd)
+        .run();
+    match ended.wrote_nothing(1, &format!("{args:?}")) {
+        Termination::Command(error) => {
+            let CommandError::Catalog(error) = *error;
+            error
+        }
+        other => panic!("{args:?}: expected a catalog error, got {other:?}"),
+    }
+}
+
+const TOOLS: &str = "# repositories\n[[standalone_repository]]\nurl = \"https://fixture.invalid/tools.git\"\npath = \"ext/tools\"\n";
+
+#[test]
+fn a_path_through_a_link_to_a_declared_standalone_is_a_duplicate_path() {
+    let tree = TempTree::new().expect("an isolated tree");
+    let root = workspace(&tree, TOOLS, None);
+    std::fs::create_dir_all(root.join("ext/tools")).expect("the directory");
+    std::os::unix::fs::symlink("ext/tools", root.join("via")).expect("the link");
+    let before = snapshot(&root);
+
+    let error = catalog_error(
+        &root,
+        &[
+            "https://fixture.invalid/x.git",
+            "--standalone",
+            "--path",
+            "via",
+            "--json",
+        ],
+    );
+
+    assert!(
+        matches!(&error, CatalogError::DuplicatePath { path } if path == "via"),
+        "{error:?}"
+    );
+    assert_eq!(snapshot(&root), before);
+}
+
+#[test]
+fn a_path_with_a_trailing_slash_is_the_declared_location() {
+    let tree = TempTree::new().expect("an isolated tree");
+    let root = workspace(&tree, TOOLS, None);
+    let before = snapshot(&root);
+
+    let error = catalog_error(
+        &root,
+        &[
+            "https://fixture.invalid/x.git",
+            "--standalone",
+            "--path",
+            "ext/tools/",
+            "--json",
+        ],
+    );
+
+    assert!(
+        matches!(&error, CatalogError::DuplicatePath { path } if path == "ext/tools/"),
+        "{error:?}"
+    );
+    assert_eq!(snapshot(&root), before);
+}
+
+#[test]
+fn a_name_of_dot_dot_is_accepted_alone_and_refused_beside_a_standalone_at_the_parent() {
+    let url = [
+        "https://fixture.invalid/up.git",
+        "--standalone",
+        "--name",
+        "..",
+    ];
+    let tree = TempTree::new().expect("an isolated tree");
+    let root = workspace(&tree, ONE, None);
+
+    let document = add(&root, &[url[0], url[1], url[2], url[3], "--json"]);
+    assert_eq!(document["added"], true);
+
+    let tree = TempTree::new().expect("an isolated tree");
+    let declared = "# repositories\n[[standalone_repository]]\nurl = \"https://fixture.invalid/other.git\"\npath = \"up\"\n";
+    let root = workspace(&tree, declared, None);
+    std::os::unix::fs::symlink("..", root.join("up")).expect("the link");
+    let before = snapshot(&root);
+
+    let error = catalog_error(&root, &[url[0], url[1], url[2], url[3], "--json"]);
+
+    assert!(
+        matches!(&error, CatalogError::DuplicatePath { path } if path == ".."),
+        "{error:?}"
+    );
+    assert_eq!(snapshot(&root), before);
 }

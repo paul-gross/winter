@@ -1,0 +1,17 @@
+summary = "A symbolic-link loop under the standalone locations: the recorded outcome of two --path values that reach it."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "https://fixture.invalid/c.git", "--standalone", "--path", "ext/c", "--json"]
+stdout = "json"
+
+[[step]]
+args = ["repo", "add", "https://fixture.invalid/b.git", "--standalone", "--path", "ext/b", "--json"]
+stdout = "json"
+
+[[compare.file]]
+path = "ws/.winter/*.toml"
+mode = "toml"
+reason = "decision:toml-parity"

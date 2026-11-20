@@ -1,0 +1,13 @@
+summary = "A standalone at projects/api beside the declared project api is accepted: only standalone locations are compared."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "https://fixture.invalid/api-tools.git", "--standalone", "--path", "projects/api", "--json"]
+stdout = "json"
+
+[[compare.file]]
+path = "ws/.winter/*.toml"
+mode = "toml"
+reason = "decision:toml-parity"

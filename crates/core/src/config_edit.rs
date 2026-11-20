@@ -79,6 +79,8 @@ pub enum CatalogError {
     DuplicateUrl { kind: RepositoryKind, url: String },
     #[error("a {kind} repository named {name} is declared")]
     DuplicateName { kind: RepositoryKind, name: String },
+    #[error("a standalone repository at {path} is declared")]
+    DuplicatePath { path: String },
 }
 
 /// The block a repository addition writes, as the arguments give it. An option is `Some` when it was given,
@@ -487,6 +489,9 @@ url = \"https://fixture.invalid/docs.git\"
             kind: RepositoryKind::Standalone,
             name: "tools".to_owned(),
         };
+        let duplicate_path = CatalogError::DuplicatePath {
+            path: "vendor".to_owned(),
+        };
         let entangled = CatalogError::Entangled {
             kind: RepositoryKind::Project,
             name: "api".to_owned(),
@@ -494,6 +499,10 @@ url = \"https://fixture.invalid/docs.git\"
 
         assert!(shape.to_string().contains("nope"), "{shape}");
         assert!(unknown.to_string().contains("other"), "{unknown}");
+        assert_eq!(
+            duplicate_path.to_string(),
+            "a standalone repository at vendor is declared"
+        );
         let text = entangled.to_string();
         assert!(text.contains("project") && text.contains("api"), "{text}");
         let text = not_found.to_string();

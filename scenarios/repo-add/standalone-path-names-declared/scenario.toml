@@ -1,0 +1,8 @@
+summary = "A --path naming the default location of a declared standalone is refused with exit 1 and nothing written."
+
+[fixture]
+workspace_git = true
+
+[[step]]
+args = ["repo", "add", "https://fixture.invalid/other.git", "--standalone", "--path", "tools", "--json"]
+stdout = "json"

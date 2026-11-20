@@ -1,0 +1,7 @@
+# repositories
+[[standalone_repository]]
+url = "https://fixture.invalid/loop.git"
+path = "ext/a"
+[[standalone_repository]]
+url = "https://fixture.invalid/b.git"
+path = "ext/b"

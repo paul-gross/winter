@@ -150,7 +150,8 @@ Keep evidence in a sibling `evidence/` directory. Set `OTEL_SDK_DISABLED=true` f
    exit 0 and a created `.winter/config.local.toml`; `cmp` shows the shared file unchanged. `repo list --json` then
    lists both entries.
 3. **Refusals preserve bytes.** Run a duplicate URL, `--standalone --pinned`, and, in a fresh shared file holding an
-   inline `project_repository = [{ ... }]`, a plain add. Each exits 1 with zero stdout bytes, and `cmp` shows every
+   inline `project_repository = [{ ... }]`, a plain add. Also run `--standalone --path via`, where `via` is a symbolic
+   link (`ln -s tools/x workspace/via`) to the directory of the standalone step 2 declared. Each exits 1 with zero stdout bytes, and `cmp` shows every
    configuration file unchanged.
 
 **Success.** The exits and streams are as stated, the before/after comparisons are kept as evidence, and nothing runs
