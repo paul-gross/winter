@@ -1,0 +1,100 @@
+repository
+    remotes/api.git
+    kind: bare
+head
+    ddc17afdfdb14db6df1557d087051f2426a21729
+    refs/heads/main
+refs
+    refs/heads/main ddc17afdfdb14db6df1557d087051f2426a21729  
+worktrees
+    worktree <ROOT>/remotes/api.git
+    bare
+    
+config
+    core.bare=true
+    core.filemode=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    ddc17afdfdb14db6df1557d087051f2426a21729  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial API
+
+repository
+    ws/alpha/api
+    kind: worktree
+dot-git
+    gitdir: <ROOT>/ws/projects/api/.git/worktrees/api
+head
+    ddc17afdfdb14db6df1557d087051f2426a21729
+    refs/heads/alpha
+refs
+    refs/heads/alpha ddc17afdfdb14db6df1557d087051f2426a21729  
+    refs/heads/main ddc17afdfdb14db6df1557d087051f2426a21729 refs/remotes/origin/main 
+    refs/remotes/origin/HEAD ddc17afdfdb14db6df1557d087051f2426a21729  refs/remotes/origin/main
+    refs/remotes/origin/main ddc17afdfdb14db6df1557d087051f2426a21729  
+status
+    # branch.oid ddc17afdfdb14db6df1557d087051f2426a21729
+    # branch.head alpha
+stash
+config
+    branch.main.merge=refs/heads/main
+    branch.main.remote=origin
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+    remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+    remote.origin.url=https://fixture.invalid/api.git
+in-progress
+exclude
+log
+    refs/heads/alpha
+    ddc17afdfdb14db6df1557d087051f2426a21729  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial API
+    refs/heads/main
+    ddc17afdfdb14db6df1557d087051f2426a21729  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial API
+
+repository
+    ws/projects/api
+    kind: main
+dot-git
+    directory
+head
+    ddc17afdfdb14db6df1557d087051f2426a21729
+    refs/heads/main
+refs
+    refs/heads/alpha ddc17afdfdb14db6df1557d087051f2426a21729  
+    refs/heads/main ddc17afdfdb14db6df1557d087051f2426a21729 refs/remotes/origin/main 
+    refs/remotes/origin/HEAD ddc17afdfdb14db6df1557d087051f2426a21729  refs/remotes/origin/main
+    refs/remotes/origin/main ddc17afdfdb14db6df1557d087051f2426a21729  
+worktrees
+    worktree <ROOT>/ws/projects/api
+    HEAD ddc17afdfdb14db6df1557d087051f2426a21729
+    branch refs/heads/main
+    
+    worktree <ROOT>/ws/alpha/api
+    HEAD ddc17afdfdb14db6df1557d087051f2426a21729
+    branch refs/heads/alpha
+    
+status
+    # branch.oid ddc17afdfdb14db6df1557d087051f2426a21729
+    # branch.head main
+    # branch.upstream origin/main
+    # branch.ab +0 -0
+stash
+config
+    branch.main.merge=refs/heads/main
+    branch.main.remote=origin
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+    remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+    remote.origin.url=https://fixture.invalid/api.git
+in-progress
+exclude
+log
+    refs/heads/alpha
+    ddc17afdfdb14db6df1557d087051f2426a21729  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial API
+    refs/heads/main
+    ddc17afdfdb14db6df1557d087051f2426a21729  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial API

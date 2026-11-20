@@ -5,6 +5,7 @@
 
 use std::fmt;
 use std::ops::Range;
+use std::path::PathBuf;
 
 use toml_edit::{Document, Item, Table, Value};
 
@@ -17,7 +18,7 @@ pub enum RepositoryKind {
 
 impl RepositoryKind {
     /// The key of the array of tables that holds the blocks of this kind.
-    fn array_key(self) -> &'static str {
+    pub(crate) fn array_key(self) -> &'static str {
         match self {
             Self::Project => "project_repository",
             Self::Standalone => "standalone_repository",
@@ -43,6 +44,8 @@ pub enum CatalogError {
     UnknownKind { kind: String },
     #[error("no {kind} repository named {name}")]
     NotFound { kind: RepositoryKind, name: String },
+    #[error("the {kind} repositories of {} are not written as blocks", .path.display())]
+    NotArrayOfTables { kind: RepositoryKind, path: PathBuf },
     #[error("the {kind} repository {name} cannot be removed without changing other entries")]
     Entangled { kind: RepositoryKind, name: String },
 }

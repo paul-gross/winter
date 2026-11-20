@@ -191,6 +191,9 @@ pub(crate) fn remove(
             name: name.to_owned(),
         }
         .into()),
+        Ok(Removal::NotArrayOfTables) => {
+            Err(CatalogError::NotArrayOfTables { kind, path: file }.into())
+        }
         Ok(Removal::Entangled) => Err(CatalogError::Entangled {
             kind,
             name: name.to_owned(),
@@ -221,6 +224,8 @@ enum Removal {
     Done,
     /// The file does not exist or holds no such block.
     NotFound,
+    /// The key exists, but its value is not written as repository blocks.
+    NotArrayOfTables,
     /// The text without the block is not the document less the block that was matched.
     Entangled,
 }
@@ -267,6 +272,7 @@ fn remove_block_with(
 ) -> Result<Removal, Unedited> {
     let mut invalid = None;
     let mut entangled = false;
+    let mut not_array_of_tables = false;
     let updated = writer.update(file, &mut |current| {
         let bytes = current?;
         if let Err(error) = toml::from_slice::<toml::Table>(bytes) {
@@ -274,6 +280,12 @@ fn remove_block_with(
             return None;
         }
         let text = std::str::from_utf8(bytes).ok()?;
+        let document = toml_edit::Document::parse(text).ok()?;
+        let repositories = document.as_table().get(kind.array_key())?;
+        if !repositories.is_array_of_tables() {
+            not_array_of_tables = true;
+            return None;
+        }
         let edited = edit(text, kind, name)?;
         if !config_edit::lacks_one_block(text, &edited.text, kind, edited.index) {
             entangled = true;
@@ -284,6 +296,7 @@ fn remove_block_with(
     let replaced = updated.map_err(Unedited::Unwritten)?;
     match invalid {
         Some(error) => Err(Unedited::Invalid(error)),
+        None if not_array_of_tables => Ok(Removal::NotArrayOfTables),
         None if entangled => Ok(Removal::Entangled),
         None if replaced => Ok(Removal::Done),
         None => Ok(Removal::NotFound),
@@ -733,6 +746,44 @@ name = \"web\"
                 "[[project_repository\n",
                 "{edited}"
             );
+        }
+    }
+
+    #[test]
+    fn a_non_block_value_written_since_the_load_is_refused_without_replacement() {
+        for (local, path) in [(false, SHARED), (true, LOCAL)] {
+            for kind in [RepositoryKind::Project, RepositoryKind::Standalone] {
+                let key = kind.array_key();
+                for text in [
+                    format!("{key} = \"x\"\n"),
+                    format!("{key} = true\n"),
+                    format!("{key} = 1\n"),
+                    format!("{key} = {{ url = \"x\" }}\n"),
+                    format!("[{key}]\nurl = \"x\"\n"),
+                ] {
+                    let writer = held_with(&text);
+                    let ended = remove(
+                        &workspace(),
+                        &writer,
+                        Path::new("/ws/alpha"),
+                        &format!("{kind}/x"),
+                        local,
+                    );
+                    assert!(
+                        matches!(
+                            &ended,
+                            Err(RemoveError::Catalog(CatalogError::NotArrayOfTables { kind: actual, path: actual_path }))
+                                if *actual == kind && actual_path == Path::new(path)
+                        ),
+                        "{text}: {ended:?}"
+                    );
+                    let diagnostic = ended.unwrap_err().to_string();
+                    assert!(diagnostic.contains(&kind.to_string()), "{diagnostic}");
+                    assert!(diagnostic.contains(path), "{diagnostic}");
+                    assert_eq!(writer.replacements.get(), 0);
+                    assert_eq!(*writer.content.borrow(), text.as_bytes());
+                }
+            }
         }
     }
 

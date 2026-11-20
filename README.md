@@ -19,6 +19,11 @@ The binary is written to `target/debug/winter-workspace`.
 states where the binary may run. It is on no `PATH`: from a directory that rule permits, it is started by its path, as
 in `<checkout>/target/debug/winter-workspace --help`, where `<checkout>` is the path of the repository root.
 
+`repo remove <type>/<name>` removes a `[[project_repository]]` or `[[standalone_repository]]` block from the shared
+configuration (`--local` selects the local file). Inline arrays such as `project_repository = [{ ... }]` are refused:
+the command fails without changing the file or printing a success result. Removal edits configuration only; existing
+checkouts, linked worktrees, their contents, and git state are preserved.
+
 ## Tracing, exit codes, and logging
 
 ### Tracing

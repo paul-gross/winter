@@ -115,6 +115,114 @@ fn commented_workspace(tree: &TempTree) -> PathBuf {
 }
 
 #[test]
+fn inline_repository_arrays_are_not_blocks_and_change_nothing() {
+    for (kind, key) in [
+        (RepositoryKind::Project, "project_repository"),
+        (RepositoryKind::Standalone, "standalone_repository"),
+    ] {
+        for (local, file) in [(false, SHARED), (true, LOCAL)] {
+            for value in ["[]", "[{ url = \"x\" }]", "[1]"] {
+                let tree = TempTree::new().expect("an isolated tree");
+                let text = format!("{key} = {value}\n");
+                let root = WorkspaceBuilder::new(&tree)
+                    .config(if local { COMMENTED } else { &text })
+                    .local_config(if local { &text } else { LOCAL_TEXT })
+                    .build()
+                    .expect("a workspace")
+                    .root;
+                let before = snapshot(&root);
+                let target = format!("{kind}/x");
+                let mut args = vec![target.as_str(), "--json"];
+                if local {
+                    args.push("--local");
+                }
+                let (error, diagnostic) = catalog_error(&root, &args);
+                assert!(
+                    matches!(&error, CatalogError::NotArrayOfTables { kind: actual, path }
+                    if *actual == kind && *path == root.join(file)),
+                    "{text}: {error:?}"
+                );
+                assert!(diagnostic.contains(&kind.to_string()), "{diagnostic}");
+                assert!(
+                    diagnostic.contains(&root.join(file).display().to_string()),
+                    "{diagnostic}"
+                );
+                assert_eq!(snapshot(&root), before);
+            }
+        }
+    }
+}
+
+#[test]
+fn absent_repository_keys_are_not_found_in_either_file() {
+    for kind in [RepositoryKind::Project, RepositoryKind::Standalone] {
+        for local in [false, true] {
+            let tree = TempTree::new().expect("an isolated tree");
+            let root = WorkspaceBuilder::new(&tree)
+                .config("")
+                .local_config("")
+                .build()
+                .expect("a workspace")
+                .root;
+            let before = snapshot(&root);
+            let target = format!("{kind}/x");
+            let mut args = vec![target.as_str(), "--json"];
+            if local {
+                args.push("--local");
+            }
+            let (error, _) = catalog_error(&root, &args);
+            assert!(
+                matches!(&error, CatalogError::NotFound { kind: actual, name }
+                if *actual == kind && name == "x"),
+                "{error:?}"
+            );
+            assert_eq!(snapshot(&root), before);
+        }
+    }
+}
+
+#[test]
+fn non_array_repository_values_are_refused_by_the_load_before_either_file_is_edited() {
+    for key in ["project_repository", "standalone_repository"] {
+        for file in [SHARED, LOCAL] {
+            for text in [
+                format!("{key} = \"x\"\n"),
+                format!("{key} = true\n"),
+                format!("[{key}]\nurl = \"x\"\n"),
+            ] {
+                let tree = TempTree::new().expect("an isolated tree");
+                let root = WorkspaceBuilder::new(&tree)
+                    .config(if file == SHARED { &text } else { COMMENTED })
+                    .local_config(if file == LOCAL { &text } else { LOCAL_TEXT })
+                    .build()
+                    .expect("a workspace")
+                    .root;
+                let before = snapshot(&root);
+                for flags in [&[][..], &["--local"][..]] {
+                    let args = [&["repo", "remove", "project/web", "--json"], flags].concat();
+                    let termination = InProcess::new(&args)
+                        .cwd(&root)
+                        .run()
+                        .wrote_nothing(1, &text);
+                    assert!(
+                        matches!(&termination, Termination::Config(error)
+                        if matches!(&**error, ConfigError::RepositoriesNotArray { .. })),
+                        "{termination:?}"
+                    );
+                    let diagnostic = termination.diagnostic().expect("a diagnostic");
+                    assert!(diagnostic.contains(key), "{diagnostic}");
+                    assert!(
+                        diagnostic.contains(file.rsplit('/').next().unwrap()),
+                        "{diagnostic}"
+                    );
+                    assert_eq!(snapshot(&root), before);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn the_group_and_the_command_are_listed_in_help() {
     let tree = TempTree::new().expect("an isolated tree");
 
