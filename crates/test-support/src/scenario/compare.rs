@@ -226,7 +226,7 @@ pub fn differences(
         }
     }
 
-    let mut comparison = Comparison::new(rules);
+    let mut comparison = Comparison::new(rules, true);
     for (index, step) in scenario.steps.iter().enumerate() {
         let number = u32::try_from(index + 1).unwrap_or(u32::MAX);
         let (recorded, observed) = (&recorded[index], &observed[index]);
@@ -254,7 +254,7 @@ pub fn differences(
 /// `built`, the snapshot of the fixture as it was just built; `None` when the two are equal. No rule of a
 /// scenario applies: every entry, every hash, every block, and the stored content are compared.
 pub fn fixture(recorded: &Snapshot, built: &Snapshot) -> Option<Difference> {
-    let mut comparison = Comparison::new(Rules::default());
+    let mut comparison = Comparison::new(Rules::default(), false);
     comparison.tree(1, recorded, built);
     comparison.git(1, recorded, built);
     if recorded.files != built.files {
@@ -1149,6 +1149,7 @@ fn subject(
 /// One comparison under the rules of a scenario: what it found, and which rules it used.
 struct Comparison {
     rules: Rules,
+    toml_by_extension: bool,
     message_text_used: Vec<bool>,
     fan_out_used: Vec<bool>,
     files_used: Vec<bool>,
@@ -1156,8 +1157,9 @@ struct Comparison {
 }
 
 impl Comparison {
-    fn new(rules: Rules) -> Self {
+    fn new(rules: Rules, toml_by_extension: bool) -> Self {
         Self {
+            toml_by_extension,
             message_text_used: vec![false; rules.message_text.len()],
             fan_out_used: vec![false; rules.fan_out.len()],
             files_used: vec![false; rules.files.len()],
@@ -1221,7 +1223,8 @@ impl Comparison {
         }
     }
 
-    /// How the file at `path` is compared: by the first rule whose glob matches, by its bytes without one.
+    /// The first matching rule wins. After-state defaults to TOML for `.toml` paths and bytes otherwise;
+    /// fixture comparison always defaults to bytes.
     fn mode(&mut self, path: &str) -> FileMode {
         let segments: Vec<&str> = path.split('/').collect();
         let rules = self.rules.files.iter();
@@ -1233,6 +1236,7 @@ impl Comparison {
                 self.files_used[index] = true;
                 *mode
             }
+            None if self.toml_by_extension && path.ends_with(".toml") => FileMode::Toml,
             None => FileMode::Bytes,
         }
     }

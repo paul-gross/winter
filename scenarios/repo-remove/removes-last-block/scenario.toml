@@ -6,3 +6,8 @@ workspace_git = true
 [[step]]
 args = ["repo", "remove", "project/docs", "--json"]
 stdout = "json"
+
+[[compare.file]]
+path = "ws/.winter/config.toml"
+mode = "bytes"
+reason = "decision:parallel-workspaces/repository-catalog/removal-comment-extent fixes the removed lines"
