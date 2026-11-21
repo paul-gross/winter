@@ -105,7 +105,7 @@ A command file names none of these:
 | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The file port                        | `ReadFiles`, `WriteFiles`, `OsFiles`                                                                                                                        |
 | The program port                     | `RunPrograms`, `OsPrograms`                                                                                                                                 |
-| Modules a domain entry stands on     | `workspace_root`, `workspace_files`, `config_file`, `config_load`, `config_merge`, `config_model`, `config_edit`, `state_registry`, `environments`, `drift` |
+| Modules a domain entry stands on     | `workspace_root`, `workspace_files`, `config_file`, `config_load`, `config_lock`, `config_merge`, `config_model`, `config_edit`, `state_registry`, `environments`, `drift`, `git::` |
 | File formats                         | `toml::`, `toml_edit`                                                                                                                                       |
 | Writing, and how a failed write ends | `writeln!`, `write!(`, `to_writer`, `InternalError`, `Backtrace`                                                                                            |
 

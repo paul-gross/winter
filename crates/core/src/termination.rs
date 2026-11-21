@@ -6,6 +6,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::config_edit::CatalogError;
+use crate::config_lock::LockError;
 use crate::workspace_files::{CONFIG_FILE, LOCAL_CONFIG_FILE};
 
 /// One value per way an invocation ends.
@@ -121,6 +122,75 @@ pub enum UsageError {
         usage: Usage,
         fault: ParseFault,
     },
+    /// A combination of options the command refuses. Rendered as `Parse` is.
+    #[error("{}{rule}\n{}\nFor help, run '{}'.", ERROR_MARKER, .usage.line, .usage.help_command)]
+    Rule {
+        command_path: Vec<String>,
+        usage: Usage,
+        rule: UsageRule,
+    },
+}
+
+/// A rule of option combination that a command enforces after parsing.
+#[derive(Debug, thiserror::Error)]
+pub enum UsageRule {
+    #[error("--force only applies with --freeze")]
+    ForceWithoutFreeze,
+    #[error("--autostash does not apply with --freeze")]
+    AutostashWithFreeze,
+}
+
+/// A repository selection pattern a command refuses.
+#[derive(Debug, thiserror::Error)]
+pub enum SelectionError {
+    #[error("empty pattern is not allowed")]
+    EmptyPattern,
+    #[error(
+        "invalid pattern {}: this command takes bare names, not '<segment>/<segment>' (no '/')",
+        repr(.pattern)
+    )]
+    NotBareName { pattern: String },
+}
+
+/// The value as Python's `repr` writes a string: in single quotes, or in double quotes when it holds a
+/// single quote and no double quote, with the quote, the backslash, and the non-printable characters escaped.
+fn repr(value: &str) -> String {
+    let quote = if value.contains('\'') && !value.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push(quote);
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            c if is_printable(c) => out.push(c),
+            c if (c as u32) <= 0xff => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if (c as u32) <= 0xffff => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push_str(&format!("\\U{:08x}", c as u32)),
+        }
+    }
+    out.push(quote);
+    out
+}
+
+/// Whether Python's `str.isprintable` holds for the character, as far as the standard library tells.
+fn is_printable(c: char) -> bool {
+    !c.is_control()
+        && !matches!(c as u32, 0xa0 | 0xad | 0x2028 | 0x2029 | 0x200b..=0x200f | 0x202a..=0x202e | 0x2060..=0x206f | 0xfeff)
+        && !c.is_whitespace()
+        || c == ' '
 }
 
 /// What the argument parser refused.
@@ -167,6 +237,8 @@ fn quoted(values: &[String]) -> String {
 pub enum CommandError {
     #[error(transparent)]
     Catalog(#[from] CatalogError),
+    #[error(transparent)]
+    Selection(#[from] SelectionError),
 }
 
 /// A failure to locate, read, write, or accept the workspace configuration.
@@ -186,6 +258,8 @@ pub enum ConfigError {
     },
     #[error(transparent)]
     RemovedKey(RemovedKey),
+    #[error(transparent)]
+    Lock(LockError),
     #[error("{key} does not accept the {value}")]
     InvalidChoice { key: ChoiceKey, value: ConfigValue },
     #[error(
@@ -722,6 +796,21 @@ pub enum RepoMessage {
         operation: GitOperation,
         repo: String,
     },
+    #[error("unresolvable ref {} at {}: not a branch, tag, or commit SHA", repr(.r#ref), .path.display())]
+    UnresolvableRef { r#ref: String, path: PathBuf },
+    #[error(
+        "refusing to re-pin {}: working tree has uncommitted changes; commit or stash first (or run `winter ws fetch {name}` to sync refs)",
+        repr(.name)
+    )]
+    DirtyRePin { name: String },
+    #[error("standalone repo {} has no `ref` configured — nothing to update", repr(.name))]
+    NotPinned { name: String },
+    #[error("no pinned standalone repo named {}", repr(.name))]
+    NoPinnedNamed { name: String },
+    #[error("no standalone repo named {}", repr(.name))]
+    NoStandaloneNamed { name: String },
+    #[error("cannot fingerprint {name}: {} does not exist", .path.display())]
+    MissingCheckout { name: String, path: PathBuf },
 }
 
 /// What a git call that failed was made for.
@@ -1220,6 +1309,7 @@ mod tests {
             ConfigError::FileRead { .. } => "FileRead",
             ConfigError::FileWrite { .. } => "FileWrite",
             ConfigError::RemovedKey(_) => "RemovedKey",
+            ConfigError::Lock(_) => "Lock",
             ConfigError::InvalidChoice { .. } => "InvalidChoice",
             ConfigError::EnvsPerWorkspaceTooSmall { .. } => "EnvsPerWorkspaceTooSmall",
             ConfigError::DuplicateStandaloneName { .. } => "DuplicateStandaloneName",
@@ -1856,5 +1946,111 @@ mod tests {
 
         assert_eq!(error.to_string(), "index out of range");
         assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn each_new_repo_message_renders_the_specs_wording() {
+        let path = PathBuf::from("/ws/x");
+        let cases = [
+            (
+                RepoMessage::UnresolvableRef {
+                    r#ref: "v1".into(),
+                    path: path.clone(),
+                },
+                "unresolvable ref 'v1' at /ws/x: not a branch, tag, or commit SHA",
+            ),
+            (
+                RepoMessage::DirtyRePin { name: "a".into() },
+                "refusing to re-pin 'a': working tree has uncommitted changes; commit or stash first (or run `winter ws fetch a` to sync refs)",
+            ),
+            (
+                RepoMessage::NotPinned {
+                    name: "it's".into(),
+                },
+                "standalone repo \"it's\" has no `ref` configured — nothing to update",
+            ),
+            (
+                RepoMessage::NoPinnedNamed { name: "a".into() },
+                "no pinned standalone repo named 'a'",
+            ),
+            (
+                RepoMessage::NoStandaloneNamed { name: "a".into() },
+                "no standalone repo named 'a'",
+            ),
+            (
+                RepoMessage::MissingCheckout {
+                    name: "it's".into(),
+                    path,
+                },
+                "cannot fingerprint it's: /ws/x does not exist",
+            ),
+        ];
+        for (message, text) in cases {
+            assert_eq!(message.to_string(), text);
+        }
+    }
+
+    #[test]
+    fn repr_quotes_as_python_does() {
+        assert_eq!(repr("a"), "'a'");
+        assert_eq!(repr("it's"), "\"it's\"");
+        assert_eq!(repr("it's \"x\""), "'it\\'s \"x\"'");
+        assert_eq!(repr("a\\b\tc\n\u{1}\u{7f}"), "'a\\\\b\\tc\\n\\x01\\x7f'");
+        assert_eq!(repr("é\u{200b}\u{1f600}"), "'é\\u200b😀'");
+    }
+
+    #[test]
+    fn a_selection_error_renders_its_wording() {
+        assert_eq!(
+            SelectionError::EmptyPattern.to_string(),
+            "empty pattern is not allowed"
+        );
+        assert_eq!(
+            SelectionError::NotBareName {
+                pattern: "a/b".into()
+            }
+            .to_string(),
+            "invalid pattern 'a/b': this command takes bare names, not '<segment>/<segment>' (no '/')"
+        );
+    }
+
+    #[test]
+    fn a_usage_rule_renders_the_three_part_diagnostic() {
+        let usage = || Usage {
+            line: "usage: x".into(),
+            help_command: "x --help".into(),
+        };
+        for (rule, text) in [
+            (
+                UsageRule::ForceWithoutFreeze,
+                "--force only applies with --freeze",
+            ),
+            (
+                UsageRule::AutostashWithFreeze,
+                "--autostash does not apply with --freeze",
+            ),
+        ] {
+            let error = UsageError::Rule {
+                command_path: vec![],
+                usage: usage(),
+                rule,
+            };
+            assert_eq!(
+                error.to_string(),
+                format!("{ERROR_MARKER}{text}\nusage: x\nFor help, run 'x --help'.")
+            );
+        }
+    }
+
+    #[test]
+    fn a_lock_error_renders_through_config_error() {
+        let error = ConfigError::Lock(LockError::UnsupportedVersion {
+            path: PathBuf::from("/ws/.winter/config.lock"),
+            found: None,
+        });
+        assert_eq!(
+            error.to_string(),
+            "/ws/.winter/config.lock: unsupported lock file version"
+        );
     }
 }

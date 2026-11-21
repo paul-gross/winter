@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 
 /// The level of a log record, lowest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Level {
+pub enum Level {
     Debug,
     Info,
     Warning,
@@ -14,7 +14,7 @@ pub(crate) enum Level {
 
 /// What one invocation logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Log {
+pub struct Log {
     /// Records below it are dropped.
     pub threshold: Level,
     /// Whether `-v` or a valid `WINTER_LOG_LEVEL` switched the record format.
@@ -23,7 +23,7 @@ pub(crate) struct Log {
 
 impl Log {
     /// What is logged when nothing asks for more: warnings and above, in the format that is not switched.
-    pub(crate) const DEFAULT: Log = Log {
+    pub const DEFAULT: Log = Log {
         threshold: Level::Warning,
         switched: false,
     };

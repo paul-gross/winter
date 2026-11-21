@@ -21,7 +21,10 @@ fn usage_error(args: &[&str]) -> (ParseFault, Usage) {
                 command_path,
                 usage,
                 fault,
-            } = *error;
+            } = *error
+            else {
+                panic!("expected a parse fault");
+            };
             assert!(command_path.is_empty(), "{args:?}: {command_path:?}");
             (fault, usage)
         }
@@ -143,7 +146,9 @@ fn a_usage_diagnostic_is_the_error_line_the_usage_line_and_the_help_command() {
         let Termination::Usage(error) = termination else {
             panic!("{args:?}: expected a usage termination, got {termination:?}");
         };
-        let UsageError::Parse { usage, .. } = *error;
+        let UsageError::Parse { usage, .. } = *error else {
+            panic!("expected a parse fault");
+        };
         let lines: Vec<&str> = diagnostic.lines().collect();
         let [error_line, usage_line, help_line] = lines.as_slice() else {
             panic!("{args:?}: expected three lines, got {diagnostic:?}");
@@ -169,7 +174,10 @@ fn usage_error_os(args: Vec<OsString>) -> (ParseFault, Usage) {
                 command_path,
                 usage,
                 fault,
-            } = *error;
+            } = *error
+            else {
+                panic!("expected a parse fault");
+            };
             assert!(command_path.is_empty(), "{line}: {command_path:?}");
             (fault, usage)
         }

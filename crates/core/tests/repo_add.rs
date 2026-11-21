@@ -129,7 +129,9 @@ fn catalog_error(cwd: &Path, args: &[&str]) -> CatalogError {
         .run();
     match ended.wrote_nothing(1, &format!("{args:?}")) {
         Termination::Command(error) => {
-            let CommandError::Catalog(error) = *error;
+            let CommandError::Catalog(error) = *error else {
+                panic!("expected a catalog error");
+            };
             error
         }
         other => panic!("{args:?}: expected a catalog error, got {other:?}"),
