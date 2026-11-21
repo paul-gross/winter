@@ -967,7 +967,10 @@ mod tests {
                     command_path,
                     usage,
                     fault,
-                } = *error;
+                } = *error
+                else {
+                    panic!("expected a parse fault");
+                };
                 assert_eq!(command_path, staged);
                 if let Stage::Command { invoked, .. } = &parsed.stage {
                     assert_eq!(invoked.usage, usage);

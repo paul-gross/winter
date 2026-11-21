@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Reads files.
-pub(crate) trait ReadFiles {
+pub trait ReadFiles {
     /// The bytes of the file at `path`, or `Ok(None)` when no such file exists.
     fn read(&self, path: &Path) -> io::Result<Option<Vec<u8>>>;
 
@@ -96,10 +96,10 @@ fn resolve_walk<F: ReadFiles + ?Sized>(
 
 /// What one update does to a file: it gets the current bytes, `None` when no such file exists, and returns the
 /// new bytes, or `None` to leave the file as it is.
-pub(crate) type Edit<'a> = dyn FnMut(Option<&[u8]>) -> Option<Vec<u8>> + 'a;
+pub type Edit<'a> = dyn FnMut(Option<&[u8]>) -> Option<Vec<u8>> + 'a;
 
 /// Writes files.
-pub(crate) trait WriteFiles {
+pub trait WriteFiles {
     /// One read-modify-write of the file at `path`, and whether the file was replaced.
     ///
     /// `edit` is given the current bytes and decides the new ones. An exclusive advisory lock on the directory
@@ -117,7 +117,7 @@ pub(crate) trait WriteFiles {
 }
 
 /// The files of the operating system.
-pub(crate) struct OsFiles;
+pub struct OsFiles;
 
 impl ReadFiles for OsFiles {
     fn read(&self, path: &Path) -> io::Result<Option<Vec<u8>>> {

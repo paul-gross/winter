@@ -83,7 +83,9 @@ fn catalog_error(cwd: &Path, args: &[&str]) -> (CatalogError, String) {
     let diagnostic = termination.diagnostic().expect("a diagnostic");
     match termination {
         Termination::Command(error) => {
-            let CommandError::Catalog(error) = *error;
+            let CommandError::Catalog(error) = *error else {
+                panic!("expected a catalog error");
+            };
             (error, diagnostic)
         }
         other => panic!("{args:?}: expected a catalog error, got {other:?}"),
@@ -1003,7 +1005,10 @@ fn a_missing_target_is_a_usage_error_that_carries_the_usage_of_repo_remove() {
         command_path,
         usage,
         ..
-    } = *error;
+    } = *error
+    else {
+        panic!("expected a parse fault");
+    };
     assert_eq!(command_path, ["repo", "remove"]);
     assert_eq!(usage.help_command, "winter-workspace repo remove --help");
     assert!(

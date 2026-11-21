@@ -61,7 +61,7 @@ pub(crate) fn notice(err: &mut dyn Write, line: &str) {
 ///
 /// The command file builds it from its context and hands it to its one call. It is no port: nothing else
 /// carries it.
-pub(crate) struct Diagnostics<'a> {
+pub struct Diagnostics<'a> {
     pub err: &'a mut dyn Write,
     #[allow(
         dead_code,

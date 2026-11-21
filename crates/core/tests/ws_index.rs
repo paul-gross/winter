@@ -597,7 +597,10 @@ fn usage_parts(ended: Ended, line: &str) -> (Vec<String>, Usage, ParseFault) {
                 command_path,
                 usage,
                 fault,
-            } = *error;
+            } = *error
+            else {
+                panic!("expected a parse fault");
+            };
             (command_path, usage, fault)
         }
         other => panic!("{line}: expected a usage termination, got {other:?}"),

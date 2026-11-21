@@ -16,13 +16,13 @@ use crate::process::ProcessEnv;
 
 /// A program the library starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Program {
+pub enum Program {
     Git,
 }
 
 impl Program {
     /// The name the program is looked up by.
-    pub(crate) fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Git => "git",
         }
@@ -31,7 +31,7 @@ impl Program {
 
 /// One start of a program: its arguments, the subcommand first, and its working directory.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Call<'a> {
+pub struct Call<'a> {
     pub program: Program,
     pub args: &'a [&'a OsStr],
     pub cwd: &'a Path,
@@ -39,7 +39,7 @@ pub(crate) struct Call<'a> {
 
 /// What a program that ran to its end wrote, and how it ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Finished {
+pub struct Finished {
     pub exit: Exit,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -47,14 +47,14 @@ pub(crate) struct Finished {
 
 /// How a program ended: with an exit code, or by a signal of that number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Exit {
+pub enum Exit {
     Code(i32),
     Signal(i32),
 }
 
 impl Exit {
     /// The exit as one number: the code, or minus the number of the signal.
-    pub(crate) fn number(self) -> i32 {
+    pub fn number(self) -> i32 {
         match self {
             Self::Code(code) => code,
             Self::Signal(signal) => -signal,
@@ -63,7 +63,7 @@ impl Exit {
 }
 
 /// Starts programs.
-pub(crate) trait RunPrograms {
+pub trait RunPrograms {
     /// Starts the program of `call` and waits for it, however long it runs. Its stdin reads empty, and its
     /// stdout and stderr are captured whole. An error only when the program cannot be started.
     fn run(&self, call: &Call<'_>) -> io::Result<Finished>;
@@ -86,7 +86,7 @@ const MESSAGE_LOCALE: [&str; 2] = ["LANGUAGE", "LC_ALL"];
 const DEFAULT_PATH: &str = "/bin:/usr/bin";
 
 /// The programs of the operating system.
-pub(crate) struct OsPrograms {
+pub struct OsPrograms {
     /// The whole environment of a child.
     environment: BTreeMap<OsString, OsString>,
     /// `PATH` as the snapshot holds it.
@@ -95,7 +95,7 @@ pub(crate) struct OsPrograms {
 
 impl OsPrograms {
     /// The programs as an invocation with the environment `snapshot` starts them.
-    pub(crate) fn new(snapshot: &ProcessEnv) -> Self {
+    pub fn new(snapshot: &ProcessEnv) -> Self {
         let environment = child_environment(snapshot.pairs());
         let path = environment.get(OsStr::new("PATH")).cloned();
         Self { environment, path }

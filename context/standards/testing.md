@@ -21,6 +21,8 @@ Choose the lowest tier that can make the claim:
   exporter variables in `crates/cli/src/trace.rs`; and the tracer of that file under the handler, whose test holds the
   `Collector` its child exports to and writes the certificate file the child reads. A child that takes an interrupt
   raises the signal on itself, and the test sends none.
+- A component test also calls an entry re-exported from `lib.rs`, against the git fixtures, for an entry that no command
+  of the library reaches yet or that another epic's command calls.
 - A component test runs the library in process and asserts on the returned `Termination` and on what was written. The
   run is built through the scaffold `crates/core/tests/support/in_process.rs`, a module the test file declares by
   `#[path]`. `InProcess` takes the arguments, the working directory, the environment, and stdin, calls the library's
