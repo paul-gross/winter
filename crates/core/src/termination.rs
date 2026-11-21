@@ -820,6 +820,14 @@ pub enum GitOperation {
     StatusProbe,
     /// The count of the commits a checkout is ahead of and behind the main branch of its remote.
     MainAheadBehindProbe,
+    /// The read of the commit `HEAD` names.
+    Head,
+    /// The switch of a checkout to a branch or a commit.
+    Checkout,
+    /// The stash of the changes of a working tree.
+    StashPush,
+    /// The restore of the changes a stash holds.
+    StashPop,
 }
 
 impl fmt::Display for GitOperation {
@@ -827,6 +835,10 @@ impl fmt::Display for GitOperation {
         f.write_str(match self {
             Self::StatusProbe => "status probe",
             Self::MainAheadBehindProbe => "main-branch ahead/behind probe",
+            Self::Head => "head read",
+            Self::Checkout => "checkout",
+            Self::StashPush => "stash push",
+            Self::StashPop => "stash pop",
         })
     }
 }
