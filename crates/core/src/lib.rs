@@ -40,7 +40,7 @@ mod workspace_files;
 mod workspace_root;
 
 pub use config_edit::{CatalogError, RepositoryKind, StandaloneOption};
-pub use config_lock::{LockEntryFault, LockError};
+pub use config_lock::{LockEntry, LockEntryFault, LockError, RefKind, read_lock, upsert_lock};
 pub use config_model::{
     AdoptExtensions, AgentOverride, DashboardLayout, EnvBands, EnvCommand, EnvFormat, EnvValue,
     EnvVar, FileSizeLimits, GitIdentity, Keybindings, LoadMode, ModelTier, Nested, Ports,
