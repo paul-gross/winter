@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 /// The shared configuration file. A directory is a workspace root when it holds this file.
 pub(crate) const CONFIG_FILE: &str = ".winter/config.toml";
 
+/// The standalone pin lock, committed beside the shared configuration.
+pub(crate) const LOCK_FILE: &str = ".winter/config.lock";
+
 /// The machine-local configuration file, layered over the shared one.
 pub(crate) const LOCAL_CONFIG_FILE: &str = ".winter/config.local.toml";
 

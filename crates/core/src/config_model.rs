@@ -318,7 +318,7 @@ pub(crate) fn value_type(value: &Value) -> ValueType {
 }
 
 /// `value` as an error carries it: its TOML text and its type.
-fn config_value(value: &Value) -> ConfigValue {
+pub(crate) fn config_value(value: &Value) -> ConfigValue {
     ConfigValue {
         text: value.to_string(),
         found: value_type(value),
