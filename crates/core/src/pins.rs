@@ -1,6 +1,7 @@
 //! Pinning standalone repositories to recorded inputs: the ports every pin entry takes and the module's error.
 
 use crate::files::{ReadFiles, WriteFiles};
+use crate::git::GitFailure;
 use crate::programs::RunPrograms;
 use crate::termination::{ConfigError, InternalError, RepoError};
 use crate::trace::CommandTracer;
@@ -33,4 +34,55 @@ pub enum PinError {
     /// A git that could not be started.
     #[error(transparent)]
     Internal(Box<InternalError>),
+}
+
+impl From<GitFailure> for PinError {
+    fn from(failure: GitFailure) -> Self {
+        match failure {
+            GitFailure::Repo(error) => Self::Repo(error),
+            GitFailure::Internal(error) => Self::Internal(error),
+        }
+    }
+}
+
+impl From<ConfigError> for PinError {
+    fn from(error: ConfigError) -> Self {
+        Self::Config(Box::new(error))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::path::Path;
+
+    use super::*;
+    use crate::files::OsFiles;
+    use crate::programs::{Call, Finished};
+    use crate::trace::NoTrace;
+
+    struct CannotStart;
+
+    impl RunPrograms for CannotStart {
+        fn run(&self, _: &Call<'_>) -> io::Result<Finished> {
+            Err(io::Error::other("no git"))
+        }
+    }
+
+    #[test]
+    fn a_git_that_cannot_start_is_an_internal_pin_error() {
+        let ports = Ports {
+            files: &OsFiles,
+            writer: &OsFiles,
+            programs: &CannotStart,
+            tracer: &NoTrace,
+        };
+
+        let answer = resolve::resolve(&ports, "api", Path::new("/nowhere"), "main");
+
+        assert!(matches!(
+            answer.map_err(PinError::from),
+            Err(PinError::Internal(_))
+        ));
+    }
 }

@@ -16,7 +16,7 @@ use crate::programs::RunPrograms;
 use crate::state_registry;
 use crate::termination::{ConfigError, InternalError, RepoError};
 use crate::trace::CommandTracer;
-use crate::workspace_files::location;
+use crate::workspace_files::{location, standalone_location};
 
 /// What a location is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,12 +165,7 @@ pub(crate) fn list(
     }
     for standalone in &config.standalone_repositories {
         let name = &standalone.common.name;
-        let relative = if standalone.path.is_empty() {
-            name
-        } else {
-            &standalone.path
-        };
-        let path = location(&root, Path::new(relative));
+        let path = standalone_location(&root, name, &standalone.path);
         if files.is_dir(&path) {
             listed.push(Location {
                 kind: LocationKind::Standalone,

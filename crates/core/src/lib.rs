@@ -54,6 +54,9 @@ pub use git::{
     verify,
 };
 pub use logging::{Level, Log};
+pub use pins::materialize::materialize;
+pub use pins::outcome::{PinOutcome, PinResult, rendered};
+pub use pins::resolve::{Resolution, resolve};
 pub use pins::snapshot::{PinSnapshot, snapshot};
 pub use pins::{PinError, Ports as PinPorts};
 pub use process::{Identity, Interrupts, Invocation, ProcessEnv, run};
