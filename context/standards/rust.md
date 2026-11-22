@@ -17,11 +17,19 @@ may contain any of these tokens:
 | Environment      | `std::env::var`, `std::env::vars`, `std::env::args`, `std::env::current_dir`                            |
 | File system      | `std::fs`, in every source except `crates/core/src/files.rs`, the place of the file port                |
 | Process start    | `process::Command`, in every source except `crates/core/src/programs.rs`, the place of the program port |
+| Monotonic clock  | `Instant::now`, in every source except `crates/core/src/programs.rs`                                    |
+| Sleep            | `thread::sleep`, in every source except `crates/core/src/programs.rs`                                   |
+| Random draw      | `fastrand`, in every source except `crates/core/src/programs.rs`                                        |
+| System calls     | `rustix`, in every source except `crates/core/src/programs.rs`                                          |
 
 A command writes its result to the stdout handle of its `Context` through `crates/core/src/output.rs`, as
 [changes.md](../architecture/changes.md#writing-the-result) describes, and reads the environment and the working
 directory from the `Context`. A domain module starts a program through the program port it is handed, `cx.programs`, as
 [structure.md](../architecture/structure.md#modules) describes.
+
+`programs.rs` is the one library source that reads the monotonic clock, sleeps, and draws a random number, for the
+deadline and the pacing of a remote call. A module that needs one takes it as a parameter the program port supplies, and
+reads no clock of its own. The library otherwise reads no clock.
 
 The architecture test checks the token table by scanning each source as text. Nothing is exempt: a test module inside
 the library is checked like the rest, and so is a comment. A failure names the file, the line, and the token.
@@ -34,7 +42,7 @@ and the format. No other module formats a log record or writes to the stderr han
 takes both the handle and the `Log` as the `Diagnostics` its command file built from its `Context`. This rule is checked
 in review: the scan for tokens does not see it.
 
-The library opens no socket, reads no clock, and names no tracing crate. What it knows of tracing is in
+The library opens no socket, and names no tracing crate. What it knows of tracing is in
 `crates/core/src/trace.rs`: the settings, read from the environment snapshot at an instant the binary gives it, and the
 port `CommandTracer`, which `run` announces the command to and which opens an operation span, a child of the command
 span, for a command that wraps the calls of one operation. The binary implements that port in
