@@ -370,6 +370,7 @@ fn git<A: AsRef<OsStr>>(
             program: Program::Git,
             args: &args,
             cwd,
+            timeout: None,
         })
         .map_err(InternalError::unexpected)
 }

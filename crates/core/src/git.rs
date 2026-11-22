@@ -169,6 +169,7 @@ fn run(programs: &dyn RunPrograms, cwd: &Path, args: &[&str]) -> Result<Finished
             program: Program::Git,
             args: &args,
             cwd,
+            timeout: None,
         })
         .map_err(|error| GitFailure::Internal(Box::new(InternalError::unexpected(error))))
 }
