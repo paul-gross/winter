@@ -1,0 +1,65 @@
+repository
+    remotes/lib.git
+    kind: bare
+head
+    2d33a7b66b130b4e058b59bc3ed656505c41376a
+    refs/heads/main
+refs
+    refs/heads/main 2d33a7b66b130b4e058b59bc3ed656505c41376a  
+    refs/tags/v1 b85a7e5fa3a3140155a73e22a2795bc41d5f3cec  
+    refs/tags/v2 2d33a7b66b130b4e058b59bc3ed656505c41376a  
+worktrees
+    worktree <ROOT>/remotes/lib.git
+    bare
+    
+config
+    core.bare=true
+    core.filemode=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    2d33a7b66b130b4e058b59bc3ed656505c41376a b85a7e5fa3a3140155a73e22a2795bc41d5f3cec Fixture Author author@fixture.invalid 946684860 Fixture Committer committer@fixture.invalid 946684860 Second lib
+    b85a7e5fa3a3140155a73e22a2795bc41d5f3cec  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial lib
+
+repository
+    ws/lib
+    kind: main
+dot-git
+    directory
+head
+    2d33a7b66b130b4e058b59bc3ed656505c41376a
+    refs/heads/main
+refs
+    refs/heads/main 2d33a7b66b130b4e058b59bc3ed656505c41376a refs/remotes/origin/main 
+    refs/remotes/origin/HEAD 2d33a7b66b130b4e058b59bc3ed656505c41376a  refs/remotes/origin/main
+    refs/remotes/origin/main 2d33a7b66b130b4e058b59bc3ed656505c41376a  
+    refs/tags/v1 b85a7e5fa3a3140155a73e22a2795bc41d5f3cec  
+    refs/tags/v2 2d33a7b66b130b4e058b59bc3ed656505c41376a  
+worktrees
+    worktree <ROOT>/ws/lib
+    HEAD 2d33a7b66b130b4e058b59bc3ed656505c41376a
+    branch refs/heads/main
+    
+status
+    # branch.oid 2d33a7b66b130b4e058b59bc3ed656505c41376a
+    # branch.head main
+    # branch.upstream origin/main
+    # branch.ab +0 -0
+stash
+config
+    branch.main.merge=refs/heads/main
+    branch.main.remote=origin
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+    remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+    remote.origin.url=https://fixture.invalid/lib.git
+in-progress
+exclude
+log
+    refs/heads/main
+    2d33a7b66b130b4e058b59bc3ed656505c41376a b85a7e5fa3a3140155a73e22a2795bc41d5f3cec Fixture Author author@fixture.invalid 946684860 Fixture Committer committer@fixture.invalid 946684860 Second lib
+    b85a7e5fa3a3140155a73e22a2795bc41d5f3cec  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial lib

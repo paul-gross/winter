@@ -1,0 +1,17 @@
+{
+  "digest": "f4e4d90b14db614e2bed228706dd1dd4786fb3096aac026cb9b399b44ec08d78",
+  "workspace": {
+    "name": "ws",
+    "commit": "16916dcdfe79aabc504bd91e33ff560435f63d59",
+    "tree": "3842a22a341ffa4935badaf930f4284fd20536fe",
+    "dirty": false
+  },
+  "standalones": [
+    {
+      "name": "lib",
+      "commit": "b85a7e5fa3a3140155a73e22a2795bc41d5f3cec",
+      "tree": "d3eaa9730cb49fed610b8b20f84ad3ade5b16b2b",
+      "dirty": false
+    }
+  ]
+}

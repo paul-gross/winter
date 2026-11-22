@@ -1,0 +1,6 @@
+[[project_repository]]
+name = "web"
+
+# keep these bytes
+[[standalone_repository]]
+name = "lib"   # trailing comment

@@ -1,0 +1,23 @@
+summary = "A staged removal of a tracked workspace file changes the workspace tree and its digest."
+
+[fixture]
+workspace_git = true
+
+[[fixture.remote]]
+name = "lib"
+
+[[fixture.remote.commit]]
+message = "Initial lib"
+files = { "README.md" = "lib fixture\n" }
+
+[[fixture.checkout]]
+remote = "lib"
+path = "lib"
+
+[[fixture.git]]
+cwd = "."
+args = ["rm", "--quiet", "--cached", "notes.txt"]
+
+[[step]]
+args = ["ws", "fingerprint", "--json"]
+stdout = "json"

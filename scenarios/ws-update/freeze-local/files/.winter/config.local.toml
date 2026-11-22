@@ -1,0 +1,3 @@
+# keep these bytes
+[[standalone_repository]]
+name = "lib"   # trailing comment

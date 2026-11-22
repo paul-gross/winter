@@ -1,0 +1,22 @@
+summary = "A literal name that is no pinned standalone is refused."
+
+[[fixture.remote]]
+name = "lib"
+
+[[fixture.remote.commit]]
+message = "Initial lib"
+files = { "README.md" = "lib fixture\n" }
+tag = "v1"
+
+[[fixture.remote.commit]]
+message = "Second lib"
+files = { "notes.txt" = "lib notes\n" }
+tag = "v2"
+
+[[fixture.checkout]]
+remote = "lib"
+path = "lib"
+
+[[step]]
+args = ["ws", "update", "nosuch", "--json"]
+stdout = "json-lines"

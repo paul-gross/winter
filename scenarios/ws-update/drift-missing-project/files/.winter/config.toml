@@ -1,0 +1,6 @@
+[[project_repository]]
+name = "web"
+
+[[standalone_repository]]
+name = "lib"
+ref = "v2"
