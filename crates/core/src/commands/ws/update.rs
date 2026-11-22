@@ -7,11 +7,12 @@ use crate::context::Context;
 use crate::diagnostics::{self, Diagnostics};
 use crate::output;
 use crate::pattern_match;
+use crate::pins::freeze;
 use crate::pins::outcome::PinResult;
 use crate::pins::repin::{self, PinEvent, RunEnd};
 use crate::pins::{PinError, Ports};
 use crate::registry::Registration;
-use crate::termination::{CommandError, Termination};
+use crate::termination::{CommandError, Termination, UsageError, UsageRule};
 
 pub(crate) const REGISTRATION: Registration = Registration::Command {
     args,
@@ -26,12 +27,14 @@ const REPOS: &str = "REPOS";
 struct Params {
     repos: Vec<String>,
     autostash: bool,
+    freeze: bool,
+    force: bool,
     json: bool,
 }
 
 fn args(command: clap::Command) -> clap::Command {
     command
-        .about("Re-resolve `ref` pins for standalone repos and rewrite the lock")
+        .about("Re-resolve `ref` pins for standalone repos and rewrite the lock, or with --freeze pin them to their current commits")
         .arg(
             Arg::new("repos")
                 .value_name(REPOS)
@@ -43,6 +46,18 @@ fn args(command: clap::Command) -> clap::Command {
                 .long("autostash")
                 .action(ArgAction::SetTrue)
                 .help("Stash a dirty working tree before re-pinning, and restore it after"),
+        )
+        .arg(
+            Arg::new("freeze")
+                .long("freeze")
+                .action(ArgAction::SetTrue)
+                .help("Pin each selected standalone to its current commit: write `ref` into the file that declares it and record the lock; no fetch, no checkout"),
+        )
+        .arg(
+            Arg::new("force")
+                .long("force")
+                .action(ArgAction::SetTrue)
+                .help("With --freeze, pin a checkout that has uncommitted changes"),
         )
         .arg(
             Arg::new("json")
@@ -66,11 +81,38 @@ fn params(matches: &ArgMatches) -> Result<Params, Termination> {
     Ok(Params {
         repos,
         autostash: matches.get_flag("autostash"),
+        freeze: matches.get_flag("freeze"),
+        force: matches.get_flag("force"),
         json: matches.get_flag("json"),
     })
 }
 
+/// The rule of option combination that `params` breaks, in the order the command surface lists them.
+fn broken_rule(params: &Params) -> Option<UsageRule> {
+    if params.force && !params.freeze {
+        Some(UsageRule::ForceWithoutFreeze)
+    } else if params.autostash && params.freeze {
+        Some(UsageRule::AutostashWithFreeze)
+    } else {
+        None
+    }
+}
+
 fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
+    let flags = Params {
+        repos: Vec::new(),
+        autostash: matches.get_flag("autostash"),
+        freeze: matches.get_flag("freeze"),
+        force: matches.get_flag("force"),
+        json: false,
+    };
+    if let Some(rule) = broken_rule(&flags) {
+        return Termination::Usage(Box::new(UsageError::Rule {
+            command_path: cx.invoked.path.clone(),
+            usage: cx.invoked.usage.clone(),
+            rule,
+        }));
+    }
     let params = match params(matches) {
         Ok(params) => params,
         Err(termination) => return termination,
@@ -104,15 +146,26 @@ fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
         }
         Ok(())
     };
-    let ended = repin::repin(
-        ports,
-        cx.env,
-        &mut diagnostics,
-        cx.cwd,
-        &params.repos,
-        params.autostash,
-        &mut sink,
-    );
+    let ended = if params.freeze {
+        freeze::freeze(
+            ports,
+            &mut diagnostics,
+            cx.cwd,
+            &params.repos,
+            params.force,
+            &mut sink,
+        )
+    } else {
+        repin::repin(
+            ports,
+            cx.env,
+            &mut diagnostics,
+            cx.cwd,
+            &params.repos,
+            params.autostash,
+            &mut sink,
+        )
+    };
     match ended {
         Ok(RunEnd::Completed { success: true }) => Termination::Success,
         Ok(RunEnd::Completed { success: false }) => Termination::Reported,
@@ -217,6 +270,8 @@ mod tests {
             Params {
                 repos: Vec::new(),
                 autostash: false,
+                freeze: false,
+                force: false,
                 json: false,
             }
         );
@@ -229,22 +284,41 @@ mod tests {
             Params {
                 repos: vec!["b".to_owned(), "lib-[ab]".to_owned(), "a*".to_owned()],
                 autostash: true,
+                freeze: false,
+                force: false,
                 json: true,
             }
         );
     }
 
     #[test]
-    fn the_freeze_and_force_options_are_unknown() {
-        for option in ["--freeze", "--force"] {
-            let error = parsed(&[option]).expect_err("an unknown option");
+    fn the_freeze_and_force_options_are_parsed() {
+        let params = read(&["--freeze", "--force", "lib"]).expect("parameters");
 
-            assert_eq!(
-                error.kind(),
-                clap::error::ErrorKind::UnknownArgument,
-                "{option}"
-            );
-        }
+        assert!(params.freeze && params.force && !params.autostash);
+        assert_eq!(params.repos, vec!["lib".to_owned()]);
+    }
+
+    #[test]
+    fn force_without_freeze_is_the_first_broken_rule_and_autostash_with_freeze_the_second() {
+        let with = |freeze, force, autostash| Params {
+            repos: Vec::new(),
+            autostash,
+            freeze,
+            force,
+            json: false,
+        };
+
+        assert!(matches!(
+            broken_rule(&with(false, true, true)),
+            Some(UsageRule::ForceWithoutFreeze)
+        ));
+        assert!(matches!(
+            broken_rule(&with(true, true, true)),
+            Some(UsageRule::AutostashWithFreeze)
+        ));
+        assert!(broken_rule(&with(true, true, false)).is_none());
+        assert!(broken_rule(&with(false, false, true)).is_none());
     }
 
     #[test]

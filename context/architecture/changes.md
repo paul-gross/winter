@@ -192,7 +192,7 @@ whose variants `Config` and `Internal` become `Termination::Config` and `Termina
 what each of the two carries, and so never names the type of an internal failure. The `ListError` of `locations::list`
 has a third variant, `Repo`, for a git call of a worktree probe that failed, which becomes `Termination::Repo`. It holds
 its error in a box already, because a `Result` whose error is as wide as a `RepoError` is refused by the `clippy` step,
-and the command file hands that box on. `pins::repin::repin` fails with `PinError`, whose three variants hold their
+and the command file hands that box on. `pins::repin::repin` and `pins::freeze::freeze` fail with `PinError`, whose three variants hold their
 errors in boxes that become `Termination::Repo`, `Termination::Config`, and `Termination::Internal` as they are, and it
 answers a `RunEnd` otherwise: a completed run becomes `Termination::Success` or, when an outcome was a pin error,
 `Termination::Reported`, and a run the sink stopped becomes the ending the sink gave.

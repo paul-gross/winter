@@ -24,8 +24,8 @@ workspace.
   checkout under a temporary directory, and only where no directory at or above the working directory holds a
   `.winter/config.toml` other than one made for the run; never in the checkout and never in a real workspace, because it
   resolves the workspace upward from its working directory, `repo add` and `repo remove` write to the configuration they
-  find there, and `ws update` fetches, resets branches, stashes, and writes the lock of the workspace it finds there. It
-  is never installed, and never put on `PATH` under the name of the installed `winter`. The isolated tree is the one
+  find there, and `ws update` fetches, resets branches, stashes, and writes the lock, and, with `--freeze`, the
+  configuration, of the workspace it finds there. It is never installed, and never put on `PATH` under the name of the installed `winter`. The isolated tree is the one
   [testing.md](./context/standards/testing.md#the-isolated-tree) describes; a scratch workspace is a directory made for
   the run that holds a `.winter/config.toml` of its own.
 

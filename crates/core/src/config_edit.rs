@@ -265,6 +265,99 @@ pub(crate) fn lacks_one_block(
         && kept.zip(&rest).all(|(block, kept)| same_value(block, kept))
 }
 
+/// A text with a `ref` added to one standalone block, and which block that is.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct RefSet {
+    /// The text with the new key.
+    pub(crate) text: String,
+    /// The position of the block among the standalone blocks of the text it was taken from, from zero.
+    pub(crate) index: usize,
+}
+
+/// The document with `ref = "<commit>"` added to the first standalone block whose effective name is `name`,
+/// or `None` when no block matches.
+///
+/// The line is inserted after the last key of the block's own section: after the line that ends that key's
+/// value, and so before a sub-table of the block and before the comments and blank lines that precede the next
+/// header. It ends with the terminator of the line it follows. When that line is the last one and has no
+/// terminator, a newline is placed before the new line and the new line has none. Every other byte is kept. A
+/// document that does not parse, and a repository array written inline, have no block.
+pub(crate) fn set_standalone_ref(document: &str, name: &str, commit: &str) -> Option<RefSet> {
+    let parsed = Document::parse(document).ok()?;
+    let blocks = parsed
+        .as_table()
+        .get(RepositoryKind::Standalone.array_key())?;
+    let (index, block) = blocks
+        .as_array_of_tables()?
+        .iter()
+        .enumerate()
+        .find(|(_, block)| effective_name(block).as_deref() == Some(name))?;
+
+    let mut own = Vec::new();
+    own_values(block, &mut own);
+    let anchor = own
+        .iter()
+        .map(|value| value.end)
+        .max()
+        .or_else(|| block.span().map(|span| span.start))?;
+    let rest = document.get(anchor..)?;
+    let line = format!("ref = {}", toml_edit::value(commit));
+    let text = match rest.find('\n') {
+        Some(newline) => {
+            let end = anchor + newline + 1;
+            let terminator = if document.get(..end - 1)?.ends_with('\r') {
+                "\r\n"
+            } else {
+                "\n"
+            };
+            let mut text = String::with_capacity(document.len() + line.len() + 2);
+            text.push_str(document.get(..end)?);
+            text.push_str(&line);
+            text.push_str(terminator);
+            text.push_str(document.get(end..)?);
+            text
+        }
+        None => format!("{document}\n{line}"),
+    };
+    Some(RefSet { text, index })
+}
+
+/// The range of each value of the keys that stand in the section of `table` itself: the dotted keys are
+/// part of it, a sub-table with a header of its own is not.
+fn own_values(table: &Table, into: &mut Vec<Range<usize>>) {
+    for (_, item) in table.iter() {
+        match item {
+            Item::Value(value) => into.extend(value.span()),
+            Item::Table(child) if child.is_dotted() => own_values(child, into),
+            _ => {}
+        }
+    }
+}
+
+/// Whether `edited` is `original` with `ref = "<commit>"` added to the standalone block at `index` and
+/// nothing else changed: both parse, the block at `index` held no `ref`, and every key and every block is the
+/// same but for that one key.
+pub(crate) fn adds_one_ref(original: &str, edited: &str, index: usize, commit: &str) -> bool {
+    let (Ok(mut before), Ok(after)) = (
+        toml::from_str::<toml::Table>(original),
+        toml::from_str::<toml::Table>(edited),
+    ) else {
+        return false;
+    };
+    let Some(toml::Value::Array(blocks)) = before.get_mut(RepositoryKind::Standalone.array_key())
+    else {
+        return false;
+    };
+    let Some(toml::Value::Table(block)) = blocks.get_mut(index) else {
+        return false;
+    };
+    if block.contains_key("ref") {
+        return false;
+    }
+    block.insert("ref".to_owned(), toml::Value::String(commit.to_owned()));
+    same_table(&before, &after)
+}
+
 /// Whether two tables hold the same keys with the same values.
 fn same_table(left: &toml::Table, right: &toml::Table) -> bool {
     left.len() == right.len()
@@ -1395,5 +1488,148 @@ name = \"ünï\"
                 assert!(text.contains(kept), "{text}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod set_ref_tests {
+    use super::*;
+
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn set(document: &str, name: &str) -> Option<String> {
+        set_standalone_ref(document, name, SHA).map(|set| set.text)
+    }
+
+    fn line() -> String {
+        format!("ref = \"{SHA}\"")
+    }
+
+    #[test]
+    fn the_key_follows_the_last_key_and_a_comment_of_the_next_block_stays_below() {
+        let document = "[[standalone_repository]]\nname = \"a\"\nurl = \"u\" # why\n\n# next\n[[standalone_repository]]\nname = \"b\"\n";
+
+        assert_eq!(
+            set(document, "a").unwrap(),
+            format!(
+                "[[standalone_repository]]\nname = \"a\"\nurl = \"u\" # why\n{}\n\n# next\n[[standalone_repository]]\nname = \"b\"\n",
+                line()
+            )
+        );
+    }
+
+    #[test]
+    fn a_block_is_matched_by_the_name_of_its_url() {
+        let document = "[[standalone_repository]]\nurl = \"git@h:o/tools.git\"\n";
+
+        assert_eq!(
+            set(document, "tools").unwrap(),
+            format!(
+                "[[standalone_repository]]\nurl = \"git@h:o/tools.git\"\n{}\n",
+                line()
+            )
+        );
+    }
+
+    #[test]
+    fn a_multi_line_value_ends_the_section_at_its_own_end() {
+        let document = "[[standalone_repository]]\nname = \"a\"\ncmd = [\n  \"x\",\n]\n";
+
+        assert_eq!(
+            set(document, "a").unwrap(),
+            format!(
+                "[[standalone_repository]]\nname = \"a\"\ncmd = [\n  \"x\",\n]\n{}\n",
+                line()
+            )
+        );
+    }
+
+    #[test]
+    fn the_key_goes_before_a_sub_table_of_the_block() {
+        let document =
+            "[[standalone_repository]]\nname = \"a\"\n[standalone_repository.env]\nk = \"v\"\n";
+
+        assert_eq!(
+            set(document, "a").unwrap(),
+            format!(
+                "[[standalone_repository]]\nname = \"a\"\n{}\n[standalone_repository.env]\nk = \"v\"\n",
+                line()
+            )
+        );
+    }
+
+    #[test]
+    fn a_carriage_return_line_feed_file_gets_the_same_terminator() {
+        let document = "[[standalone_repository]]\r\nname = \"a\"\r\n";
+
+        assert_eq!(
+            set(document, "a").unwrap(),
+            format!(
+                "[[standalone_repository]]\r\nname = \"a\"\r\n{}\r\n",
+                line()
+            )
+        );
+    }
+
+    #[test]
+    fn a_last_line_without_a_terminator_gets_a_newline_before_the_key() {
+        let document = "[[standalone_repository]]\nname = \"a\"";
+
+        assert_eq!(
+            set(document, "a").unwrap(),
+            format!("[[standalone_repository]]\nname = \"a\"\n{}", line())
+        );
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_kept() {
+        let document = "\u{feff}[[standalone_repository]]\nname = \"a\"\n";
+
+        assert_eq!(
+            set(document, "a").unwrap(),
+            format!(
+                "\u{feff}[[standalone_repository]]\nname = \"a\"\n{}\n",
+                line()
+            )
+        );
+    }
+
+    #[test]
+    fn no_match_an_inline_array_and_a_bad_document_give_none() {
+        assert_eq!(set("[[standalone_repository]]\nname = \"a\"\n", "b"), None);
+        assert_eq!(
+            set("standalone_repository = [{ name = \"a\" }]\n", "a"),
+            None
+        );
+        assert_eq!(set("= nope", "a"), None);
+        assert_eq!(set("[[project_repository]]\nname = \"a\"\n", "a"), None);
+    }
+
+    #[test]
+    fn the_guard_passes_one_ref_and_nothing_else() {
+        let original =
+            "[[standalone_repository]]\nname = \"a\"\n[[standalone_repository]]\nname = \"b\"\n";
+        let edited = set_standalone_ref(original, "b", SHA).unwrap();
+
+        assert_eq!(edited.index, 1);
+        assert!(adds_one_ref(original, &edited.text, 1, SHA));
+        assert!(!adds_one_ref(original, &edited.text, 0, SHA));
+        assert!(!adds_one_ref(original, original, 1, SHA));
+        assert!(!adds_one_ref(
+            original,
+            &format!("{}x = 1\n", edited.text),
+            1,
+            SHA
+        ));
+        assert!(!adds_one_ref(original, &edited.text, 1, "other"));
+        assert!(!adds_one_ref(original, "= nope", 1, SHA));
+    }
+
+    #[test]
+    fn the_guard_refuses_a_block_that_already_holds_a_ref() {
+        let original = "[[standalone_repository]]\nname = \"a\"\nref = \"v1\"\n";
+        let edited = format!("{original}{}\n", line());
+
+        assert!(!adds_one_ref(original, &edited, 0, SHA));
     }
 }

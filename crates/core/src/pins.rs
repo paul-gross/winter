@@ -36,6 +36,19 @@ pub enum PinError {
     Internal(Box<InternalError>),
 }
 
+/// Whether `name` is selected by `patterns`: a glob pattern matches it by `fnmatchcase`, any other pattern is a
+/// literal name. No pattern selects every name.
+pub(crate) fn selected(name: &str, patterns: &[String]) -> bool {
+    patterns.is_empty()
+        || patterns.iter().any(|pattern| {
+            if crate::pattern_match::is_glob(pattern) {
+                crate::pattern_match::fnmatchcase(name, pattern)
+            } else {
+                name == pattern
+            }
+        })
+}
+
 impl From<GitFailure> for PinError {
     fn from(failure: GitFailure) -> Self {
         match failure {

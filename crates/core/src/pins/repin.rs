@@ -157,16 +157,7 @@ fn select<'r>(
     }
     Ok(pinned
         .into_iter()
-        .filter(|(repo, _)| {
-            let name = repo.common.name.as_str();
-            patterns.iter().any(|pattern| {
-                if pattern_match::is_glob(pattern) {
-                    pattern_match::fnmatchcase(name, pattern)
-                } else {
-                    name == pattern
-                }
-            })
-        })
+        .filter(|(repo, _)| crate::pins::selected(&repo.common.name, patterns))
         .collect())
 }
 
