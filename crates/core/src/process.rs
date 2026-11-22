@@ -224,6 +224,7 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
                 err_is_terminal: stderr_is_terminal,
                 files: &OsFiles,
                 file_writer: &OsFiles,
+                scratch: &OsFiles,
                 programs: &programs,
                 tracer,
                 invoked: &invoked,

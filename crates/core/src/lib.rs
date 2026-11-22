@@ -48,10 +48,10 @@ pub use config_model::{
     VendorModel, Workspace, WorkspaceConfig,
 };
 pub use diagnostics::Diagnostics;
-pub use files::{OsFiles, ReadFiles, WriteFiles};
+pub use files::{OsFiles, ReadFiles, ScratchFile, ScratchFiles, WriteFiles};
 pub use git::{
-    GitFailure, Sha, checkout_branch, checkout_detached, clean, fetch, head, stash_pop, stash_push,
-    verify,
+    GitFailure, Sha, checkout_branch, checkout_detached, clean, dirty, fetch, head, stash_pop,
+    stash_push, tree, verify,
 };
 pub use logging::{Level, Log};
 pub use pins::materialize::materialize;

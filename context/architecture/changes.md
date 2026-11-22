@@ -101,13 +101,13 @@ handler, and there `pending` stays false.
 
 A command file names none of these:
 
-| Area                                 | Names a command file may not hold                                                                                                                           |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The file port                        | `ReadFiles`, `WriteFiles`, `OsFiles`                                                                                                                        |
-| The program port                     | `RunPrograms`, `OsPrograms`                                                                                                                                 |
+| Area                                 | Names a command file may not hold                                                                                                                                                   |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The file port                        | `ReadFiles`, `WriteFiles`, `ScratchFiles`, `OsFiles`                                                                                                                                |
+| The program port                     | `RunPrograms`, `OsPrograms`                                                                                                                                                         |
 | Modules a domain entry stands on     | `workspace_root`, `workspace_files`, `config_file`, `config_load`, `config_lock`, `config_merge`, `config_model`, `config_edit`, `state_registry`, `environments`, `drift`, `git::` |
-| File formats                         | `toml::`, `toml_edit`                                                                                                                                       |
-| Writing, and how a failed write ends | `writeln!`, `write!(`, `to_writer`, `InternalError`, `Backtrace`                                                                                            |
+| File formats                         | `toml::`, `toml_edit`                                                                                                                                                               |
+| Writing, and how a failed write ends | `writeln!`, `write!(`, `to_writer`, `InternalError`, `Backtrace`                                                                                                                    |
 
 The architecture test checks the names by scanning each file under `crates/core/src/commands/` as text. A test module
 and a comment are checked like the rest, and a failure names the file, the line, and the name.
@@ -171,14 +171,13 @@ The function a command file calls, the module's entry, returns a typed value or 
 `Termination`. The command file maps the failure: `repository_catalog::remove` fails with `RemoveError`, a sum of the
 module's own that the command file takes apart into `Termination::Command` and `Termination::Config`,
 `repository_catalog::add` fails with `AddError`, whose three variants become `Termination::Command`,
-`Termination::Config`, and `Termination::Internal`,
-`index_lookup::answer` fails with `ConfigError` alone, which becomes `Termination::Config`, and
-`repository_catalog::list` and `locations::list` each fail with a `ListError` of their own, whose variants `Config` and
-`Internal` become `Termination::Config` and `Termination::Internal`: the command file boxes what each of the two
-carries, and so never names the type of an internal failure. The `ListError` of `locations::list` has a third variant,
-`Repo`, for a git call of a worktree probe that failed, which becomes `Termination::Repo`. It holds its error in a box
-already, because a `Result` whose error is as wide as a `RepoError` is refused by the `clippy` step, and the command
-file hands that box on.
+`Termination::Config`, and `Termination::Internal`, `index_lookup::answer` fails with `ConfigError` alone, which becomes
+`Termination::Config`, and `repository_catalog::list` and `locations::list` each fail with a `ListError` of their own,
+whose variants `Config` and `Internal` become `Termination::Config` and `Termination::Internal`: the command file boxes
+what each of the two carries, and so never names the type of an internal failure. The `ListError` of `locations::list`
+has a third variant, `Repo`, for a git call of a worktree probe that failed, which becomes `Termination::Repo`. It holds
+its error in a box already, because a `Result` whose error is as wide as a `RepoError` is refused by the `clippy` step,
+and the command file hands that box on.
 
 An entry that reports a condition on stderr takes a `&mut Diagnostics`, the borrow of the stderr handle and the log its
 command file built, and writes through `crates/core/src/diagnostics.rs`: `repository_catalog::list` writes the drift

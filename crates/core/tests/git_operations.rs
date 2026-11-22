@@ -1,12 +1,14 @@
 //! The git operations over the program port, run against the host's git in fixture repositories.
 
+use std::cell::RefCell;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use winter_workspace_core::{
-    Call, Diagnostics, Finished, GitFailure, Log, OsPrograms, Pacing, ProcessEnv, RunPrograms,
-    checkout_branch, checkout_detached, clean, fetch, head, stash_pop, stash_push, verify,
+    Call, CommandTracer, Diagnostics, Finished, GitFailure, GitOperation, Log, OperationSpan,
+    OsFiles, OsPrograms, Pacing, ProcessEnv, RepoMessage, RunPrograms, TraceLog, checkout_branch,
+    checkout_detached, clean, dirty, fetch, head, stash_pop, stash_push, tree, verify,
 };
 use winter_workspace_test_support::{CommitSpec, Git, TempTree};
 
@@ -14,6 +16,33 @@ use winter_workspace_test_support::{CommitSpec, Git, TempTree};
 #[allow(dead_code)]
 mod spans;
 use spans::Spans;
+
+/// A tracer that records the span names that were marked failed.
+#[derive(Default)]
+struct Failures(RefCell<Vec<(String, String)>>);
+
+struct Marked<'a>(&'a Failures, &'static str);
+
+impl OperationSpan for Marked<'_> {
+    fn failed(&mut self, error_type: &'static str) {
+        self.0
+            .0
+            .borrow_mut()
+            .push((self.1.to_owned(), error_type.to_owned()));
+    }
+}
+
+impl CommandTracer for Failures {
+    fn command_started(&self, _: &[String], _: TraceLog) {}
+
+    fn operation(
+        &self,
+        name: &'static str,
+        _: &[(&'static str, &str)],
+    ) -> Box<dyn OperationSpan + '_> {
+        Box::new(Marked(self, name))
+    }
+}
 
 struct Fixture {
     tree: TempTree,
@@ -383,4 +412,106 @@ fn fetch_keeps_a_local_tag_the_remote_moved() {
 
     assert_eq!(f.out(&["rev-parse", "v1"]).trim(), at);
     assert_eq!(f.out(&["rev-parse", "origin/main"]).trim(), later);
+}
+
+fn tree_of(f: &Fixture, spans: &dyn CommandTracer, path: &Path) -> Result<String, GitFailure> {
+    let temp = f.tree.root().join("scratch");
+    std::fs::create_dir_all(&temp).expect("a temp directory");
+    tree(&OsFiles, &OsFiles, &f.programs, spans, &temp, "api", path)
+}
+
+#[test]
+fn the_tree_of_a_fresh_clone_is_the_tree_of_its_head_and_it_is_not_dirty() {
+    let f = fixture();
+
+    let written = tree_of(&f, &Spans::default(), &f.clone).expect("a tree");
+
+    assert_eq!(written, f.out(&["rev-parse", "HEAD^{tree}"]).trim());
+    assert!(!dirty(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer"));
+    assert_eq!(
+        std::fs::read_dir(f.tree.root().join("scratch"))
+            .expect("the temp directory")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn a_staged_addition_changes_the_tree_and_is_dirty() {
+    let f = fixture();
+    let before = tree_of(&f, &Spans::default(), &f.clone).expect("a tree");
+    f.write("b.txt", "b\n");
+    f.out(&["add", "b.txt"]);
+
+    let after = tree_of(&f, &Spans::default(), &f.clone).expect("a tree");
+
+    assert_ne!(before, after);
+    assert!(dirty(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer"));
+}
+
+#[test]
+fn an_untracked_file_is_neither_in_the_tree_nor_dirty() {
+    let f = fixture();
+    let before = tree_of(&f, &Spans::default(), &f.clone).expect("a tree");
+    f.write("new.txt", "x\n");
+
+    assert_eq!(
+        tree_of(&f, &Spans::default(), &f.clone).expect("a tree"),
+        before
+    );
+    assert!(!dirty(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer"));
+}
+
+#[test]
+fn tree_and_dirty_are_one_span_each_attributed_with_the_repo_alone() {
+    let f = fixture();
+    let spans = Spans::default();
+
+    tree_of(&f, &spans, &f.clone).expect("a tree");
+    dirty(&f.programs, &spans, "api", &f.clone).expect("an answer");
+
+    let attributes = vec![("winter.repo".to_owned(), "api".to_owned())];
+    assert_eq!(
+        *spans.0.borrow(),
+        vec![
+            ("git write-tree".to_owned(), attributes.clone()),
+            ("git status".to_owned(), attributes),
+        ]
+    );
+}
+
+#[test]
+fn the_tree_of_a_directory_that_is_no_repository_fails_with_its_span_marked() {
+    let f = fixture();
+    let plain = f.tree.root().join("plain");
+    std::fs::create_dir(&plain).expect("a directory");
+    let failures = Failures::default();
+
+    let answer = tree_of(&f, &failures, &plain);
+
+    let Err(GitFailure::Repo(error)) = answer else {
+        panic!("{answer:?}");
+    };
+    assert!(matches!(
+        error.message,
+        RepoMessage::GitFailure {
+            operation: GitOperation::ContentTree,
+            ..
+        }
+    ));
+    assert_eq!(
+        *failures.0.borrow(),
+        vec![("git write-tree".to_owned(), "RepoError".to_owned())]
+    );
+}
+
+#[test]
+fn dirty_of_a_directory_that_is_no_repository_is_an_error() {
+    let f = fixture();
+    let plain = f.tree.root().join("plain");
+    std::fs::create_dir(&plain).expect("a directory");
+
+    let answer = dirty(&f.programs, &Spans::default(), "api", &plain);
+
+    assert!(matches!(answer, Err(GitFailure::Repo(_))), "{answer:?}");
 }

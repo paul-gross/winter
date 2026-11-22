@@ -1,12 +1,13 @@
 //! The git operations over the program port, what they answer on failure, and the commit id a git call returns.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::time::Duration;
 
 mod remote;
 
 use crate::diagnostics::Diagnostics;
+use crate::files::{ReadFiles, ScratchFiles};
 use crate::process::ProcessEnv;
 use crate::programs::{Call, Exit, Finished, Program, RunPrograms};
 use crate::termination::{GitOperation, InternalError, RepoError, RepoMessage};
@@ -25,6 +26,7 @@ pub enum GitFailure {
 /// The operation spans of the git operations, named `git <operation>`.
 pub(crate) const REV_PARSE_SPAN: &str = "git rev-parse";
 const STATUS_SPAN: &str = "git status";
+const WRITE_TREE_SPAN: &str = "git write-tree";
 const CHECKOUT_SPAN: &str = "git checkout";
 const FETCH_SPAN: &str = "git fetch";
 const STASH_PUSH_SPAN: &str = "git stash push";
@@ -70,7 +72,7 @@ pub fn fetch(
     let pacing = programs.pacing();
     let args = ["fetch", "origin"];
     let finished = remote::attempts(
-        &mut || run_for(programs, path, &args, Some(timeout)),
+        &mut || run_for(programs, path, &args, Some(timeout), &[]),
         &mut |duration| (pacing.sleep)(duration),
         &mut || (pacing.draw)(),
         diagnostics,
@@ -90,6 +92,84 @@ pub fn clean(
     let _span = tracer.operation(STATUS_SPAN, &[(REPO_ATTRIBUTE, repo)]);
     let finished = run(programs, path, &["status", "--porcelain"])?;
     Ok(finished.exit == Exit::Code(0) && finished.stdout.is_empty())
+}
+
+/// The tree of the tracked content of the checkout at `path`, the checkout of the repository `repo`: what
+/// `HEAD` plus every change to a tracked file makes, whether staged or not.
+///
+/// The tree is written from a scratch index under `temp`, a copy of the real one, or a `HEAD` read into a new
+/// one where the real one does not exist, so the real index is never written and git has no stale stat entry
+/// to trust. The scratch directory is removed on every way out.
+pub fn tree(
+    files: &dyn ReadFiles,
+    scratch: &dyn ScratchFiles,
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    temp: &Path,
+    repo: &str,
+    path: &Path,
+) -> Result<Sha, GitFailure> {
+    let mut span = tracer.operation(WRITE_TREE_SPAN, &[(REPO_ATTRIBUTE, repo)]);
+    let located = succeeded(
+        programs,
+        repo,
+        path,
+        GitOperation::ContentTree,
+        &["rev-parse", "--git-path", "index"],
+        &mut *span,
+    )?;
+    let real = path.join(String::from_utf8_lossy(&located.stdout).trim());
+    let (index, seeded) = if files.is_file(&real) {
+        (scratch.scratch_copy(temp, &real), true)
+    } else {
+        (scratch.scratch_path(temp, "index"), false)
+    };
+    let index =
+        index.map_err(|error| GitFailure::Internal(Box::new(InternalError::unexpected(error))))?;
+    let variable: OsString = index.path().into();
+    let env = [(OsStr::new("GIT_INDEX_FILE"), variable.as_os_str())];
+    let mut step = |args: &[&str]| -> Result<Finished, GitFailure> {
+        let finished = run_for(programs, path, args, None, &env)?;
+        ended(
+            finished,
+            repo,
+            path,
+            GitOperation::ContentTree,
+            args,
+            &mut *span,
+        )
+    };
+    if !seeded {
+        step(&["read-tree", "HEAD"])?;
+    }
+    step(&["add", "-u"])?;
+    let written = step(&["write-tree"])?;
+    Ok(String::from_utf8_lossy(&written.stdout).trim().to_owned())
+}
+
+/// Whether a tracked file of the checkout at `path`, the checkout of the repository `repo`, differs from
+/// the index or from `HEAD`. An untracked file is no change, and git takes no optional lock.
+///
+/// Unlike [`clean`], a failure of git is an error.
+pub fn dirty(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+) -> Result<bool, GitFailure> {
+    let mut span = tracer.operation(STATUS_SPAN, &[(REPO_ATTRIBUTE, repo)]);
+    let args = ["status", "--porcelain", "--untracked-files=no"];
+    let env = [(OsStr::new("GIT_OPTIONAL_LOCKS"), OsStr::new("0"))];
+    let finished = run_for(programs, path, &args, None, &env)?;
+    let finished = ended(
+        finished,
+        repo,
+        path,
+        GitOperation::TrackedStatus,
+        &args,
+        &mut *span,
+    )?;
+    Ok(!finished.stdout.is_empty())
 }
 
 /// Whether `rev` names an object in the repository at `path`. A non-zero exit is no match, not an error.
@@ -206,7 +286,7 @@ pub fn stash_pop(
 
 /// Runs git with `args` in `cwd`. A git that cannot be started is an internal failure.
 fn run(programs: &dyn RunPrograms, cwd: &Path, args: &[&str]) -> Result<Finished, GitFailure> {
-    run_for(programs, cwd, args, None)
+    run_for(programs, cwd, args, None, &[])
 }
 
 /// [`run`], killed when it outlives `timeout`.
@@ -215,6 +295,7 @@ fn run_for(
     cwd: &Path,
     args: &[&str],
     timeout: Option<Duration>,
+    env: &[(&OsStr, &OsStr)],
 ) -> Result<Finished, GitFailure> {
     let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
     programs
@@ -223,6 +304,7 @@ fn run_for(
             args: &args,
             cwd,
             timeout,
+            env,
         })
         .map_err(|error| GitFailure::Internal(Box::new(InternalError::unexpected(error))))
 }
