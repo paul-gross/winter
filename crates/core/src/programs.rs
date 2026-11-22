@@ -6,11 +6,17 @@
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Stdio};
+use std::time::{Duration, Instant};
+
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::io::Errno;
+use rustix::process::{Pid, Signal, kill_process};
 
 use crate::process::ProcessEnv;
 
@@ -29,12 +35,14 @@ impl Program {
     }
 }
 
-/// One start of a program: its arguments, the subcommand first, and its working directory.
+/// One start of a program: its arguments, the subcommand first, its working directory, and how long it may run.
 #[derive(Debug, Clone, Copy)]
 pub struct Call<'a> {
     pub program: Program,
     pub args: &'a [&'a OsStr],
     pub cwd: &'a Path,
+    /// The time the program may run before it is killed; `None` waits for it however long it runs.
+    pub timeout: Option<Duration>,
 }
 
 /// What a program that ran to its end wrote, and how it ended.
@@ -64,8 +72,10 @@ impl Exit {
 
 /// Starts programs.
 pub trait RunPrograms {
-    /// Starts the program of `call` and waits for it, however long it runs. Its stdin reads empty, and its
-    /// stdout and stderr are captured whole. An error only when the program cannot be started.
+    /// Starts the program of `call` and waits for it, until its timeout when it has one. Its stdin reads empty,
+    /// and its stdout and stderr are captured whole. A program that outlives its timeout is killed, with its
+    /// children, and ends as `Exit::Signal(9)` with the timeout line as its stderr. An error only when the
+    /// program cannot be started.
     fn run(&self, call: &Call<'_>) -> io::Result<Finished>;
 }
 
@@ -131,14 +141,43 @@ impl RunPrograms for OsPrograms {
                     format!("no executable file named {name} in a directory of PATH"),
                 )
             })?;
-        let output = std::process::Command::new(program)
+        let mut child = std::process::Command::new(&program)
             .args(call.args)
             .current_dir(call.cwd)
             .env_clear()
             .envs(&self.environment)
-            .stdin(std::process::Stdio::null())
-            .output()?;
-        let exit = match (output.status.code(), output.status.signal()) {
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let deadline = call.timeout.map(|timeout| Instant::now() + timeout);
+        let mut pipes = Pipes::of(&mut child);
+        let waited = pipes
+            .wait_for_close(deadline)
+            .and_then(|expired| match (expired, deadline) {
+                (false, Some(deadline)) => wait_for_exit(&mut child, deadline),
+                (expired, _) => Ok(expired),
+            });
+        let expired = match waited {
+            Ok(expired) => expired,
+            Err(error) => {
+                self.kill_tree(&mut child, call.cwd);
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
+        if let (true, Some(timeout)) = (expired, call.timeout) {
+            self.kill_tree(&mut child, call.cwd);
+            pipes.read_to_end();
+            let _ = child.wait();
+            return Ok(Finished {
+                exit: Exit::Signal(9),
+                stdout: pipes.stdout,
+                stderr: timeout_line(call, timeout).into_bytes(),
+            });
+        }
+        let status = child.wait()?;
+        let exit = match (status.code(), status.signal()) {
             (Some(code), _) => Exit::Code(code),
             (None, Some(signal)) => Exit::Signal(signal),
             (None, None) => {
@@ -149,10 +188,168 @@ impl RunPrograms for OsPrograms {
         };
         Ok(Finished {
             exit,
-            stdout: output.stdout,
-            stderr: output.stderr,
+            stdout: pipes.stdout,
+            stderr: pipes.stderr,
         })
     }
+}
+
+impl OsPrograms {
+    /// Kills a program that outlived its timeout, as GitPython's `kill_process` does: the direct children of
+    /// `child` are listed with `ps --ppid <pid>`, then `child` is sent SIGKILL, then each of them. A missing
+    /// `ps`, a failed listing, and a failed kill are ignored.
+    fn kill_tree(&self, child: &mut Child, cwd: &Path) {
+        let children = self.children_of(child.id(), cwd);
+        let _ = child.kill();
+        for pid in children {
+            if let Some(pid) = i32::try_from(pid).ok().and_then(Pid::from_raw) {
+                let _ = kill_process(pid, Signal::KILL);
+            }
+        }
+    }
+
+    /// The ids of the direct children of the process `pid`, by `ps`, which runs with no timeout.
+    fn children_of(&self, pid: u32, cwd: &Path) -> Vec<u32> {
+        let Some(ps) = find_program("ps", self.path.as_deref(), cwd, &is_executable) else {
+            return Vec::new();
+        };
+        let Ok(listing) = std::process::Command::new(ps)
+            .args(["--ppid", &pid.to_string(), "-o", "pid="])
+            .current_dir(cwd)
+            .env_clear()
+            .envs(&self.environment)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+        else {
+            return Vec::new();
+        };
+        String::from_utf8_lossy(&listing.stdout)
+            .split_whitespace()
+            .filter_map(|field| field.parse().ok())
+            .collect()
+    }
+}
+
+/// How long a wait for a child to end sleeps between two looks at it.
+const EXIT_POLL: Duration = Duration::from_millis(10);
+
+/// The bytes read of a child's two streams so far, and the streams still open.
+struct Pipes {
+    out: Option<std::process::ChildStdout>,
+    err: Option<std::process::ChildStderr>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl Pipes {
+    fn of(child: &mut Child) -> Self {
+        Self {
+            out: child.stdout.take(),
+            err: child.stderr.take(),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        }
+    }
+
+    /// Reads whichever stream is ready until both are closed, or until `deadline` passes: then `true`. A poll
+    /// that is interrupted is entered again with the time that remains.
+    fn wait_for_close(&mut self, deadline: Option<Instant>) -> io::Result<bool> {
+        while self.out.is_some() || self.err.is_some() {
+            let remaining = match deadline {
+                Some(deadline) => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return Ok(true);
+                    }
+                    Some(Timespec {
+                        tv_sec: i64::try_from(remaining.as_secs()).unwrap_or(i64::MAX),
+                        tv_nsec: i64::from(remaining.subsec_nanos()),
+                    })
+                }
+                None => None,
+            };
+            let (out_ready, err_ready) = {
+                let mut fds = Vec::new();
+                if let Some(out) = &self.out {
+                    fds.push(PollFd::new(out, PollFlags::IN));
+                }
+                if let Some(err) = &self.err {
+                    fds.push(PollFd::new(err, PollFlags::IN));
+                }
+                match poll(&mut fds, remaining.as_ref()) {
+                    Ok(_) => {}
+                    Err(Errno::INTR) => continue,
+                    Err(errno) => return Err(errno.into()),
+                }
+                let mut ready = fds.iter().map(|fd| !fd.revents().is_empty());
+                let out_ready = self.out.is_some() && ready.next().unwrap_or(false);
+                let err_ready = self.err.is_some() && ready.next().unwrap_or(false);
+                (out_ready, err_ready)
+            };
+            if out_ready && read_some(self.out.as_mut(), &mut self.stdout)? {
+                self.out = None;
+            }
+            if err_ready && read_some(self.err.as_mut(), &mut self.stderr)? {
+                self.err = None;
+            }
+        }
+        Ok(false)
+    }
+
+    /// Reads what is left of each open stream, until its end. The read errors are ignored: the child is dead.
+    fn read_to_end(&mut self) {
+        if let Some(out) = self.out.as_mut() {
+            let _ = out.read_to_end(&mut self.stdout);
+        }
+        if let Some(err) = self.err.as_mut() {
+            let _ = err.read_to_end(&mut self.stderr);
+        }
+    }
+}
+
+/// Reads what `stream` has ready into `into`: `true` when the stream ended.
+fn read_some(stream: Option<&mut impl Read>, into: &mut Vec<u8>) -> io::Result<bool> {
+    let Some(stream) = stream else {
+        return Ok(true);
+    };
+    let mut buffer = [0_u8; 8192];
+    loop {
+        return match stream.read(&mut buffer) {
+            Ok(0) => Ok(true),
+            Ok(count) => {
+                into.extend_from_slice(&buffer[..count]);
+                Ok(false)
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => Err(error),
+        };
+    }
+}
+
+/// Waits until `child` has ended or `deadline` passes: then `true`.
+fn wait_for_exit(child: &mut Child, deadline: Instant) -> io::Result<bool> {
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(false);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(true);
+        }
+        std::thread::sleep(EXIT_POLL.min(remaining));
+    }
+}
+
+/// What a timed-out call answers as its stderr, as GitPython words it: the whole seconds of the timeout.
+fn timeout_line(call: &Call<'_>, timeout: Duration) -> String {
+    let args: Vec<_> = call.args.iter().map(|arg| arg.to_string_lossy()).collect();
+    format!(
+        "Timeout: the command \"{} {}\" did not complete in {} secs.",
+        call.program.name(),
+        args.join(" "),
+        timeout.as_secs()
+    )
 }
 
 /// Whether `path` is a regular file that someone may execute, symbolic links followed.

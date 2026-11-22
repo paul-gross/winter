@@ -214,11 +214,12 @@ package. In practice:
   out.
 - It resolves no host name. Fixture remotes are the tree's own bare repositories.
 - It opens no socket but those [The trace collector](#the-trace-collector) lists.
-- It sends no signal to another process. There are two exceptions, and no other. The runner sends SIGKILL to the process
+- It sends no signal to another process. There are three exceptions, and no other. The runner sends SIGKILL to the process
   group of the child it started, before it reaps that child, on every way out of the call, an unwind included. One test
   of the support package, in `crates/test-support/tests/process.rs`, starts a process that leaves that group, where the
-  runner's kill does not reach it, and ends it with SIGKILL by the id the process reported. No test sends SIGINT, or any
-  signal but SIGKILL, to another process. The runner exposes no process id, so a test that needs a signalled child has
+  runner's kill does not reach it, and ends it with SIGKILL by the id the process reported. The program port, `OsPrograms`, sends SIGKILL to
+  a program and its children when its deadline passes, and component tests exercise that expiry against stubs in their
+  own tree. No test sends SIGINT, or any signal but SIGKILL, to another process. The runner exposes no process id, so a test that needs a signalled child has
   the child signal itself. The driver is outside this rule: its step runner, in `crates/dev/src/step.rs`, kills the
   process group of a step it ends.
 - It lets nothing of the developer's environment or home directory reach a child or decide a result. The test process
