@@ -1956,6 +1956,7 @@ name = "winter-workspace-core"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "fastrand",
  "rustix",
  "serde_json",
  "sha1",
