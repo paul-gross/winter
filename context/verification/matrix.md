@@ -235,6 +235,38 @@ Use no real remote and no existing checkout.
 **Success.** The exits and streams are as stated, and the before/after comparisons are kept as evidence. No command in
 this exercise runs against the real workspace.
 
+### `workspace:manual-ws-update`
+
+Exercises `ws update` through the built binary. Use it when changing the re-pin flow, the selection of standalones, the
+rows or events the command writes, or the command wiring. Component tests cover the same contract automatically; this
+exercise checks the built binary against disposable repositories.
+
+**Setup.** Build with `cargo build --workspace --locked`, then set `binary` to the absolute path of the resulting
+`target/debug/winter-workspace`. Create a fresh temporary directory outside any real workspace; verify that no ancestor
+holds `.winter/config.toml`. Work only in a new `workspace/` beneath it, with a `.winter/config.toml` made for this run:
+it declares one `[[standalone_repository]]` with `name = "lib"` and `ref = "v1"`, and `workspace/lib` is a clone of a
+local bare repository made in the temporary directory, whose history has two commits, tagged `v1` and `v2`. Keep
+evidence in a sibling `evidence/` directory. Set `OTEL_SDK_DISABLED=true` for every invocation. Use no real remote and
+no existing checkout.
+
+1. **Re-pin.** Run `"$binary" ws update`. Expect exit 0 and, on stdout, `→ pulling`, `[standalone/lib] re-pinned →`
+   followed by 8 hex characters, a blank line, and `✓ pull complete`. `.winter/config.lock` now holds an entry for
+   `lib`, and `HEAD` of the clone is `v1`.
+2. **Up to date.** Save a copy of the lock and run the command again. Expect `[standalone/lib] up to date`, and `cmp`
+   shows the bytes of the lock unchanged.
+3. **JSON.** Change the ref to `v2` and run with `--json`. Each line of stdout parses with `jq`. Expect `pull_started`,
+   then `repo_synced` whose `result` is `re_pinned`, then `pull_completed` whose `success` is true. `HEAD` is `v2`.
+4. **Dirty checkout.** Change the ref back to `v1` and modify a tracked file that the two tags hold alike. Without
+   `--autostash`: exit 1, stderr holds `[standalone/lib] pin error: refusing to re-pin 'lib'`, and `HEAD` is unchanged.
+   With `--autostash`: exit 0 and `re-pinned`, `git diff` still shows the modification, and `git stash list` is empty.
+5. **Refused names.** Run `ws update nope`, then `ws update a/b`. Each exits 1 with zero stdout bytes, and stderr names
+   the pattern.
+6. **Nothing else changed.** Save `git show-ref` of the bare repository before the first step and after the last: it is
+   unchanged, and nothing outside `workspace/` changed.
+
+**Success.** The exits and streams are as stated, and the before/after comparisons are kept as evidence. No command in
+this exercise runs against the real workspace.
+
 ## Tools
 
 | Tool             | Use                                                                                                                |

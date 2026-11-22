@@ -28,6 +28,7 @@ mod locations;
 mod logging;
 mod output;
 mod parse;
+mod pattern_match;
 mod pins;
 mod process;
 mod programs;
@@ -56,6 +57,7 @@ pub use git::{
 pub use logging::{Level, Log};
 pub use pins::materialize::materialize;
 pub use pins::outcome::{PinOutcome, PinResult, rendered};
+pub use pins::repin::{EventSink, PinEvent, RunEnd, repin};
 pub use pins::resolve::{Resolution, resolve};
 pub use pins::snapshot::{PinSnapshot, snapshot};
 pub use pins::{PinError, Ports as PinPorts};

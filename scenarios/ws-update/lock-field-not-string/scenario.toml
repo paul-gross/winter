@@ -1,0 +1,17 @@
+summary = "A lock entry whose commit is an integer is read as its text: the standalone is re-pinned and the entry rewritten."
+
+[[fixture.remote]]
+name = "lib"
+
+[[fixture.remote.commit]]
+message = "Initial lib"
+files = { "README.md" = "lib fixture\n" }
+tag = "v1"
+
+[[fixture.checkout]]
+remote = "lib"
+path = "lib"
+
+[[step]]
+args = ["ws", "update", "--json"]
+stdout = "json-lines"
