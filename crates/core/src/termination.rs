@@ -154,7 +154,7 @@ pub enum SelectionError {
 
 /// The value as Python's `repr` writes a string: in single quotes, or in double quotes when it holds a
 /// single quote and no double quote, with the quote, the backslash, and the non-printable characters escaped.
-fn repr(value: &str) -> String {
+pub(crate) fn repr(value: &str) -> String {
     let quote = if value.contains('\'') && !value.contains('"') {
         '"'
     } else {
@@ -824,6 +824,8 @@ pub enum GitOperation {
     Head,
     /// The switch of a checkout to a branch or a commit.
     Checkout,
+    /// The fetch of the commits and refs of a remote.
+    Fetch,
     /// The stash of the changes of a working tree.
     StashPush,
     /// The restore of the changes a stash holds.
@@ -837,6 +839,7 @@ impl fmt::Display for GitOperation {
             Self::MainAheadBehindProbe => "main-branch ahead/behind probe",
             Self::Head => "head read",
             Self::Checkout => "checkout",
+            Self::Fetch => "fetch",
             Self::StashPush => "stash push",
             Self::StashPop => "stash pop",
         })

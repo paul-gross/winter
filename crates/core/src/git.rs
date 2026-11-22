@@ -2,7 +2,12 @@
 
 use std::ffi::OsStr;
 use std::path::Path;
+use std::time::Duration;
 
+mod remote;
+
+use crate::diagnostics::Diagnostics;
+use crate::process::ProcessEnv;
 use crate::programs::{Call, Exit, Finished, Program, RunPrograms};
 use crate::termination::{GitOperation, InternalError, RepoError, RepoMessage};
 use crate::trace::{CommandTracer, OperationSpan};
@@ -21,6 +26,7 @@ pub enum GitFailure {
 const REV_PARSE_SPAN: &str = "git rev-parse";
 const STATUS_SPAN: &str = "git status";
 const CHECKOUT_SPAN: &str = "git checkout";
+const FETCH_SPAN: &str = "git fetch";
 const STASH_PUSH_SPAN: &str = "git stash push";
 const STASH_POP_SPAN: &str = "git stash pop";
 
@@ -43,6 +49,33 @@ pub fn head(
     let args = ["rev-parse", "HEAD"];
     let finished = succeeded(programs, repo, path, GitOperation::Head, &args, &mut *span)?;
     Ok(String::from_utf8_lossy(&finished.stdout).trim().to_owned())
+}
+
+/// Fetches `origin` into the checkout at `path`, the checkout of the repository `repo`: `git fetch origin`,
+/// bounded by `WINTER_GIT_TIMEOUT_S` of `env`, read on every call, and attempted up to three times while it
+/// fails in a way that is transient. A tag the remote moved is kept as it is locally.
+///
+/// One span covers every attempt. A retry and a timeout value that is unusable are reported through
+/// `diagnostics`.
+pub fn fetch(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    env: &ProcessEnv,
+    diagnostics: &mut Diagnostics<'_>,
+    repo: &str,
+    path: &Path,
+) -> Result<(), GitFailure> {
+    let mut span = tracer.operation(FETCH_SPAN, &[(REPO_ATTRIBUTE, repo)]);
+    let timeout = remote::timeout(env, diagnostics);
+    let pacing = programs.pacing();
+    let args = ["fetch", "origin"];
+    let finished = remote::attempts(
+        &mut || run_for(programs, path, &args, Some(timeout)),
+        &mut |duration| (pacing.sleep)(duration),
+        &mut || (pacing.draw)(),
+        diagnostics,
+    )?;
+    ended(finished, repo, path, GitOperation::Fetch, &args, &mut *span).map(drop)
 }
 
 /// Whether the checkout at `path` has no change: no modified tracked file and no untracked file.
@@ -163,13 +196,23 @@ pub fn stash_pop(
 
 /// Runs git with `args` in `cwd`. A git that cannot be started is an internal failure.
 fn run(programs: &dyn RunPrograms, cwd: &Path, args: &[&str]) -> Result<Finished, GitFailure> {
+    run_for(programs, cwd, args, None)
+}
+
+/// [`run`], killed when it outlives `timeout`.
+fn run_for(
+    programs: &dyn RunPrograms,
+    cwd: &Path,
+    args: &[&str],
+    timeout: Option<Duration>,
+) -> Result<Finished, GitFailure> {
     let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
     programs
         .run(&Call {
             program: Program::Git,
             args: &args,
             cwd,
-            timeout: None,
+            timeout,
         })
         .map_err(|error| GitFailure::Internal(Box::new(InternalError::unexpected(error))))
 }
@@ -185,6 +228,19 @@ fn succeeded(
     span: &mut dyn OperationSpan,
 ) -> Result<Finished, GitFailure> {
     let finished = run(programs, cwd, args)?;
+    ended(finished, repo, cwd, operation, args, span)
+}
+
+/// What a finished call answers for `operation`: itself on a zero exit, else the repo error of the call, which
+/// marks `span` failed.
+fn ended(
+    finished: Finished,
+    repo: &str,
+    cwd: &Path,
+    operation: GitOperation,
+    args: &[&str],
+    span: &mut dyn OperationSpan,
+) -> Result<Finished, GitFailure> {
     if finished.exit == Exit::Code(0) {
         return Ok(finished);
     }

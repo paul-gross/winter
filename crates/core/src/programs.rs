@@ -70,8 +70,33 @@ impl Exit {
     }
 }
 
+/// How a remote call waits between two attempts and draws the jitter of the wait: the real sleep and the real
+/// random draw, which a test replaces.
+#[derive(Clone, Copy)]
+pub struct Pacing {
+    /// Waits for the duration.
+    pub sleep: fn(Duration),
+    /// A number drawn uniformly from `[-1, 1]`.
+    pub draw: fn() -> f64,
+}
+
+impl Pacing {
+    /// The sleep of the thread and the random draw of the operating system's generator.
+    pub fn real() -> Self {
+        Self {
+            sleep: std::thread::sleep,
+            draw: || fastrand::f64().mul_add(2.0, -1.0),
+        }
+    }
+}
+
 /// Starts programs.
 pub trait RunPrograms {
+    /// The sleep and the draw a retried call paces itself with.
+    fn pacing(&self) -> Pacing {
+        Pacing::real()
+    }
+
     /// Starts the program of `call` and waits for it, until its timeout when it has one. Its stdin reads empty,
     /// and its stdout and stderr are captured whole. A program that outlives its timeout is killed, with its
     /// children, and ends as `Exit::Signal(9)` with the timeout line as its stderr. An error only when the

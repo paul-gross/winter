@@ -50,12 +50,13 @@ pub use config_model::{
 pub use diagnostics::Diagnostics;
 pub use files::{OsFiles, ReadFiles, WriteFiles};
 pub use git::{
-    GitFailure, Sha, checkout_branch, checkout_detached, clean, head, stash_pop, stash_push, verify,
+    GitFailure, Sha, checkout_branch, checkout_detached, clean, fetch, head, stash_pop, stash_push,
+    verify,
 };
 pub use logging::{Level, Log};
 pub use pins::{PinError, Ports as PinPorts};
 pub use process::{Identity, Interrupts, Invocation, ProcessEnv, run};
-pub use programs::{Call, Exit, Finished, OsPrograms, Program, RunPrograms};
+pub use programs::{Call, Exit, Finished, OsPrograms, Pacing, Program, RunPrograms};
 pub use termination::{
     AgentOverrideFault, ChoiceKey, CommandError, ConfigError, ConfigFileName, ConfigValue,
     EntryIdent, EnvVarFault, FileCause, GitOperation, InternalError, MergedTable, ModelTierFault,
