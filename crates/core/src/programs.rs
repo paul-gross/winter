@@ -81,7 +81,7 @@ pub struct Pacing {
 }
 
 impl Pacing {
-    /// The sleep of the thread and the random draw of the operating system's generator.
+    /// The sleep of the thread and the random draw of the `fastrand` generator.
     pub fn real() -> Self {
         Self {
             sleep: std::thread::sleep,
