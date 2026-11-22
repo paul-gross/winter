@@ -20,7 +20,7 @@ path = "lib"
 [[compare.file]]
 path = "ws/.winter/*.toml"
 mode = "bytes"
-reason = "The Set a standalone ref writer keeps the file other bytes, which the parsed-TOML default would not show."
+reason = "The Set a standalone ref writer keeps the file's other bytes, which the parsed-TOML default would not show."
 
 [[step]]
 args = ["ws", "update", "--freeze", "--force", "--json"]
