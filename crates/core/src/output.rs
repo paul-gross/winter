@@ -2,7 +2,8 @@
 //!
 //! The one owner of how a result reaches the stdout handle. A command's `run` and the parser's help and
 //! version path write through these functions and return what they return; neither inspects a write error.
-//! A write that fails ends as [`Termination::from_write_error`] classifies its error.
+//! A result of more than one piece is written through [`Results`]. A write or a flush that fails ends as
+//! [`Termination::from_write_error`] classifies its error.
 
 use std::io::Write;
 
@@ -29,12 +30,54 @@ pub(crate) fn text(out: &mut dyn Write, text: &str) -> Termination {
 /// The line is encoded into a buffer and handed to `out` whole, in one `write_all`, so a reader never sees
 /// half a document from this call.
 pub(crate) fn document(out: &mut dyn Write, document: &serde_json::Value) -> Termination {
-    let mut encoded = Vec::new();
-    if let Err(error) = serde_json::to_writer(&mut encoded, document) {
-        return Termination::Internal(Box::new(InternalError::unexpected(error)));
+    match json_line(document) {
+        Ok(encoded) => ending(out.write_all(&encoded)),
+        Err(termination) => termination,
     }
+}
+
+/// The writer of a result of more than one piece: several lines, or a stream of events.
+///
+/// Each call hands its piece to the stdout handle whole, in one `write_all`. The first call that fails is the
+/// ending of the invocation: the command returns the `Err` it is handed and writes nothing more to stdout.
+/// That `Err` is what [`Termination::from_write_error`] makes of the failed write or flush.
+pub(crate) struct Results<'o> {
+    out: &'o mut dyn Write,
+}
+
+impl<'o> Results<'o> {
+    pub(crate) fn new(out: &'o mut dyn Write) -> Self {
+        Self { out }
+    }
+
+    /// Writes `line` and one newline.
+    pub(crate) fn line(&mut self, line: &str) -> Result<(), Termination> {
+        let mut whole = String::with_capacity(line.len() + 1);
+        whole.push_str(line);
+        whole.push('\n');
+        self.out
+            .write_all(whole.as_bytes())
+            .map_err(Termination::from_write_error)
+    }
+
+    /// Writes `event` as one line of JSON and then flushes the handle, so a reader sees the event when it
+    /// happens and not when a buffer fills.
+    pub(crate) fn event(&mut self, event: &serde_json::Value) -> Result<(), Termination> {
+        let encoded = json_line(event)?;
+        self.out
+            .write_all(&encoded)
+            .and_then(|()| self.out.flush())
+            .map_err(Termination::from_write_error)
+    }
+}
+
+/// `value` as one line of JSON with its newline, or the internal failure of a value that cannot be encoded.
+fn json_line(value: &serde_json::Value) -> Result<Vec<u8>, Termination> {
+    let mut encoded = Vec::new();
+    serde_json::to_writer(&mut encoded, value)
+        .map_err(|error| Termination::Internal(Box::new(InternalError::unexpected(error))))?;
     encoded.push(b'\n');
-    ending(out.write_all(&encoded))
+    Ok(encoded)
 }
 
 /// How far apart two columns of a table are.
@@ -97,21 +140,42 @@ mod tests {
         }
     }
 
-    /// A handle that accepts everything and keeps each write apart.
+    /// A handle that accepts everything and keeps each write apart, with the flushes among them.
     #[derive(Default)]
     struct Counting {
         writes: Vec<Vec<u8>>,
+        calls: Vec<&'static str>,
     }
 
     impl Write for Counting {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
             self.writes.push(bytes.to_vec());
+            self.calls.push("write");
             Ok(bytes.len())
         }
 
         fn flush(&mut self) -> io::Result<()> {
+            self.calls.push("flush");
             Ok(())
         }
+    }
+
+    /// A handle that accepts every write and whose every flush fails with an error of one kind.
+    struct FailingFlush(io::ErrorKind);
+
+    impl Write for FailingFlush {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(self.0, "the handle refuses the flush"))
+        }
+    }
+
+    /// The ending a call of `Results` answered, for the assertions on an ending.
+    fn ended(answer: Result<(), Termination>) -> Termination {
+        answer.err().unwrap_or(Termination::Success)
     }
 
     fn value() -> serde_json::Value {
@@ -226,5 +290,124 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_results_line_reaches_the_handle_in_one_write_and_no_flush() {
+        let mut out = Counting::default();
+        let mut results = Results::new(&mut out);
+
+        let first = results.line("→ pulling");
+        let second = results.line("");
+
+        assert!(first.is_ok(), "{first:?}");
+        assert!(second.is_ok(), "{second:?}");
+        assert_eq!(
+            out.writes,
+            ["→ pulling\n".as_bytes().to_vec(), b"\n".to_vec()]
+        );
+        assert_eq!(out.calls, ["write", "write"]);
+    }
+
+    #[test]
+    fn a_results_event_is_one_write_of_one_json_line_and_then_one_flush() {
+        let mut out = Counting::default();
+        let mut results = Results::new(&mut out);
+
+        let answer = results.event(&value());
+
+        assert!(answer.is_ok(), "{answer:?}");
+        assert_eq!(out.calls, ["write", "flush"]);
+        let [whole] = out.writes.as_slice() else {
+            panic!("expected one write, got {}", out.writes.len());
+        };
+        assert!(whole.ends_with(b"\n"), "{whole:?}");
+        assert_eq!(whole.iter().filter(|byte| **byte == b'\n').count(), 1);
+        let parsed: serde_json::Value = serde_json::from_slice(whole).expect("a JSON document");
+        assert_eq!(parsed, value());
+    }
+
+    #[test]
+    fn each_results_event_is_flushed_before_the_next_is_written() {
+        let mut out = Counting::default();
+        let mut results = Results::new(&mut out);
+
+        for _ in 0..2 {
+            let answer = results.event(&value());
+            assert!(answer.is_ok(), "{answer:?}");
+        }
+
+        assert_eq!(out.calls, ["write", "flush", "write", "flush"]);
+    }
+
+    #[test]
+    fn a_failed_write_ends_each_results_call_as_the_write_error_is_classified() {
+        let mut closed = Failing(io::ErrorKind::BrokenPipe);
+        let mut results = Results::new(&mut closed);
+        for (name, answer) in [
+            ("line", results.line("one line")),
+            ("event", results.event(&value())),
+        ] {
+            let termination = ended(answer);
+            assert!(
+                matches!(termination, Termination::BrokenPipe),
+                "{name}: {termination:?}"
+            );
+        }
+
+        let mut refusing = Failing(io::ErrorKind::PermissionDenied);
+        let mut results = Results::new(&mut refusing);
+        for (name, answer) in [
+            ("line", results.line("one line")),
+            ("event", results.event(&value())),
+        ] {
+            let termination = ended(answer);
+            assert!(
+                matches!(
+                    &termination,
+                    Termination::Internal(error) if matches!(**error, InternalError::Unexpected { .. })
+                ),
+                "{name}: {termination:?}"
+            );
+            let diagnostic = termination.diagnostic().expect("a diagnostic");
+            assert!(
+                diagnostic.contains("the handle refuses the write"),
+                "{name}: {diagnostic}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_flush_ends_a_results_event_as_the_flush_error_is_classified() {
+        let mut closed = FailingFlush(io::ErrorKind::BrokenPipe);
+        let termination = ended(Results::new(&mut closed).event(&value()));
+        assert!(
+            matches!(termination, Termination::BrokenPipe),
+            "{termination:?}"
+        );
+
+        let mut refusing = FailingFlush(io::ErrorKind::Other);
+        let termination = ended(Results::new(&mut refusing).event(&value()));
+        assert!(
+            matches!(
+                &termination,
+                Termination::Internal(error) if matches!(**error, InternalError::Unexpected { .. })
+            ),
+            "{termination:?}"
+        );
+        let diagnostic = termination.diagnostic().expect("a diagnostic");
+        assert!(
+            diagnostic.contains("the handle refuses the flush"),
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
+    fn a_results_line_does_not_flush_so_a_failing_flush_does_not_end_it() {
+        let mut out = FailingFlush(io::ErrorKind::Other);
+
+        let answer = Results::new(&mut out).line("one line");
+
+        assert!(answer.is_ok(), "{answer:?}");
     }
 }

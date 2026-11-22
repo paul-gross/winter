@@ -1,0 +1,12 @@
+f - 89fbd3cff0c0ae16c92e2e63569c5c6f170cdfd2 gitconfig
+d home
+d home/.config
+d remotes
+d remotes/lib.git
+d ws
+d ws/.winter
+f - 4d9bb1d50453e1a26bea354594c8c6c76873a024 ws/.winter/config.lock
+f - 1b170240e883c5bf790e1b2145afc0db1f01561f ws/.winter/config.toml
+d ws/lib
+d ws/lib/.git
+f - 3b782138930ab1c12cb49cd77ba066ebe0fd3ef0 ws/lib/README.md

@@ -21,6 +21,21 @@ pub enum PinResult {
     PinError,
 }
 
+impl PinResult {
+    /// The name of the result on the wire: the `result` field of a `repo_synced` event.
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::UpToDate => "up_to_date",
+            Self::RePinned => "re_pinned",
+            Self::HeldPin => "held_pin",
+            Self::Pinned => "pinned",
+            Self::AlreadyPinned => "already_pinned",
+            Self::Refused => "refused",
+            Self::PinError => "pin_error",
+        }
+    }
+}
+
 /// One standalone's outcome: its name, what happened, and the text the result carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinOutcome {
@@ -79,6 +94,21 @@ mod tests {
             cwd: Some(PathBuf::from("/w/api")),
             exit: Some(1),
             stderr: Some("  boom\n".to_owned()),
+        }
+    }
+
+    #[test]
+    fn each_result_has_its_wire_name() {
+        for (result, name) in [
+            (PinResult::UpToDate, "up_to_date"),
+            (PinResult::RePinned, "re_pinned"),
+            (PinResult::HeldPin, "held_pin"),
+            (PinResult::Pinned, "pinned"),
+            (PinResult::AlreadyPinned, "already_pinned"),
+            (PinResult::Refused, "refused"),
+            (PinResult::PinError, "pin_error"),
+        ] {
+            assert_eq!(result.wire_name(), name, "{result:?}");
         }
     }
 

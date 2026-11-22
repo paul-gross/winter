@@ -15,7 +15,8 @@ cargo build
 
 The binary is written to `target/debug/winter-workspace`.
 
-`repo add` and `repo remove` edit the workspace configuration it finds at or above the working directory.
+`repo add` and `repo remove` edit the workspace configuration it finds at or above the working directory, and
+`ws update` fetches, resets branches, stashes, and writes the lock of the workspace it finds there.
 [AGENTS.md](./AGENTS.md) states where the binary may run. It is on no `PATH`: from a directory that rule permits, it is
 started by its path, as in `<checkout>/target/debug/winter-workspace --help`, where `<checkout>` is the path of the
 repository root.
@@ -46,6 +47,16 @@ tree, and dirty flag of each repository. Untracked files, `projects/`, feature e
 so two checkouts of one definition have one digest. It reads no network and never writes the index of a repository: its
 only writes to a repository are unreferenced objects, and it makes a scratch index under `TMPDIR`, or `/tmp` when that
 is unset or empty, which it removes. A missing checkout or a failed git call ends the command with exit code 1.
+
+`ws update [REPOS]...` re-pins the standalone repositories that declare a `ref`: it fetches `origin`, resolves the ref
+again as a remote branch, then a tag, then a commit, checks the result out, and records it in `.winter/config.lock`. A
+branch is reset to `origin/<ref>`, so commits only the local branch held are left to the reflog. A standalone already on
+the recorded commit is reported up to date and the lock is not rewritten. Each REPO is a name or a glob over the names;
+a name that is no pinned standalone ends the command with exit code 1 before anything is changed, and a glob that
+matches nothing is no error. A checkout with uncommitted changes is not re-pinned and the command ends with exit code 1,
+unless `--autostash` is given, which stashes the changes and restores them afterwards; when the restore conflicts, a
+warning names the checkout and the stash is kept. One standalone that fails does not stop the next. `--json` prints one
+event per line as it happens.
 
 ## Tracing, exit codes, and logging
 

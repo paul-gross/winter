@@ -85,9 +85,18 @@ Logic that two commands share lives in a domain module, never under `commands/`.
 - one call into a domain module, which is handed `cx.files`, `cx.file_writer`, and `cx.cwd` as they are, and
   `cx.programs` as well when it starts a program, and `cx.tracer` when it opens an operation span. For a domain entry
   that reports on stderr, the file builds a `Diagnostics` from `cx.err` and `cx.log` and hands it to that call. The
-  entry writes its notices and records through it, and the command file writes none;
+  entry writes its notices and records through it, and the command file writes none, except through the event sink
+  described below;
 - the mapping of that call's typed outcome to a `Termination`;
 - the text of the human line and the fields of the `--json` document, written as [below](#writing-the-result).
+
+A domain entry that reports each step of a run as it is reached takes an event sink, a closure its command file builds
+over `output::Results`. The sink is called once per event with the `Diagnostics` of the entry. It writes a `--json`
+event through `Results::event` and a human row of stdout through `Results::line`. A human row that belongs on stderr is
+the one exception to "the command file writes none": the sink writes it through `diagnostics::notice`, because it is a
+row of the command's own result and not a notice of the domain. `ws update` is the command that has one: the row of a
+pin error and the row of a run that had errors. Every other line on stderr of such a run is still written by the entry.
+An `Err` from the sink is the ending of the invocation, which the entry hands back for the command file to return.
 
 A command file does not spell its own command path as a string literal. The path follows from where the file is, and
 reaches `run` as `cx.invoked`, with the usage of the node.
@@ -148,9 +157,15 @@ value and the text, and never writes to a handle itself or inspects a write erro
 Each of the three functions hands its result to the handle whole, in one write. A line-buffered handle then keeps
 nothing of a write that fails, so the diagnostic of that failure is still written after it.
 
+A result of several pieces, rows written as they happen or a stream of `--json` events, goes through `output::Results`,
+which `run` builds over the stdout handle. `Results::line` writes one human line and `Results::event` one line of JSON,
+each in one write, and `event` then flushes the handle, so a reader sees an event when it happens. Each answers
+`Result<(), Termination>`. The first `Err` is the ending of the invocation: the command returns it and writes nothing
+more to stdout.
+
 `Termination::from_write_error` in `crates/core/src/termination.rs` is the one classifier of a failed write or flush of
-stdout. `output.rs` calls it for a write of a result, and the binary calls it for its final flush, where it replaces the
-ending only when that ending's exit code is 0. No other code inspects such an error:
+stdout. `output.rs` calls it for a write of a result and for the flush after an event, and the binary calls it for its
+final flush, where it replaces the ending only when that ending's exit code is 0. No other code inspects such an error:
 
 | The write                                   | Ending                                                                              |
 | ------------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -177,7 +192,10 @@ whose variants `Config` and `Internal` become `Termination::Config` and `Termina
 what each of the two carries, and so never names the type of an internal failure. The `ListError` of `locations::list`
 has a third variant, `Repo`, for a git call of a worktree probe that failed, which becomes `Termination::Repo`. It holds
 its error in a box already, because a `Result` whose error is as wide as a `RepoError` is refused by the `clippy` step,
-and the command file hands that box on.
+and the command file hands that box on. `pins::repin::repin` fails with `PinError`, whose three variants hold their
+errors in boxes that become `Termination::Repo`, `Termination::Config`, and `Termination::Internal` as they are, and it
+answers a `RunEnd` otherwise: a completed run becomes `Termination::Success` or, when an outcome was a pin error,
+`Termination::Reported`, and a run the sink stopped becomes the ending the sink gave.
 
 An entry that reports a condition on stderr takes a `&mut Diagnostics`, the borrow of the stderr handle and the log its
 command file built, and writes through `crates/core/src/diagnostics.rs`: `repository_catalog::list` writes the drift
