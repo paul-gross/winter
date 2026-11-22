@@ -53,6 +53,7 @@ pub use git::{
     GitFailure, Sha, checkout_branch, checkout_detached, clean, head, stash_pop, stash_push, verify,
 };
 pub use logging::{Level, Log};
+pub use pins::snapshot::{PinSnapshot, snapshot};
 pub use pins::{PinError, Ports as PinPorts};
 pub use process::{Identity, Interrupts, Invocation, ProcessEnv, run};
 pub use programs::{Call, Exit, Finished, OsPrograms, Program, RunPrograms};
