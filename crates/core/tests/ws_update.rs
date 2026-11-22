@@ -753,23 +753,265 @@ fn an_empty_name_and_a_name_with_a_slash_are_refused_before_anything_is_read() {
 }
 
 #[test]
-fn the_freeze_and_force_options_are_usage_errors() {
+fn force_alone_and_freeze_with_autostash_are_usage_errors_that_change_nothing() {
     let fixture = Fixture::lib("v1");
     let head = fixture.head("lib");
+    let config = fixture.read(CONFIG);
 
-    for option in ["--freeze", "--force"] {
-        let ended = fixture.update(&[option]);
+    for (args, rule) in [
+        (&["--force"][..], "--force only applies with --freeze"),
+        (
+            &["--freeze", "--autostash"][..],
+            "--autostash does not apply with --freeze",
+        ),
+        (
+            &["--force", "--autostash"][..],
+            "--force only applies with --freeze",
+        ),
+    ] {
+        let ended = fixture.update(args);
 
         assert!(
             matches!(ended.termination, Termination::Usage(_)),
-            "{option}: {:?}",
+            "{args:?}: {:?}",
             ended.termination
         );
-        assert_eq!(ended.termination.exit_code(), 2, "{option}");
-        assert_eq!(ended.stdout, "", "{option}");
+        assert_eq!(ended.termination.exit_code(), 2, "{args:?}");
+        assert!(
+            ended
+                .termination
+                .diagnostic()
+                .expect("a diagnostic")
+                .contains(rule),
+            "{args:?}"
+        );
+        assert_eq!(ended.stdout, "", "{args:?}");
     }
     assert_eq!(fixture.head("lib"), head);
+    assert_eq!(fixture.read(CONFIG), config);
     assert_eq!(fixture.lock(), None);
+}
+
+/// A workspace with `lib` pinned to `v1` and `tools` declared without a ref, both cloned, `tools` followed
+/// by a commented block.
+fn freezable() -> Fixture {
+    Fixture::new(
+        "[[standalone_repository]]\nname = \"lib\"\nref = \"v1\"\n\n[[standalone_repository]]\nname = \"tools\"\nurl = \"x\"\n\n# next\n[[standalone_repository]]\nname = \"zed\"\nref = \"v1\"\n",
+        &["lib", "tools", "zed"],
+    )
+}
+
+#[test]
+fn freeze_writes_the_head_after_the_last_key_and_records_a_commit_entry() {
+    let fixture = freezable();
+    let before = fixture.read(CONFIG);
+    let head = fixture.head("tools");
+    let refs = fixture.git("tools", &["show-ref"]);
+
+    let (events, ended) = fixture.events(&["--freeze"]);
+
+    succeeded(&ended);
+    assert_eq!(
+        events,
+        [
+            started(),
+            synced("lib", "already_pinned", "v1"),
+            synced("tools", "pinned", &head[..8]),
+            synced("zed", "already_pinned", "v1"),
+            completed(true),
+        ]
+    );
+    assert_eq!(
+        fixture.read(CONFIG),
+        before.replace("url = \"x\"\n", &format!("url = \"x\"\nref = \"{head}\"\n"))
+    );
+    assert_eq!(
+        fixture.entry("tools"),
+        Some(LockEntry {
+            name: "tools".to_owned(),
+            r#ref: head.clone(),
+            kind: RefKind::Commit,
+            commit: head.clone(),
+        })
+    );
+    assert!(fixture.entry("lib").is_none());
+    assert_eq!(fixture.head("tools"), head);
+    assert_eq!(fixture.git("tools", &["show-ref"]), refs);
+
+    let again = fixture.update(&["--freeze", "tools"]);
+    succeeded(&again);
+    assert_eq!(
+        again.stdout,
+        format!("→ pulling\n[standalone/tools] already pinned @ {head}\n\n✓ pull complete\n")
+    );
+}
+
+#[test]
+fn freeze_writes_a_standalone_declared_only_in_the_local_file_there() {
+    let fixture = Fixture::new("", &["tools"]);
+    fixture.write(
+        ".winter/config.local.toml",
+        "[[standalone_repository]]\nurl = \"git@h:o/tools.git\"\n",
+    );
+    let head = fixture.head("tools");
+
+    let ended = fixture.update(&["--freeze"]);
+
+    succeeded(&ended);
+    assert_eq!(fixture.read(CONFIG), "");
+    assert_eq!(
+        fixture.read(".winter/config.local.toml"),
+        format!("[[standalone_repository]]\nurl = \"git@h:o/tools.git\"\nref = \"{head}\"\n")
+    );
+}
+
+#[test]
+fn freeze_refuses_a_dirty_checkout_unless_forced() {
+    let fixture = freezable();
+    let before = fixture.read(CONFIG);
+    fixture.write("tools/a.txt", "edited\n");
+
+    let ended = fixture.update(&["--freeze", "tools"]);
+
+    reported(&ended);
+    assert_eq!(
+        ended.stderr,
+        "[standalone/tools] refused: 'tools' has uncommitted changes, so its commit does not describe it; commit/stash or pass --force\n\n✗ pull had errors\n"
+    );
+    assert_eq!(fixture.read(CONFIG), before);
+    assert_eq!(fixture.lock(), None);
+
+    let forced = fixture.update(&["--freeze", "--force", "tools"]);
+
+    succeeded(&forced);
+    assert!(forced.stdout.contains("[standalone/tools] pinned → "));
+    assert_ne!(fixture.read(CONFIG), before);
+}
+
+#[test]
+fn freeze_refuses_a_missing_checkout_and_a_directory_that_is_no_repository() {
+    let fixture = Fixture::new(
+        &config(&[("gone", None), ("plain", None), ("tools", None)]),
+        &["tools"],
+    );
+    std::fs::create_dir(fixture.root.join("plain")).expect("a directory");
+
+    let (events, ended) = fixture.events(&["--freeze"]);
+
+    reported(&ended);
+    let reasons: Vec<&str> = events
+        .iter()
+        .filter(|event| event["result"] == "refused")
+        .map(|event| event["pin_ref"].as_str().expect("a reason"))
+        .collect();
+    assert_eq!(reasons.len(), 2, "{events:?}");
+    assert_eq!(reasons[0], "'gone' is not cloned (run `winter ws init`)");
+    assert!(!reasons[1].contains("not cloned"), "{}", reasons[1]);
+    assert_eq!(
+        results(&events),
+        pairs(&[
+            ("gone", "refused"),
+            ("plain", "refused"),
+            ("tools", "pinned")
+        ])
+    );
+}
+
+#[test]
+fn freeze_refuses_a_standalone_that_neither_file_declares_by_a_matching_block() {
+    let fixture = Fixture::new(
+        "standalone_repository = [{ name = \"tools\" }]\n",
+        &["tools"],
+    );
+    let before = fixture.read(CONFIG);
+
+    let ended = fixture.update(&["--freeze"]);
+
+    reported(&ended);
+    assert_eq!(
+        ended.stderr,
+        "[standalone/tools] refused: 'tools' is not declared in config.toml or config.local.toml\n\n✗ pull had errors\n"
+    );
+    assert_eq!(fixture.read(CONFIG), before);
+}
+
+#[test]
+fn freeze_names_an_unknown_literal_before_any_event() {
+    let fixture = freezable();
+
+    let termination = fixture
+        .update(&["--freeze", "nope"])
+        .wrote_nothing(1, "nope");
+
+    let Termination::Repo(error) = &termination else {
+        panic!("{termination:?}");
+    };
+    assert_eq!(
+        error.message,
+        RepoMessage::NoStandaloneNamed {
+            name: "nope".to_owned()
+        }
+    );
+}
+
+#[test]
+fn freeze_pins_a_local_only_commit_without_the_network() {
+    let fixture = freezable();
+    let gone = fixture.tree.root().join("remotes").join("gone.git");
+    fixture.git(
+        "tools",
+        &["remote", "set-url", "origin", &gone.to_string_lossy()],
+    );
+    fixture.git("tools", &["config", "user.email", "a@b.c"]);
+    fixture.git("tools", &["config", "user.name", "n"]);
+    fixture.git("tools", &["commit", "--allow-empty", "-m", "local only"]);
+    let head = fixture.head("tools");
+
+    let ended = fixture.update(&["--freeze", "tools"]);
+
+    succeeded(&ended);
+    assert_eq!(fixture.entry("tools").expect("an entry").commit, head);
+    assert_eq!(fixture.head("tools"), head);
+}
+
+#[test]
+fn freeze_with_a_malformed_lock_writes_the_ref_and_ends_as_the_configuration_error() {
+    let fixture = freezable();
+    let head = fixture.head("tools");
+    fixture.write(LOCK, "version = 1\n[[repo]]\nname = \n");
+
+    let (events, ended) = fixture.events(&["--freeze", "tools"]);
+
+    assert!(
+        matches!(ended.termination, Termination::Config(_)),
+        "{:?}",
+        ended.termination
+    );
+    assert_eq!(ended.termination.exit_code(), 1);
+    assert_eq!(events, [started()]);
+    assert!(fixture.read(CONFIG).contains(&format!("ref = \"{head}\"")));
+}
+
+#[test]
+fn freeze_writes_the_drift_notice_before_its_first_row() {
+    let fixture = Fixture::new(
+        "[[project_repository]]\nname = \"api\"\n\n[[standalone_repository]]\nname = \"lib\"\n",
+        &["lib"],
+    );
+    let mut stdout = RefusingAfter {
+        allowed: 0,
+        asked: 0,
+    };
+
+    let stopped = fixture
+        .invocation(&["--freeze"])
+        .run_with_stdout(&mut stdout);
+
+    assert_eq!(stdout.asked, 1);
+    assert_eq!(
+        stopped.stderr,
+        "warning: Config and projects/ have drifted — missing from projects/: api\n"
+    );
 }
 
 #[test]

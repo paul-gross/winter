@@ -16,7 +16,7 @@ cargo build
 The binary is written to `target/debug/winter-workspace`.
 
 `repo add` and `repo remove` edit the workspace configuration it finds at or above the working directory, and
-`ws update` fetches, resets branches, stashes, and writes the lock of the workspace it finds there.
+`ws update` fetches, resets branches, stashes, and writes the lock of the workspace it finds there, and, with `--freeze`, its configuration.
 [AGENTS.md](./AGENTS.md) states where the binary may run. It is on no `PATH`: from a directory that rule permits, it is
 started by its path, as in `<checkout>/target/debug/winter-workspace --help`, where `<checkout>` is the path of the
 repository root.
@@ -47,6 +47,14 @@ tree, and dirty flag of each repository. Untracked files, `projects/`, feature e
 so two checkouts of one definition have one digest. It reads no network and never writes the index of a repository: its
 only writes to a repository are unreferenced objects, and it makes a scratch index under `TMPDIR`, or `/tmp` when that
 is unset or empty, which it removes. A missing checkout or a failed git call ends the command with exit code 1.
+
+`ws update --freeze [REPOS]...` pins each selected standalone, pinned or not, to its current commit: it writes
+`ref = "<commit>"` into the configuration file that declares it, `.winter/config.toml` first and then
+`.winter/config.local.toml`, and records a `commit` entry in `.winter/config.lock`. It uses no network and checks
+nothing out. A standalone that already declares a `ref` is reported as already pinned. A checkout that is missing, that
+is no repository, or that has uncommitted changes is refused and the command ends with exit code 1, and `--force` pins
+a dirty checkout. A standalone that neither file declares as a block is refused. `--force` without `--freeze`, and
+`--autostash` with `--freeze`, are usage errors with exit code 2.
 
 `ws update [REPOS]...` re-pins the standalone repositories that declare a `ref`: it fetches `origin`, resolves the ref
 again as a remote branch, then a tag, then a commit, checks the result out, and records it in `.winter/config.lock`. A

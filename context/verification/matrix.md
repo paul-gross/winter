@@ -237,7 +237,7 @@ this exercise runs against the real workspace.
 
 ### `workspace:manual-ws-update`
 
-Exercises `ws update` through the built binary. Use it when changing the re-pin flow, the selection of standalones, the
+Exercises `ws update` through the built binary. Use it when changing the re-pin flow, the freeze flow, the selection of standalones, the
 rows or events the command writes, or the command wiring. Component tests cover the same contract automatically; this
 exercise checks the built binary against disposable repositories.
 
@@ -261,8 +261,24 @@ no existing checkout.
    With `--autostash`: exit 0 and `re-pinned`, `git diff` still shows the modification, and `git stash list` is empty.
 5. **Refused names.** Run `ws update nope`, then `ws update a/b`. Each exits 1 with zero stdout bytes, and stderr names
    the pattern.
-6. **Nothing else changed.** Save `git show-ref` of the bare repository before the first step and after the last: it is
+6. **Nothing else changed.** Save `git show-ref` of the bare repository before the first step and after step 5: it is
    unchanged, and nothing outside `workspace/` changed.
+
+The freeze steps use a second `[[standalone_repository]]` named `tools`, with no `ref` and a comment line on the block
+after it, cloned from its own local bare repository. Save a copy of `config.toml` first.
+
+7. **Freeze.** Run `"$binary" ws update --freeze`. Expect exit 0, `[standalone/lib] already pinned @ v1`,
+   `[standalone/tools] pinned →` followed by 8 hex characters, and `✓ pull complete`. `diff` against the saved copy
+   shows exactly one added line, `ref = "<40 hex>"`, after the last key of `tools`, with the comment still below it. The
+   lock entry for `tools` has `kind = "commit"`, and `HEAD` and `git show-ref` of the `tools` clone are unchanged.
+8. **Frozen again.** Run it again. Expect `already pinned @ <40 hex>` for `tools`, and `cmp` shows both files unchanged.
+9. **Dirty freeze.** Remove the `ref` line of `tools` and modify a tracked file in `tools`. `--freeze` exits 1 and
+   stderr holds `[standalone/tools] refused:` and `uncommitted changes`. `--freeze --force` exits 0 with `pinned`.
+10. **Freeze JSON.** Run `--freeze --json`. Each line parses with `jq`, and each `repo_synced` has a `result` of
+    `pinned`, `already_pinned`, or `refused`.
+11. **Usage errors.** `ws update --force` and `ws update --freeze --autostash` each exit 2, stderr gives the rule's
+    wording, and nothing changed.
+12. **Remotes unchanged.** `git show-ref` of both bare remotes is unchanged from before the first step.
 
 **Success.** The exits and streams are as stated, and the before/after comparisons are kept as evidence. No command in
 this exercise runs against the real workspace.
