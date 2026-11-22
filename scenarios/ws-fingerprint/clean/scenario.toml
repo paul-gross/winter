@@ -1,0 +1,19 @@
+summary = "A clean workspace with one standalone gives the reference's digest."
+
+[fixture]
+workspace_git = true
+
+[[fixture.remote]]
+name = "lib"
+
+[[fixture.remote.commit]]
+message = "Initial lib"
+files = { "README.md" = "lib fixture\n" }
+
+[[fixture.checkout]]
+remote = "lib"
+path = "lib"
+
+[[step]]
+args = ["ws", "fingerprint", "--json"]
+stdout = "json"

@@ -1,0 +1,27 @@
+summary = "A declared project missing on disk writes the drift notice before the freeze runs."
+
+[[fixture.remote]]
+name = "lib"
+
+[[fixture.remote.commit]]
+message = "Initial lib"
+files = { "README.md" = "lib fixture\n" }
+tag = "v1"
+
+[[fixture.remote.commit]]
+message = "Second lib"
+files = { "notes.txt" = "lib notes\n" }
+tag = "v2"
+
+[[fixture.checkout]]
+remote = "lib"
+path = "lib"
+
+[[compare.file]]
+path = "ws/.winter/*.toml"
+mode = "bytes"
+reason = "The Set a standalone ref writer keeps the file other bytes, which the parsed-TOML default would not show."
+
+[[step]]
+args = ["ws", "update", "--freeze", "--json"]
+stdout = "json-lines"

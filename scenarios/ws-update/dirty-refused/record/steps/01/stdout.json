@@ -1,0 +1,3 @@
+{"type":"pull_started"}
+{"ahead":0,"behind":0,"commits":0,"pin_ref":"refusing to re-pin 'lib': uncommitted changes; commit/stash or pass --autostash","repo":"lib","result":"pin_error","scope":"standalone","type":"repo_synced"}
+{"success":false,"type":"pull_completed"}

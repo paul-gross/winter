@@ -1,0 +1,30 @@
+summary = "A tag moved on the remote is not fetched over the local one, so the standalone reads up to date."
+
+[[fixture.remote]]
+name = "lib"
+
+[[fixture.remote.commit]]
+message = "Initial lib"
+files = { "README.md" = "lib fixture\n" }
+tag = "v1"
+
+[[fixture.remote.commit]]
+message = "Second lib"
+files = { "notes.txt" = "lib notes\n" }
+tag = "v2"
+
+[[fixture.checkout]]
+remote = "lib"
+path = "lib"
+
+[[fixture.git]]
+cwd = "lib"
+args = ["checkout", "--quiet", "--detach", "v1"]
+
+[[fixture.git]]
+cwd = "lib"
+args = ["push", "--quiet", "--force", "origin", "origin/main:refs/tags/v1"]
+
+[[step]]
+args = ["ws", "update", "--json"]
+stdout = "json-lines"

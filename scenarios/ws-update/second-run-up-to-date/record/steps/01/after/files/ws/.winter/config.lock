@@ -1,0 +1,8 @@
+# .winter/config.lock — managed by winter; commit this file.
+version = 1
+
+[[standalone]]
+name = "lib"
+ref = "v2"
+kind = "tag"
+commit = "2d33a7b66b130b4e058b59bc3ed656505c41376a"

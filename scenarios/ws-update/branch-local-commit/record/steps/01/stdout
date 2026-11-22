@@ -1,0 +1,3 @@
+{"type": "pull_started"}
+{"type": "repo_synced", "scope": "standalone", "repo": "lib", "result": "re_pinned", "commits": 0, "ahead": 0, "behind": 0, "pin_ref": "2d33a7b6"}
+{"type": "pull_completed", "success": true}
