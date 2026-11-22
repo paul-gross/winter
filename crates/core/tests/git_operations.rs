@@ -1,44 +1,19 @@
 //! The git operations over the program port, run against the host's git in fixture repositories.
 
-use std::cell::RefCell;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use winter_workspace_core::{
-    Call, CommandTracer, Diagnostics, Finished, GitFailure, Log, OperationSpan, OsPrograms, Pacing,
-    ProcessEnv, RunPrograms, TraceLog, checkout_branch, checkout_detached, clean, fetch, head,
-    stash_pop, stash_push, verify,
+    Call, Diagnostics, Finished, GitFailure, Log, OsPrograms, Pacing, ProcessEnv, RunPrograms,
+    checkout_branch, checkout_detached, clean, fetch, head, stash_pop, stash_push, verify,
 };
 use winter_workspace_test_support::{CommitSpec, Git, TempTree};
 
-type Span = (String, Vec<(String, String)>);
-
-#[derive(Default)]
-struct Spans(RefCell<Vec<Span>>);
-
-struct Open;
-
-impl OperationSpan for Open {
-    fn failed(&mut self, _: &'static str) {}
-}
-
-impl CommandTracer for Spans {
-    fn command_started(&self, _: &[String], _: TraceLog) {}
-
-    fn operation(
-        &self,
-        name: &'static str,
-        attributes: &[(&'static str, &str)],
-    ) -> Box<dyn OperationSpan + '_> {
-        let attributes = attributes
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-            .collect();
-        self.0.borrow_mut().push((name.to_owned(), attributes));
-        Box::new(Open)
-    }
-}
+#[path = "support/spans.rs"]
+#[allow(dead_code)]
+mod spans;
+use spans::Spans;
 
 struct Fixture {
     tree: TempTree,

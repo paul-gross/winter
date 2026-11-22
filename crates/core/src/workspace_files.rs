@@ -22,3 +22,9 @@ pub(crate) const PROJECTS_DIR: &str = "projects";
 pub(crate) fn location(root: &Path, relative: &Path) -> PathBuf {
     root.join(relative).components().collect()
 }
+
+/// The checkout of a standalone repository named `name` that declares `path`: the `path` under `root`, or the
+/// name under `root` when `path` is empty.
+pub(crate) fn standalone_location(root: &Path, name: &str, path: &str) -> PathBuf {
+    location(root, Path::new(if path.is_empty() { name } else { path }))
+}

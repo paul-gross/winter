@@ -23,7 +23,7 @@ pub enum GitFailure {
 }
 
 /// The operation spans of the git operations, named `git <operation>`.
-const REV_PARSE_SPAN: &str = "git rev-parse";
+pub(crate) const REV_PARSE_SPAN: &str = "git rev-parse";
 const STATUS_SPAN: &str = "git status";
 const CHECKOUT_SPAN: &str = "git checkout";
 const FETCH_SPAN: &str = "git fetch";
@@ -31,10 +31,10 @@ const STASH_PUSH_SPAN: &str = "git stash push";
 const STASH_POP_SPAN: &str = "git stash pop";
 
 /// The one attribute of a span: the name of the repository the operation works on.
-const REPO_ATTRIBUTE: &str = "winter.repo";
+pub(crate) const REPO_ATTRIBUTE: &str = "winter.repo";
 
 /// The `error.type` of a span whose operation ended in a repo error.
-const REPO_ERROR_TYPE: &str = "RepoError";
+pub(crate) const REPO_ERROR_TYPE: &str = "RepoError";
 
 /// The commit `HEAD` names in the checkout at `path`, the checkout of the repository `repo`.
 ///
@@ -96,8 +96,18 @@ pub fn clean(
 ///
 /// Opens no span: the resolution that calls it opens the one its verifies share.
 pub fn verify(programs: &dyn RunPrograms, path: &Path, rev: &str) -> Result<bool, GitFailure> {
+    Ok(verified(programs, path, rev)?.is_some())
+}
+
+/// The id `rev` names in the repository at `path`, `None` when it names no object. Opens no span.
+pub(crate) fn verified(
+    programs: &dyn RunPrograms,
+    path: &Path,
+    rev: &str,
+) -> Result<Option<Sha>, GitFailure> {
     let finished = run(programs, path, &["rev-parse", "--verify", rev])?;
-    Ok(finished.exit == Exit::Code(0))
+    Ok((finished.exit == Exit::Code(0))
+        .then(|| String::from_utf8_lossy(&finished.stdout).trim().to_owned()))
 }
 
 /// Resets the local branch `branch` to `origin/<branch>`, tracking it, and checks it out. Commits only the

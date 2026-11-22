@@ -11,7 +11,9 @@ use crate::diagnostics::{self, Diagnostics};
 use crate::drift;
 use crate::files::{ReadFiles, WriteFiles};
 use crate::termination::{ConfigError, ConfigFileName, FileCause, InternalError, TomlParseError};
-use crate::workspace_files::{CONFIG_FILE, LOCAL_CONFIG_FILE, PROJECTS_DIR, location};
+use crate::workspace_files::{
+    CONFIG_FILE, LOCAL_CONFIG_FILE, PROJECTS_DIR, location, standalone_location,
+};
 
 /// The directory of the implicit repository `product`, relative to a workspace root.
 const PRODUCT_DIR: &str = "product";
@@ -98,13 +100,8 @@ pub(crate) fn list(
     }
 
     for standalone in config.standalone_repositories {
-        let relative = if standalone.path.is_empty() {
-            &standalone.common.name
-        } else {
-            &standalone.path
-        };
         listed.push(Listed::Standalone {
-            path: location(&root, Path::new(relative)),
+            path: standalone_location(&root, &standalone.common.name, &standalone.path),
             name: standalone.common.name,
             url: standalone.common.url,
         });
