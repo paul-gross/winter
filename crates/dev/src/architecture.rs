@@ -55,17 +55,17 @@ const FORBIDDEN_TOKENS: [&str; 15] = [
     "std::env::current_dir",
 ];
 
-/// Forbidden in every library source but [`FILE_PORT`].
-const FILE_SYSTEM_TOKEN: &str = "std::fs";
-
-/// The one library source that may name [`FILE_SYSTEM_TOKEN`]: the file port and its adapter.
-const FILE_PORT: &str = "crates/core/src/files.rs";
-
-/// Forbidden in every library source but [`PROGRAM_PORT`]: the start of a process.
-const PROGRAM_TOKEN: &str = "process::Command";
-
-/// The one library source that may name [`PROGRAM_TOKEN`]: the program port and its adapter.
-const PROGRAM_PORT: &str = "crates/core/src/programs.rs";
+/// The tokens each forbidden in every library source but the one named beside it: the file system, the start of
+/// a process, and the clock, the sleep, the random draw, and the operating-system calls that the program port
+/// alone reads, waits on, and makes.
+const PORT_TOKENS: [(&str, &str); 6] = [
+    ("std::fs", "crates/core/src/files.rs"),
+    ("process::Command", "crates/core/src/programs.rs"),
+    ("Instant::now", "crates/core/src/programs.rs"),
+    ("thread::sleep", "crates/core/src/programs.rs"),
+    ("fastrand", "crates/core/src/programs.rs"),
+    ("rustix", "crates/core/src/programs.rs"),
+];
 
 /// The directory of the command files, from the repository root.
 const COMMAND_FILES: &str = "crates/core/src/commands/";
@@ -494,14 +494,15 @@ pub fn unpublished(packages: &[Package]) -> Vec<Violation> {
 /// that overlaps one reported before it on its line is the same offence and is not reported again; of two that
 /// start at the same place the longer is the one reported.
 pub fn forbidden_tokens(file: &str, source: &str) -> Vec<Violation> {
-    let file_system = (file != FILE_PORT).then_some(FILE_SYSTEM_TOKEN);
-    let program = (file != PROGRAM_PORT).then_some(PROGRAM_TOKEN);
+    let ports = PORT_TOKENS
+        .into_iter()
+        .filter(|(_, allowed)| file != *allowed)
+        .map(|(token, _)| token);
     let mut violations = Vec::new();
     for (index, text) in source.lines().enumerate() {
         let mut found: Vec<(usize, &'static str)> = FORBIDDEN_TOKENS
             .into_iter()
-            .chain(file_system)
-            .chain(program)
+            .chain(ports.clone())
             .flat_map(|token| {
                 text.match_indices(token)
                     .map(move |(start, _)| (start, token))
@@ -1335,6 +1336,21 @@ jobs:
     }
 
     #[test]
+    fn a_sleep_outside_the_program_port_is_reported_and_inside_it_is_allowed() {
+        let source = "fn wait() { std::thread::sleep(d); }\n";
+
+        assert_eq!(
+            forbidden_tokens("crates/core/src/git.rs", source),
+            [Violation::ForbiddenToken {
+                file: "crates/core/src/git.rs".to_owned(),
+                line: 1,
+                token: "thread::sleep",
+            }]
+        );
+        assert_eq!(forbidden_tokens("crates/core/src/programs.rs", source), []);
+    }
+
+    #[test]
     fn the_process_id_the_file_port_reads_is_no_start_of_a_process() {
         let source = "fn name() -> String { format!(\".{}.tmp\", std::process::id()) }\n";
 
@@ -1371,7 +1387,7 @@ mod tests {
     fn every_forbidden_token_is_found() {
         for token in FORBIDDEN_TOKENS
             .into_iter()
-            .chain([FILE_SYSTEM_TOKEN, PROGRAM_TOKEN])
+            .chain(PORT_TOKENS.map(|(token, _)| token))
         {
             let source = format!("let _ = {token};\n");
 
