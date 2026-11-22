@@ -4,15 +4,15 @@ use std::ffi::OsString;
 use std::io::{BufRead, Write};
 use std::path::Path;
 
-use crate::files::{ReadFiles, WriteFiles};
+use crate::files::{ReadFiles, ScratchFiles, WriteFiles};
 use crate::logging::Log;
 use crate::process::{Identity, Interrupts, ProcessEnv};
 use crate::programs::RunPrograms;
 use crate::termination::Usage;
 use crate::trace::CommandTracer;
 
-/// The working directory, environment, identity, and stream handles of one invocation, its file and program
-/// ports, the tracer, the node being run, the root option values, what is logged, and the interrupt state of the
+/// The working directory, environment, identity, and stream handles of one invocation, its file, scratch-file, and
+/// program ports, the tracer, the node being run, the root option values, what is logged, and the interrupt state of the
 /// process.
 #[allow(
     dead_code,
@@ -29,6 +29,7 @@ pub(crate) struct Context<'a> {
     pub err_is_terminal: bool,
     pub files: &'a dyn ReadFiles,
     pub file_writer: &'a dyn WriteFiles,
+    pub scratch: &'a dyn ScratchFiles,
     pub programs: &'a dyn RunPrograms,
     pub tracer: &'a dyn CommandTracer,
     pub invoked: &'a Invoked,

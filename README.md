@@ -27,9 +27,9 @@ checkouts, linked worktrees, their contents, and git state are preserved.
 
 `repo add <URL>` appends a `[[project_repository]]` block to the shared configuration, or a `[[standalone_repository]]`
 block with `--standalone`; `--local` writes the machine-local file, which is created when absent. Inline arrays such as
-`project_repository = [{ ... }]` are refused without changing the file. A standalone whose location, with symbolic
-links followed, is that of a declared standalone is refused, and the file is left unchanged. Adding edits configuration only: nothing is
-cloned.
+`project_repository = [{ ... }]` are refused without changing the file. A standalone whose location, with symbolic links
+followed, is that of a declared standalone is refused, and the file is left unchanged. Adding edits configuration only:
+nothing is cloned.
 
 `ws worktrees --status` adds the git counts of each location: the commits ahead of and behind the main branch of
 `origin` and the number of dirty files for a worktree, the same against the upstream of its branch for the workspace
@@ -39,6 +39,13 @@ ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3` unless the
 value included, and with `LANGUAGE` and `LC_ALL` set to `C`. A git call that fails for a worktree ends the command with
 exit code 1: nothing is written to stdout, and the failure is written once to stderr, and once more as a log record
 under `-v`.
+
+`ws fingerprint` prints a 64-character hexadecimal digest of the workspace definition: the tracked content of the
+workspace repository, and the name and tracked content of each standalone. `--json` prints the digest with the commit,
+tree, and dirty flag of each repository. Untracked files, `projects/`, feature environments, and history are outside it,
+so two checkouts of one definition have one digest. It reads no network and never writes the index of a repository: its
+only writes to a repository are unreferenced objects, and it makes a scratch index under `TMPDIR`, or `/tmp` when that
+is unset or empty, which it removes. A missing checkout or a failed git call ends the command with exit code 1.
 
 ## Tracing, exit codes, and logging
 

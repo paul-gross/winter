@@ -36,6 +36,7 @@ fn run(
             args: &args,
             cwd: tree.root(),
             timeout,
+            env: &[],
         })
         .expect("a finished call")
 }
@@ -104,4 +105,50 @@ fn a_program_that_closes_its_streams_and_runs_on_is_killed_at_the_deadline() {
         started.elapsed()
     );
     assert_eq!(finished.exit, Exit::Signal(9));
+}
+
+#[test]
+fn a_variable_of_a_call_is_laid_over_that_call_alone() {
+    let (tree, programs) = with_stub_git("printf '%s' \"$WINTER_X\"");
+    let args = [OsStr::new("status")];
+    let call = |env: &'static [(&'static OsStr, &'static OsStr)]| Call {
+        program: Program::Git,
+        args: &args,
+        cwd: tree.root(),
+        timeout: None,
+        env,
+    };
+
+    let given: [(&OsStr, &OsStr); 1] = [(OsStr::new("WINTER_X"), OsStr::new("1"))];
+    let laid = programs
+        .run(&Call {
+            program: Program::Git,
+            args: &args,
+            cwd: tree.root(),
+            timeout: None,
+            env: &given,
+        })
+        .expect("a finished call");
+    let after = programs.run(&call(&[])).expect("a finished call");
+
+    assert_eq!(laid.stdout, b"1");
+    assert_eq!(after.stdout, b"");
+}
+
+#[test]
+fn a_variable_of_a_call_wins_over_the_snapshot_one_of_its_name() {
+    let (tree, programs) = with_stub_git("printf '%s' \"$LC_ALL\"");
+    let args = [OsStr::new("status")];
+
+    let finished = programs
+        .run(&Call {
+            program: Program::Git,
+            args: &args,
+            cwd: tree.root(),
+            timeout: None,
+            env: &[(OsStr::new("LC_ALL"), OsStr::new("given"))],
+        })
+        .expect("a finished call");
+
+    assert_eq!(finished.stdout, b"given");
 }

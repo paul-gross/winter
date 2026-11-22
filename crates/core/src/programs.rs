@@ -35,7 +35,8 @@ impl Program {
     }
 }
 
-/// One start of a program: its arguments, the subcommand first, its working directory, and how long it may run.
+/// One start of a program: its arguments, the subcommand first, its working directory, how long it may run, and
+/// the variables it is given beyond the environment of the invocation.
 #[derive(Debug, Clone, Copy)]
 pub struct Call<'a> {
     pub program: Program,
@@ -43,6 +44,9 @@ pub struct Call<'a> {
     pub cwd: &'a Path,
     /// The time the program may run before it is killed; `None` waits for it however long it runs.
     pub timeout: Option<Duration>,
+    /// Variables laid over the environment of the child for this call alone: a name the child already has takes
+    /// the value given here.
+    pub env: &'a [(&'a OsStr, &'a OsStr)],
 }
 
 /// What a program that ran to its end wrote, and how it ended.
@@ -171,6 +175,7 @@ impl RunPrograms for OsPrograms {
             .current_dir(call.cwd)
             .env_clear()
             .envs(&self.environment)
+            .envs(call.env.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

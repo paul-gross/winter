@@ -250,7 +250,8 @@ fn the_matrix_declares_its_manual_methods_each_with_its_setup_its_success_and_wh
             "workspace:manual-registration",
             "workspace:manual-interrupt",
             "workspace:manual-repo-add",
-            "workspace:manual-repo-remove"
+            "workspace:manual-repo-remove",
+            "workspace:manual-ws-fingerprint"
         ]
     );
     for (id, text) in &methods {
@@ -258,7 +259,9 @@ fn the_matrix_declares_its_manual_methods_each_with_its_setup_its_success_and_wh
         for stated in ["**Setup.**", "**Success.**"] {
             assert!(text.contains(stated), "{id} does not state {stated}");
         }
-        let location: &[&str] = if id.starts_with("workspace:manual-repo-") {
+        let location: &[&str] = if id.starts_with("workspace:manual-repo-")
+            || id == "workspace:manual-ws-fingerprint"
+        {
             &[
                 "fresh temporary directory outside any real workspace",
                 "verify that no ancestor holds `.winter/config.toml`",

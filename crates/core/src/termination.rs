@@ -830,6 +830,10 @@ pub enum GitOperation {
     StashPush,
     /// The restore of the changes a stash holds.
     StashPop,
+    /// The write of the tree of the tracked content of a checkout.
+    ContentTree,
+    /// The read of the state of the tracked files of a checkout.
+    TrackedStatus,
 }
 
 impl fmt::Display for GitOperation {
@@ -842,6 +846,8 @@ impl fmt::Display for GitOperation {
             Self::Fetch => "fetch",
             Self::StashPush => "stash push",
             Self::StashPop => "stash pop",
+            Self::ContentTree => "tracked-content tree",
+            Self::TrackedStatus => "tracked-files status",
         })
     }
 }
@@ -1243,6 +1249,22 @@ mod tests {
             counted.to_string(),
             "main-branch ahead/behind probe failed for web"
         );
+        for (operation, text) in [
+            (
+                GitOperation::ContentTree,
+                "tracked-content tree failed for api",
+            ),
+            (
+                GitOperation::TrackedStatus,
+                "tracked-files status failed for api",
+            ),
+        ] {
+            let message = RepoMessage::GitFailure {
+                operation,
+                repo: "api".to_owned(),
+            };
+            assert_eq!(message.to_string(), text);
+        }
     }
 
     #[test]

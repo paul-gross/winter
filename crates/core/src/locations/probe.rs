@@ -371,6 +371,7 @@ fn git<A: AsRef<OsStr>>(
             args: &args,
             cwd,
             timeout: None,
+            env: &[],
         })
         .map_err(InternalError::unexpected)
 }

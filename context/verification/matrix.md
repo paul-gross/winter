@@ -205,6 +205,36 @@ installed `winter`, a real remote, or an existing checkout or worktree as a fixt
 configuration block, not the checkout or worktree state. Keep exit codes, streams, and before/after comparisons as
 evidence. No command in this exercise runs against the real workspace.
 
+### `workspace:manual-ws-fingerprint`
+
+Exercises `ws fingerprint` through the built binary. Use it when changing the digest, the scratch index, the git
+operations it runs, or the command wiring. Component tests cover the same contract automatically; this exercise checks
+the built binary against disposable repositories.
+
+**Setup.** Build with `cargo build --workspace --locked`, then set `binary` to the absolute path of the resulting
+`target/debug/winter-workspace`. Create a fresh temporary directory outside any real workspace; verify that no ancestor
+holds `.winter/config.toml`. Work only in a new `workspace/` beneath it, with a `.winter/config.toml` made for this
+run: `workspace/` is a git repository whose committed file declares one `[[standalone_repository]]` named `tools`, and
+`workspace/tools` is a clone of a local bare repository made in the temporary directory. Keep evidence in a sibling
+`evidence/` directory, and set `TMPDIR` to an empty `evidence/tmp/`. Set `OTEL_SDK_DISABLED=true` for every invocation.
+Use no real remote and no existing checkout.
+
+1. **Digest line.** Run `"$binary" ws fingerprint`. Expect exit 0, one line of 64 lowercase hex characters, and empty
+   stderr.
+2. **JSON.** Run it with `--json`. Expect `digest` equal to that line, and `workspace` and `standalones` entries holding
+   `name`, `commit`, `tree`, and `dirty`. Recompute the digest from the trees of the
+   document: write `{"standalones":[{"name":..,"tree":..}],"version":1,"workspace":<tree>}` with keys sorted and no
+   whitespace (`jq -S -c` does), and take its `sha256sum`; it must give the same value.
+3. **Read-only.** Save `sha256sum` and `stat -c %y` of `.git/index`, and `git show-ref`, of both repositories. Run the
+   command again and compare: all are unchanged, and `evidence/tmp/` is empty.
+4. **Tracked content only.** An untracked file in the root leaves the digest unchanged. A staged edit to a tracked file
+   changes it, and `dirty` becomes true.
+5. **Missing checkout.** Move the `tools` checkout away. Expect exit 1, zero stdout bytes, and a stderr that holds
+   `cannot fingerprint tools: <path> does not exist`.
+
+**Success.** The exits and streams are as stated, and the before/after comparisons are kept as evidence. No command in
+this exercise runs against the real workspace.
+
 ## Tools
 
 | Tool             | Use                                                                                                                |

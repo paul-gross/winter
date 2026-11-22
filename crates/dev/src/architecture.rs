@@ -74,11 +74,12 @@ const COMMAND_FILES: &str = "crates/core/src/commands/";
 /// mapping of that call's outcome; these are the names of what such a call stands on.
 ///
 /// A deny-list: the change that adds a module only a domain entry may call adds its name here.
-const COMMAND_FILE_NAMES: [&str; 24] = [
+const COMMAND_FILE_NAMES: [&str; 25] = [
     // The file port.
     "ReadFiles",
     "WriteFiles",
     "OsFiles",
+    "ScratchFiles",
     // The program port.
     "RunPrograms",
     "OsPrograms",
@@ -1432,13 +1433,14 @@ mod tests {
     const COMMAND_FILE: &str = "crates/core/src/commands/repo/add.rs";
 
     #[test]
-    fn the_names_no_command_file_may_hold_are_these_twenty_four() {
+    fn the_names_no_command_file_may_hold_are_these_twenty_five() {
         assert_eq!(
             COMMAND_FILE_NAMES,
             [
                 "ReadFiles",
                 "WriteFiles",
                 "OsFiles",
+                "ScratchFiles",
                 "RunPrograms",
                 "OsPrograms",
                 "workspace_root",

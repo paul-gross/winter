@@ -116,6 +116,79 @@ pub trait WriteFiles {
     fn update(&self, path: &Path, edit: &mut Edit<'_>) -> io::Result<bool>;
 }
 
+/// Makes scratch files: a file in a directory of its own, which is removed with its handle.
+pub trait ScratchFiles {
+    /// A copy of the file at `source` in a new directory under `temp`, with the bytes and the modification time
+    /// of the source, to the nanosecond.
+    fn scratch_copy(&self, temp: &Path, source: &Path) -> io::Result<ScratchFile>;
+
+    /// The path of a file `name` that does not exist, in a new directory under `temp`.
+    fn scratch_path(&self, temp: &Path, name: &str) -> io::Result<ScratchFile>;
+}
+
+/// A path in a scratch directory. Dropping the handle removes the directory and what it holds, and ignores a
+/// failure to do so.
+#[derive(Debug)]
+pub struct ScratchFile {
+    directory: PathBuf,
+    path: PathBuf,
+}
+
+impl ScratchFile {
+    /// The path of the scratch file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ScratchFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+/// Creates a directory that did not exist under `temp`, named for this process and a sequence number, and
+/// returns the handle of `name` in it.
+fn scratch_directory(temp: &Path, name: &str) -> io::Result<ScratchFile> {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    loop {
+        let directory = temp.join(format!(
+            "winter-fingerprint.{}.{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        match std::fs::create_dir(&directory) {
+            Ok(()) => {
+                let path = directory.join(name);
+                return Ok(ScratchFile { directory, path });
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+impl ScratchFiles for OsFiles {
+    fn scratch_copy(&self, temp: &Path, source: &Path) -> io::Result<ScratchFile> {
+        let name = source
+            .file_name()
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let scratch = scratch_directory(temp, &name.to_string_lossy())?;
+        let modified = std::fs::metadata(source)?.modified()?;
+        std::fs::copy(source, scratch.path())?;
+        std::fs::File::options()
+            .write(true)
+            .open(scratch.path())?
+            .set_modified(modified)?;
+        Ok(scratch)
+    }
+
+    fn scratch_path(&self, temp: &Path, name: &str) -> io::Result<ScratchFile> {
+        scratch_directory(temp, name)
+    }
+}
+
 /// The files of the operating system.
 pub struct OsFiles;
 
@@ -466,6 +539,63 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    #[test]
+    fn a_scratch_copy_keeps_the_bytes_and_the_modification_time_and_goes_with_its_handle() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let temp = tree.root().join("temp");
+        std::fs::create_dir(&temp).expect("a temp directory");
+        let source = tree.root().join("index");
+        std::fs::write(&source, b"bytes").expect("a source");
+        let when = std::time::SystemTime::UNIX_EPOCH
+            + std::time::Duration::new(1_700_000_000, 123_456_789);
+        std::fs::File::options()
+            .write(true)
+            .open(&source)
+            .expect("the source")
+            .set_modified(when)
+            .expect("a set time");
+
+        let copy = OsFiles.scratch_copy(&temp, &source).expect("a copy");
+
+        assert_eq!(std::fs::read(copy.path()).expect("the copy"), b"bytes");
+        let modified = std::fs::metadata(copy.path())
+            .expect("the copy")
+            .modified()
+            .expect("a time");
+        assert_eq!(modified, when);
+        assert_eq!(
+            copy.path().parent().and_then(Path::parent),
+            Some(temp.as_path())
+        );
+        let directory = copy.path().parent().expect("a directory").to_path_buf();
+        drop(copy);
+        assert!(!directory.exists());
+        assert!(names(&temp).is_empty());
+    }
+
+    #[test]
+    fn a_scratch_path_names_nothing_and_its_directory_goes_with_its_handle() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let path = OsFiles
+            .scratch_path(tree.root(), "index")
+            .expect("a scratch path");
+
+        assert!(!path.path().exists());
+        assert!(path.path().parent().expect("a directory").is_dir());
+        let directory = path.path().parent().expect("a directory").to_path_buf();
+        drop(path);
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn two_scratch_handles_in_one_directory_get_distinct_directories() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let first = OsFiles.scratch_path(tree.root(), "index").expect("one");
+        let second = OsFiles.scratch_path(tree.root(), "index").expect("two");
+
+        assert_ne!(first.path(), second.path());
     }
 
     #[test]
