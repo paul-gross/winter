@@ -78,8 +78,8 @@ This rewrites formatting, and is the only driver command that changes a tracked 
 then run the gate again.
 
 Use it in place of a bare `cargo fmt`. `cargo fmt` follows `mod` declarations from each target's root, so it reaches
-neither a command file, which only generated code declares, nor `crates/core/build/discover.rs`, which the build script
-includes. The `fmt` step and `cargo dev fmt` pass those files to rustfmt explicitly.
+neither a command file, which only generated code declares, nor `crates/core/build/discover.rs` or
+`crates/core/build/topics.rs`, which the build script includes. The `fmt` step and `cargo dev fmt` pass those files to rustfmt explicitly.
 
 ## Reading a gate's output
 

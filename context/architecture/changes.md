@@ -23,6 +23,7 @@ in [structure.md](./structure.md).
 | A port, or a field of `Context`           | `crates/core/src/context.rs` and `crates/core/src/process.rs`              |
 | A third-party crate                       | The package's `Cargo.toml`, and `Cargo.lock`                               |
 | A module only a domain entry may call     | The list of names in `crates/dev/src/architecture.rs`                      |
+| A topic                                   | A Markdown file under `crates/core/topics/`, found by the library's build script, and a reference to it from `root` or from its group's topic, since the build refuses a topic `root` does not reach |
 
 Work that is built as parallel changes lands these edits first, in one change, with the module files it declares present
 and empty. The parallel changes then fill files that each of them alone owns.

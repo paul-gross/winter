@@ -96,6 +96,7 @@ mod tests {
                     "--check",
                     "--",
                     "/repository/crates/core/build/discover.rs",
+                    "/repository/crates/core/build/topics.rs",
                 ],
             ),
             step(

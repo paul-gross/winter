@@ -74,12 +74,13 @@ is such a directory.
 ### `workspace:manual-registration`
 
 Exercises command discovery: that the build picks up a new command file, and that the build script itself stops the
-build. Use it when a change touches `crates/core/build.rs`, `crates/core/build/discover.rs`,
+build, and the same for the topic sources. Use it when a change touches `crates/core/build.rs`, `crates/core/build/discover.rs`,
+`crates/core/build/topics.rs`, `crates/core/topics/`,
 `crates/core/src/registry.rs`, or `crates/core/src/parse.rs`.
 
 **Setup.** Make a scratch copy of the checkout under a temporary directory, where no directory at or above the copy
 holds a `.winter/config.toml`, as the built-binary rule of [AGENTS.md](../../AGENTS.md#standing-rules) has it, and work
-only there. Run the two cases in order.
+only there. Run the cases in order.
 
 1. Add `crates/core/src/commands/ws/probe.rs`. Its `REGISTRATION` is a `Registration::Command` whose `args` returns the
    node it is given and whose `run` returns `Termination::Success`. Then:
@@ -89,8 +90,15 @@ only there. Run the two cases in order.
    - `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` exits 0.
 2. Rename that file to `crates/core/src/commands/ws/Bad.rs`. Then `cargo build --workspace --locked` exits non-zero, and
    the first line of the build script's error output starts with `crates/core/src/commands/ws/Bad.rs`.
+3. Add `crates/core/topics/probe/x.md` with front matter `id: probe/x` and any one-line title, and a
+   `` `winter-workspace context probe/x` `` span in `crates/core/topics/root.md`. Then `cargo build --workspace --locked`
+   exits 0, and the generated `target/debug/build/winter-workspace-core-*/out/topics.rs` holds `probe/x` and its title.
+   Change only that title and build again: the generated file holds the new title.
+4. Restore the topic sources, then make the body of `crates/core/topics/safety.md` 16 lines. Then
+   `cargo build --workspace --locked` exits non-zero, and the first line of the build script's error output starts with
+   `crates/core/topics/safety.md`.
 
-**Success.** Each run ends as stated, and `git status` of the scratch copy shows only the one added file.
+**Success.** Each run ends as stated, and `git status` of the scratch copy shows only the files that case added or changed, and nothing after cases 3 and 4 restore them.
 
 Everything else about discovery is automatic: the path rules, the message of each, and the generated registry are unit
 tests of the library, under `workspace:unit-test`.
