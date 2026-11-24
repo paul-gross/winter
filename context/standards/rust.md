@@ -99,9 +99,11 @@ rustfmt and Clippy run with their defaults: the repository holds no configuratio
 table. Warnings are denied by the gate's `clippy` step, which covers compiler and Clippy warnings of every package,
 target, and feature; [development.md](../tooling/development.md#the-gates) has the step.
 
-Five items of the library carry `#[allow(dead_code, reason = "…")]` permanently: `Context`, `Invoked`, `RootOptions`,
-`Registration`, and `Entry`. They are contracts that command files fill, and command files are discovered at build time,
-so a tree with no command or no alias reads only part of them and must still pass a gate that denies warnings.
+Seven items of the library carry `#[allow(dead_code, reason = "…")]` permanently: `Context`, `Invoked`, `RootOptions`,
+`Registration`, `Entry`, `Topic`, and `TopicId`. The first five are contracts that command files fill, and command files
+are discovered at build time, so a tree with no command or no alias reads only part of them and must still pass a gate
+that denies warnings. `Topic` and `TopicId` hold fields that only the lookup of the `context` command reads, and
+`eager_text` reads none of them.
 `#[expect(dead_code)]` is never used on them, because the first command would turn the expectation into a failure.
 
 One field carries the same attribute, for the same reason: `log` of `Diagnostics`, the borrow a command file hands a

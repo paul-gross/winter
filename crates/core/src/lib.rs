@@ -36,6 +36,10 @@ mod registry;
 mod repository_catalog;
 mod state_registry;
 mod termination;
+#[cfg(test)]
+#[path = "../build/topics.rs"]
+mod topic_sources;
+mod topics;
 mod trace;
 mod workspace_files;
 mod workspace_root;
@@ -71,6 +75,7 @@ pub use termination::{
     RepoMessage, RepoRef, RepositoryFault, SelectionError, Termination, TomlParseError, TypedKey,
     Usage, UsageError, UsageRule, ValueType,
 };
+pub use topics::eager_text;
 pub use trace::{
     CommandTracer, NoTrace, OperationSpan, TraceConfig, TraceLog, TraceSettings, settings,
     span_name,

@@ -90,6 +90,7 @@ fn the_library_sources_name_nothing_forbidden_and_hold_no_mod_file() {
         violations.extend(architecture::module_file(file));
         violations.extend(architecture::forbidden_tokens(file, &source));
         violations.extend(architecture::command_file_names(file, &source));
+        violations.extend(architecture::topic_file_names(file, &source));
     }
 
     assert_none("library rules", &violations);

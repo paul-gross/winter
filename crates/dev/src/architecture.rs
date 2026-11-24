@@ -107,6 +107,13 @@ const COMMAND_FILE_NAMES: [&str; 25] = [
     "Backtrace",
 ];
 
+/// The library sources that the compiled topic map is read through, from the repository root. They hold no
+/// file read and no environment access: the map is embedded and the topics are the same in every run.
+const TOPIC_FILES: [&str; 1] = ["crates/core/src/topics.rs"];
+
+/// What a topic file names besides [`COMMAND_FILE_NAMES`].
+const TOPIC_FILE_EXTRA_NAMES: [&str; 2] = ["std::fs", "std::env"];
+
 /// The values of the workflow's `run:` lines, in order.
 const WORKFLOW_RUNS: [&str; 3] = [
     "rustup toolchain install",
@@ -245,6 +252,12 @@ pub enum Violation {
         line: usize,
         name: &'static str,
     },
+    /// A topic file names what the embedded map never needs. `line` counts from 1.
+    TopicFileName {
+        file: String,
+        line: usize,
+        name: &'static str,
+    },
     /// A library module is spelled `mod.rs`.
     ModFile { file: String },
     /// A `run:` or `uses:` line of the workflow is not the line expected at its position; `expected` is `None`
@@ -325,6 +338,12 @@ impl fmt::Display for Violation {
                 write!(
                     f,
                     "{file}:{line}: `{name}` is not named in a command file; it belongs to a domain module"
+                )
+            }
+            Self::TopicFileName { file, line, name } => {
+                write!(
+                    f,
+                    "{file}:{line}: `{name}` is not named in a topic file; the topics are embedded and read nothing at run time"
                 )
             }
             Self::ModFile { file } => {
@@ -546,6 +565,27 @@ pub fn command_file_names(file: &str, source: &str) -> Vec<Violation> {
         for name in COMMAND_FILE_NAMES {
             if text.contains(name) {
                 violations.push(Violation::CommandFileName {
+                    file: file.to_owned(),
+                    line: index + 1,
+                    name,
+                });
+            }
+        }
+    }
+    violations
+}
+
+/// A topic file names none of the names of a command file, no file access, and no environment access. `file` is
+/// a path as [`forbidden_tokens`] takes it; any other file has no violation.
+pub fn topic_file_names(file: &str, source: &str) -> Vec<Violation> {
+    if !TOPIC_FILES.contains(&file) {
+        return Vec::new();
+    }
+    let mut violations = Vec::new();
+    for (index, text) in source.lines().enumerate() {
+        for name in COMMAND_FILE_NAMES.into_iter().chain(TOPIC_FILE_EXTRA_NAMES) {
+            if text.contains(name) {
+                violations.push(Violation::TopicFileName {
                     file: file.to_owned(),
                     line: index + 1,
                     name,
@@ -1564,6 +1604,73 @@ fn run(cx: &mut Context<'_>) -> Termination {
 ";
 
         assert_eq!(command_file_names(COMMAND_FILE, source), []);
+    }
+
+    const TOPIC_FILE: &str = "crates/core/src/topics.rs";
+
+    #[test]
+    fn a_topic_file_that_names_the_file_port_is_reported_with_file_line_and_name() {
+        let source = "fn eager() {\n    let _ = OsFiles;\n}\n";
+
+        let violations = topic_file_names(TOPIC_FILE, source);
+
+        assert_eq!(
+            violations,
+            [Violation::TopicFileName {
+                file: TOPIC_FILE.to_owned(),
+                line: 2,
+                name: "OsFiles",
+            }]
+        );
+        assert_eq!(
+            rendered(&violations),
+            [format!(
+                "{TOPIC_FILE}:2: `OsFiles` is not named in a topic file; the topics are embedded and read nothing at run time"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_topic_file_that_names_the_temporary_directory_is_reported_as_environment_access() {
+        let source = "let _ = std::env::temp_dir();\n";
+
+        let names: Vec<&str> = topic_file_names(TOPIC_FILE, source)
+            .into_iter()
+            .map(|violation| match violation {
+                Violation::TopicFileName { name, .. } => name,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+
+        assert_eq!(names, ["std::env"]);
+    }
+
+    #[test]
+    fn a_topic_file_that_names_the_file_system_is_reported() {
+        assert_eq!(topic_file_names(TOPIC_FILE, "use std::fs;\n").len(), 1);
+    }
+
+    #[test]
+    fn every_command_file_name_is_refused_in_a_topic_file() {
+        for name in COMMAND_FILE_NAMES {
+            let source = format!("let _ = {name};\n");
+
+            assert!(!topic_file_names(TOPIC_FILE, &source).is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_file_that_is_no_topic_file_may_name_them() {
+        let source = "let _ = OsFiles; std::env::temp_dir();\n";
+
+        assert_eq!(topic_file_names("crates/core/src/files.rs", source), []);
+    }
+
+    #[test]
+    fn a_topic_file_that_names_none_of_them_passes() {
+        let source = "pub fn eager_text() -> &'static str {\n    SAFETY.text\n}\n";
+
+        assert_eq!(topic_file_names(TOPIC_FILE, source), []);
     }
 
     #[test]
