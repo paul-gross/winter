@@ -109,7 +109,10 @@ const COMMAND_FILE_NAMES: [&str; 25] = [
 
 /// The library sources that the compiled topic map is read through, from the repository root. They hold no
 /// file read and no environment access: the map is embedded and the topics are the same in every run.
-const TOPIC_FILES: [&str; 1] = ["crates/core/src/topics.rs"];
+const TOPIC_FILES: [&str; 2] = [
+    "crates/core/src/topics.rs",
+    "crates/core/src/commands/context.rs",
+];
 
 /// What a topic file names besides [`COMMAND_FILE_NAMES`].
 const TOPIC_FILE_EXTRA_NAMES: [&str; 2] = ["std::fs", "std::env"];
@@ -1643,6 +1646,23 @@ fn run(cx: &mut Context<'_>) -> Termination {
             .collect();
 
         assert_eq!(names, ["std::env"]);
+    }
+
+    #[test]
+    fn the_context_command_file_that_names_the_temporary_directory_is_reported() {
+        let file = "crates/core/src/commands/context.rs";
+        let source = "let _ = std::env::temp_dir();\n";
+
+        let names: Vec<&str> = topic_file_names(file, source)
+            .into_iter()
+            .map(|violation| match violation {
+                Violation::TopicFileName { name, .. } => name,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+
+        assert_eq!(names, ["std::env"]);
+        assert!(command_file_names(file, source).is_empty());
     }
 
     #[test]

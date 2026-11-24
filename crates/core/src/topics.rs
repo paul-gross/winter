@@ -2,18 +2,10 @@
 //! The build script generates the map from the sources under `topics/`; nothing here reads a file at run time.
 
 /// A topic id: one or more segments joined by `/`, each `[a-z][a-z0-9-]*`. An id names a topic, not a file.
-#[allow(
-    dead_code,
-    reason = "as Topic: the lookup of the context command reads it"
-)]
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct TopicId(&'static str);
+pub(crate) struct TopicId(pub(crate) &'static str);
 
 /// One topic of the compiled map.
-#[allow(
-    dead_code,
-    reason = "the lookup of the context command reads the fields eager_text does not"
-)]
 #[derive(Debug)]
 pub(crate) struct Topic {
     pub id: TopicId,
@@ -27,6 +19,26 @@ pub(crate) struct Topic {
 }
 
 include!(concat!(env!("OUT_DIR"), "/topics.rs"));
+
+/// A request for a topic that the map does not hold.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ContextError {
+    #[error("no topic {id:?}; `winter-workspace context topics` lists every topic")]
+    UnknownTopic { id: String },
+}
+
+/// The topic served when no id is asked for.
+pub(crate) fn root() -> &'static Topic {
+    find("root").unwrap_or_else(|_| unreachable!("the build requires the topic `root`"))
+}
+
+/// The topic whose id is exactly `id`: the whole string, with no normalisation and no near match.
+pub(crate) fn find(id: &str) -> Result<&'static Topic, ContextError> {
+    TOPICS
+        .iter()
+        .find(|topic| topic.id.0 == id)
+        .ok_or_else(|| ContextError::UnknownTopic { id: id.to_owned() })
+}
 
 /// The eager safety text: the body of the topic whose id is `safety`, byte for byte.
 pub fn eager_text() -> &'static str {
@@ -43,6 +55,34 @@ mod tests {
             .find(|topic| topic.id.0 == id)
             .unwrap_or_else(|| panic!("no topic {id}"))
             .text
+    }
+
+    #[test]
+    fn every_reference_of_every_topic_resolves() {
+        for topic in TOPICS {
+            for next in topic.next {
+                assert!(find(next.0).is_ok(), "{} -> {}", topic.id.0, next.0);
+            }
+        }
+    }
+
+    #[test]
+    fn find_matches_the_whole_id_only() {
+        assert_eq!(find("safety").unwrap().id.0, "safety");
+        for id in [
+            "Context",
+            "ROOT",
+            "context/",
+            "../x",
+            "",
+            "workspace/context",
+        ] {
+            assert_eq!(
+                find(id).unwrap_err(),
+                ContextError::UnknownTopic { id: id.to_owned() }
+            );
+        }
+        assert_eq!(root().id.0, "root");
     }
 
     #[test]
