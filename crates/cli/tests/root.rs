@@ -222,3 +222,22 @@ fn a_command_that_needs_a_workspace_exits_1_with_nothing_on_stdout_outside_any_w
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
     assert_eq!(exit, Exit::Code(1));
 }
+
+#[test]
+fn context_prints_the_root_with_no_workspace_and_an_unknown_topic_fails_on_stderr_alone() {
+    let (stdout, stderr, exit) = run(&["context"]);
+
+    assert!(stdout.starts_with("Workspace guidance\n\n"), "{stdout}");
+    assert_eq!(stderr, "");
+    assert_eq!(exit, Exit::Code(0));
+
+    let (stdout, stderr, exit) = run(&["context", "no/such-topic"]);
+
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("no/such-topic"), "{stderr}");
+    assert!(
+        stderr.contains("winter-workspace context topics"),
+        "{stderr}"
+    );
+    assert_eq!(exit, Exit::Code(1));
+}

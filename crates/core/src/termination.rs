@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use crate::config_edit::CatalogError;
 use crate::config_lock::LockError;
+use crate::topics::ContextError;
 use crate::workspace_files::{CONFIG_FILE, LOCAL_CONFIG_FILE};
 
 /// One value per way an invocation ends.
@@ -239,6 +240,8 @@ pub enum CommandError {
     Catalog(#[from] CatalogError),
     #[error(transparent)]
     Selection(#[from] SelectionError),
+    #[error(transparent)]
+    Context(#[from] ContextError),
 }
 
 /// A failure to locate, read, write, or accept the workspace configuration.

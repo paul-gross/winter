@@ -75,7 +75,7 @@ pub use termination::{
     RepoMessage, RepoRef, RepositoryFault, SelectionError, Termination, TomlParseError, TypedKey,
     Usage, UsageError, UsageRule, ValueType,
 };
-pub use topics::eager_text;
+pub use topics::{ContextError, eager_text};
 pub use trace::{
     CommandTracer, NoTrace, OperationSpan, TraceConfig, TraceLog, TraceSettings, settings,
     span_name,
