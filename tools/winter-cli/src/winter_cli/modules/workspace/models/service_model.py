@@ -458,6 +458,37 @@ class EnvDiffResult:
     repos: list[RepoDiffResult]
 
 
+@dataclasses.dataclass(frozen=True)
+class SourceCheckoutSync:
+    """Result of fetching a project repo's source checkout and fast-forwarding its main.
+
+    `current_branch` is the branch checked out in the source checkout when the
+    sync ran, or None for a detached HEAD. The fast-forward only runs when it
+    equals `main_branch`; otherwise origin is fetched but the checked-out ref
+    is left untouched, and `warning` names `main_branch` and what is checked
+    out (a branch or a detached HEAD). `commits` is how far the local main
+    advanced (always 0 when the fast-forward was skipped).
+    """
+
+    main_branch: str | None
+    current_branch: str | None
+    commits: int = 0
+
+    @property
+    def on_main_branch(self) -> bool:
+        return self.current_branch is not None and self.current_branch == self.main_branch
+
+    @property
+    def warning(self) -> str | None:
+        if self.on_main_branch:
+            return None
+        current = f"branch '{self.current_branch}'" if self.current_branch is not None else "a detached HEAD"
+        return (
+            f"source checkout is on {current}, not main_branch '{self.main_branch}'; "
+            "fetched origin but did not fast-forward"
+        )
+
+
 @dataclasses.dataclass
 class RepoFetchOutcome:
     """Result of fetching one repo — name, success, and how far local main advanced.
@@ -466,12 +497,15 @@ class RepoFetchOutcome:
     fast-forwarded by this fetch (0 when already up to date). Standalone
     clones are only fetched, not fast-forwarded, so their `commits` stays 0.
     Shares the `commits` field name with `RepoSyncOutcome` / `RepoPushOutcome`.
+    `warning` is set when the fetch succeeded but the source checkout was off
+    its main branch, so the fast-forward was skipped (see `SourceCheckoutSync`).
     """
 
     repo_name: str
     success: bool
     commits: int = 0
     error: str | None = None
+    warning: str | None = None
 
 
 @dataclasses.dataclass

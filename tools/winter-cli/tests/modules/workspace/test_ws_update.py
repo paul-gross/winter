@@ -38,6 +38,7 @@ from winter_cli.modules.workspace.models import (
     PullMode,
     RepoError,
     RepoSyncOutcome,
+    SourceCheckoutSync,
     StandaloneRepository,
     SyncResult,
     Workspace,
@@ -82,8 +83,8 @@ class FakeWriteRepoRepository:
         self.integrated_standalones: list[str] = []
         self._integrate_result = integrate_result
 
-    def sync_ff_only(self, repo: Any) -> int:
-        return 0
+    def sync_ff_only(self, repo: Any) -> SourceCheckoutSync:
+        return SourceCheckoutSync(main_branch=repo.main_branch, current_branch=repo.main_branch)
 
     def fetch_standalone(self, repo: StandaloneRepository) -> None:
         self.fetched_standalones.append(repo.name)
@@ -101,6 +102,9 @@ class _NullPullReporter:
         return None
 
     def env_skipped(self, env: str, reason: str) -> None:
+        return None
+
+    def source_checkout_warning(self, repo_name: str, warning: str) -> None:
         return None
 
     def repo_synced(
@@ -128,6 +132,9 @@ class _RecordingPullReporter:
         return None
 
     def env_skipped(self, env: str, reason: str) -> None:
+        return None
+
+    def source_checkout_warning(self, repo_name: str, warning: str) -> None:
         return None
 
     def repo_synced(

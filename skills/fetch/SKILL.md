@@ -10,10 +10,9 @@ Fetch refs from `origin` for one of: the workspace branch, a standalone repo, or
 ## Big picture
 
 A feature environment contains a worktree for every project repo, so fetching one is a multi-repo operation. Use
-`winter ws fetch` — it fetches every matched worktree's `origin` in parallel and honors pinned-repo rules. Beyond
-refreshing refs, it also fast-forwards each matched project repo's **source checkout** (`projects/<repo>`) local main to
-`origin/<main-branch>`, keeping the base `winter ws init` branches new envs off of current (feature worktrees are never
-touched; a diverged source-checkout main is reported as a failed fetch). For the full reference, start at the CLI hub
+`winter ws fetch` — it fetches every matched worktree's `origin` in parallel and honors pinned-repo rules. It can also
+fast-forward each matched project repo's **source checkout** (`projects/<repo>`); when it does, and what each repo's
+outcome means, is owned by `fetch.md` below. For the full reference, start at the CLI hub
 [workspace:/context/winter/cli/index.md](workspace:/context/winter/cli/index.md), then read the specific topic
 [workspace:/context/winter/cli/usage/ws/fetch.md](workspace:/context/winter/cli/usage/ws/fetch.md) — plus
 [workspace:/context/winter/worktree-ops.md](workspace:/context/winter/worktree-ops.md).
@@ -66,17 +65,14 @@ in the matched set.
 
 ## Report
 
-Output a concise summary of what was fetched. For a feature environment, include a per-repo line — what each repo did
-(new refs, already up to date). The CLI reports each repo as ok/failed; a failed repo most often means its
-source-checkout main diverged from `origin/<main-branch>` (surface that, since the fast-forward is part of what fetch
-does):
+Output a concise summary of what was fetched. For a feature environment, include one line per repo stating the outcome
+the CLI reported for it. Relay any error or warning the CLI printed for a repo verbatim on that repo's line — a fetch
+that succeeded with a warning did not fast-forward its source checkout, so do not report it as fast-forwarded:
 
 ```text
 ## Fetch: <name>
 
-- repo-a: fetched (refs + source main fast-forwarded)
-- repo-b: already up to date
-- repo-c: failed — source-checkout main diverged from origin/<main-branch>
+- <repo>: <outcome the CLI reported>[ — <error or warning, verbatim>]
 ```
 
 $ARGUMENTS

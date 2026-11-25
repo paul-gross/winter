@@ -26,6 +26,7 @@ from winter_cli.modules.workspace.models import (
     RepoFetchOutcome,
     RepoScope,
     RepoSyncOutcome,
+    SourceCheckoutSync,
     StandaloneRepository,
     SyncResult,
     Workspace,
@@ -105,7 +106,10 @@ class WorkspaceSyncService:
         source checkout, which both fetches `origin` (refreshing the shared
         refs every worktree sees) and fast-forwards the source checkout's
         local main — keeping the base that `winter ws init` branches new envs
-        off of current. One `[project/<repo>]` event fires per repo.
+        off of current. The fast-forward is skipped when the source checkout
+        is on another branch or a detached HEAD; that repo still counts as
+        fetched and its outcome carries a warning. One `[project/<repo>]`
+        event fires per repo.
         Standalone repos are independent clones, fetched per-repo. Events fire
         in completion order.
         """
@@ -161,7 +165,9 @@ class WorkspaceSyncService:
             for fut in concurrent.futures.as_completed(future_keys):
                 scope_label, repo_name = future_keys[fut]
                 outcome = self._collect_fetch(fut, repo_name)
-                reporter.repo_fetched(scope_label, repo_name, outcome.success, outcome.commits, outcome.error)
+                reporter.repo_fetched(
+                    scope_label, repo_name, outcome.success, outcome.commits, outcome.error, outcome.warning
+                )
                 if scope_label == "project":
                     project_results.append(outcome)
                 else:
@@ -374,7 +380,10 @@ class WorkspaceSyncService:
         Worktrees of a project repo share a `.git`, so a single
         `sync_ff_only` from the source checkout fetches `origin` AND
         fast-forwards the local main for every worktree — we do this first,
-        then run integrate sequentially for each target worktree. A
+        then run integrate sequentially for each target worktree. When the
+        source checkout is off its main branch (or detached), the fetch still
+        runs but the fast-forward is skipped and a `source_checkout_warning`
+        is emitted; the worktree integrates proceed regardless. A
         non-pinned target carries no explicit ref: we read its own tracking
         branch here (post-fetch, on a worktree known to exist) and integrate
         from that, or emit a `no_upstream` skip when it has none — mirroring
@@ -387,9 +396,12 @@ class WorkspaceSyncService:
         """
         first_wt = targets[0].worktree
         try:
-            self._repo_repo.sync_ff_only(first_wt.repository)
+            source_sync = self._repo_repo.sync_ff_only(first_wt.repository)
         except RepoError as exc:
             logger.warning("Source checkout sync failed for %s: %s", first_wt.repository.name, exc)
+        else:
+            if source_sync.warning is not None:
+                reporter.source_checkout_warning(first_wt.repository.name, source_sync.warning)
         results: list[tuple[str, RepoSyncOutcome]] = []
         for t in targets:
             outcome = self._integrate_target(t, mode, autostash)
@@ -812,11 +824,16 @@ class WorkspaceSyncService:
     @staticmethod
     def _collect_fetch(fut: concurrent.futures.Future, repo_name: str) -> RepoFetchOutcome:
         try:
-            # Project repos run `sync_ff_only`, which returns the ff commit
-            # count; standalone repos run `fetch_standalone`, which returns
-            # None (no local branch is advanced). Normalize the latter to 0.
+            # Project repos run `sync_ff_only`, which returns a
+            # `SourceCheckoutSync` (ff commit count, plus a warning when the
+            # source checkout is off main and the ff was skipped); standalone
+            # repos run `fetch_standalone`, which returns None (no local
+            # branch is advanced). Normalize the latter to 0 commits.
             result = fut.result()
-            commits = result if isinstance(result, int) else 0
-            return RepoFetchOutcome(repo_name=repo_name, success=True, commits=commits)
+            if isinstance(result, SourceCheckoutSync):
+                return RepoFetchOutcome(
+                    repo_name=repo_name, success=True, commits=result.commits, warning=result.warning
+                )
+            return RepoFetchOutcome(repo_name=repo_name, success=True)
         except RepoError as exc:
             return RepoFetchOutcome(repo_name=repo_name, success=False, error=str(exc))

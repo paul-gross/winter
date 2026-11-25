@@ -25,6 +25,7 @@ from winter_cli.modules.workspace.models import (
     RepoMergeOutcome,
     RepoSyncOutcome,
     ResetMode,
+    SourceCheckoutSync,
     StandaloneRepository,
     SyncResult,
 )
@@ -161,11 +162,18 @@ class WriteRepoRepository(ReadRepoRepository):
             )
 
     @GitOperationDeclaration("pull")
-    def sync_ff_only(self, repo: ProjectRepository) -> int:
+    def sync_ff_only(self, repo: ProjectRepository) -> SourceCheckoutSync:
         """Fetch origin and fast-forward the source checkout's local main.
 
-        Returns the number of commits the local main advanced (0 when it was
-        already up to date), so `ws fetch` can report `+N` per repo.
+        The fast-forward runs only when the source checkout has its local
+        `main_branch` checked out. On any other branch, or a detached HEAD,
+        origin is still fetched (refreshing the remote-tracking refs every
+        worktree shares) but nothing is merged: `git merge --ff-only` acts on
+        whatever HEAD is, so running it there would silently move a foreign
+        branch onto main's history. The returned `SourceCheckoutSync` carries
+        the commit count `ws fetch` reports as `+N` (0 when up to date or
+        skipped) and, when skipped, a warning naming `main_branch` and what is
+        checked out (a branch or a detached HEAD).
         """
         main_branch = repo.main_branch
         with git.Repo(str(repo.main_path)) as r:
@@ -176,9 +184,16 @@ class WriteRepoRepository(ReadRepoRepository):
                 cwd=repo.main_path,
                 message=f"sync_ff_only failed for {repo.name}",
             )
+            current_branch = None if r.head.is_detached else r.active_branch.name
+            skipped = SourceCheckoutSync(main_branch=main_branch, current_branch=current_branch)
+            # `on_main_branch` alone decides the skip; it implies `current_branch`
+            # is a real branch equal to `main_branch`, so the merge below never
+            # targets a detached HEAD or an unset main branch.
+            if not skipped.on_main_branch or current_branch is None:
+                return skipped
             head_before = r.head.commit.hexsha
             try:
-                r.git.merge("--ff-only", f"origin/{main_branch}")
+                r.git.merge("--ff-only", f"origin/{current_branch}")
             except git.GitCommandError as exc:
                 raise self._error_factory.from_git(
                     exc,
@@ -186,9 +201,10 @@ class WriteRepoRepository(ReadRepoRepository):
                     cwd=repo.main_path,
                 ) from exc
             head_after = r.head.commit.hexsha
-            if head_before == head_after:
-                return 0
-            return self._count_range(r, repo.name, f"{head_before}..{head_after}")
+            commits = 0
+            if head_before != head_after:
+                commits = self._count_range(r, repo.name, f"{head_before}..{head_after}")
+            return SourceCheckoutSync(main_branch=main_branch, current_branch=current_branch, commits=commits)
 
     @GitOperationDeclaration("config")
     def set_upstream(self, worktree: FeatureWorktree, remote_branch: str) -> None:

@@ -27,6 +27,7 @@ from winter_cli.modules.workspace.models import (
     RepoError,
     RepoScope,
     RepoSyncOutcome,
+    SourceCheckoutSync,
     StandaloneRepository,
     SyncResult,
     Workspace,
@@ -80,8 +81,8 @@ class FakeWriteRepoRepository:
     accidental fan-out trips the test.
     """
 
-    def sync_ff_only(self, repo: ProjectRepository) -> int:
-        return 0
+    def sync_ff_only(self, repo: ProjectRepository) -> SourceCheckoutSync:
+        return SourceCheckoutSync(main_branch=repo.main_branch, current_branch=repo.main_branch)
 
     def __getattr__(self, name: str) -> Any:
         raise AssertionError(f"FakeWriteRepoRepository.{name} called unexpectedly")
@@ -91,11 +92,37 @@ class _NullFetchReporter:
     def fetch_started(self) -> None:
         return None
 
-    def repo_fetched(self, scope_label: str, repo_name: str, success: bool, commits: int, error: str | None) -> None:
+    def repo_fetched(
+        self,
+        scope_label: str,
+        repo_name: str,
+        success: bool,
+        commits: int,
+        error: str | None,
+        warning: str | None = None,
+    ) -> None:
         return None
 
     def fetch_completed(self, success: bool) -> None:
         return None
+
+
+class _RecordingFetchReporter(_NullFetchReporter):
+    """Captures `repo_fetched` warnings so a test can assert the reporter receives them."""
+
+    def __init__(self) -> None:
+        self.warnings: list[tuple[str, str | None]] = []
+
+    def repo_fetched(
+        self,
+        scope_label: str,
+        repo_name: str,
+        success: bool,
+        commits: int,
+        error: str | None,
+        warning: str | None = None,
+    ) -> None:
+        self.warnings.append((repo_name, warning))
 
 
 class _NullPullReporter:
@@ -103,6 +130,9 @@ class _NullPullReporter:
         return None
 
     def env_skipped(self, env: str, reason: str) -> None:
+        return None
+
+    def source_checkout_warning(self, repo_name: str, warning: str) -> None:
         return None
 
     def repo_synced(
@@ -214,18 +244,21 @@ class _SpyWriteRepoRepository:
     diverged source main.
     """
 
-    def __init__(self, raise_on: str | None = None, commits: int = 0) -> None:
+    def __init__(self, raise_on: str | None = None, commits: int = 0, current_branch: str | None = "main") -> None:
         self.synced: list[ProjectRepository] = []
         self._raise_on = raise_on
         self._commits = commits
+        self._current_branch = current_branch
         self._lock = threading.Lock()
 
-    def sync_ff_only(self, repo: ProjectRepository) -> int:
+    def sync_ff_only(self, repo: ProjectRepository) -> SourceCheckoutSync:
         with self._lock:
             self.synced.append(repo)
         if repo.name == self._raise_on:
             raise RepoError(f"sync_ff_only failed for {repo.name}", cwd=str(repo.main_path))
-        return self._commits
+        return SourceCheckoutSync(
+            main_branch=repo.main_branch, current_branch=self._current_branch, commits=self._commits
+        )
 
     def fetch(self, worktree: FeatureWorktree) -> None:
         raise AssertionError("fetch_all must fast-forward via sync_ff_only, not fetch")
@@ -334,6 +367,46 @@ def test_fetch_all_reports_failure_when_source_checkout_diverges(
     assert report.success is False
 
 
+@pytest.mark.parametrize(
+    ("current_branch", "expected_fragment"),
+    [("master", "branch 'master'"), (None, "a detached HEAD")],
+)
+def test_fetch_all_warns_when_source_checkout_is_off_main_branch(
+    workspace_config: WorkspaceConfig, tmp_path: Path, current_branch: str | None, expected_fragment: str
+) -> None:
+    """An off-main source checkout is a successful fetch whose warning reaches the reporter."""
+    workspace = Workspace(root_path=tmp_path, service_prefix="t", main_branch="main")
+    env_worktrees, _ = _make_env_with_worktree(workspace, tmp_path)
+    repo_repo = _SpyWriteRepoRepository(current_branch=current_branch)
+    svc = _make_fetch_service(workspace, workspace_config, env_worktrees, repo_repo)
+    recorder = _RecordingFetchReporter()
+    reporter: IFetchReporter = recorder  # type: ignore[assignment]
+
+    report = svc.fetch_all(scope=RepoScope.project, patterns=None, reporter=reporter)
+
+    outcome = report.projects[0]
+    assert outcome.success is True
+    assert outcome.commits == 0
+    assert outcome.warning is not None
+    assert expected_fragment in outcome.warning
+    assert "main_branch 'main'" in outcome.warning
+    assert recorder.warnings == [(outcome.repo_name, outcome.warning)]
+
+
+def test_fetch_all_on_main_branch_has_no_warning(workspace_config: WorkspaceConfig, tmp_path: Path) -> None:
+    """A source checkout on its main branch fetches without a warning."""
+    workspace = Workspace(root_path=tmp_path, service_prefix="t", main_branch="main")
+    env_worktrees, _ = _make_env_with_worktree(workspace, tmp_path)
+    repo_repo = _SpyWriteRepoRepository(commits=2)
+    svc = _make_fetch_service(workspace, workspace_config, env_worktrees, repo_repo)
+    reporter: IFetchReporter = _NullFetchReporter()  # type: ignore[assignment]
+
+    report = svc.fetch_all(scope=RepoScope.project, patterns=None, reporter=reporter)
+
+    assert report.projects[0].warning is None
+    assert report.projects[0].commits == 2
+
+
 class _PullSpyWriteRepoRepository:
     """Fake write repo for `pull_all`: per-worktree upstreams + recorded integrates.
 
@@ -351,21 +424,23 @@ class _PullSpyWriteRepoRepository:
         upstreams: dict[str, str | None],
         integrate_results: dict[str, SyncResult] | None = None,
         raise_sync_ff_only: str | None = None,
+        source_branch: str | None = "main",
     ) -> None:
         self._upstreams = upstreams
         self._integrate_results = integrate_results or {}
         self._raise_sync_ff_only = raise_sync_ff_only
+        self._source_branch = source_branch
         self.synced_ff: list[str] = []
         self.integrated: list[tuple[str, str]] = []
         self.upstream_queries: list[str] = []
         self._lock = threading.Lock()
 
-    def sync_ff_only(self, repo: ProjectRepository) -> int:
+    def sync_ff_only(self, repo: ProjectRepository) -> SourceCheckoutSync:
         with self._lock:
             self.synced_ff.append(repo.name)
         if repo.name == self._raise_sync_ff_only:
             raise RepoError(f"sync_ff_only failed for {repo.name}", cwd=str(repo.main_path))
-        return 0
+        return SourceCheckoutSync(main_branch=repo.main_branch, current_branch=self._source_branch)
 
     def get_worktree_upstream(self, worktree: FeatureWorktree) -> str | None:
         with self._lock:
@@ -389,6 +464,7 @@ class _RecordingPullReporter:
 
     def __init__(self) -> None:
         self.synced: list[tuple[str, str, SyncResult]] = []
+        self.source_warnings: list[tuple[str, str]] = []
         self.completed_success: bool | None = None
 
     def pull_started(self) -> None:
@@ -396,6 +472,9 @@ class _RecordingPullReporter:
 
     def env_skipped(self, env: str, reason: str) -> None:
         return None
+
+    def source_checkout_warning(self, repo_name: str, warning: str) -> None:
+        self.source_warnings.append((repo_name, warning))
 
     def repo_synced(
         self, scope: str, repo: str, result: Any, commits: int, ahead: int, behind: int, pin_ref: str = ""
@@ -901,3 +980,49 @@ def test_branch_repin_preserves_other_repos_lock_entries(tmp_path: Path) -> None
     assert written["my-lib"].commit == SHA_NEW
     # other-repo entry preserved unchanged.
     assert written["other-repo"] == other_entry
+
+
+@pytest.mark.parametrize("source_branch", ["master", None])
+def test_pull_all_warns_and_still_integrates_when_source_checkout_is_off_main(
+    workspace_config: WorkspaceConfig, tmp_path: Path, source_branch: str | None
+) -> None:
+    """An off-main source checkout emits one per-repo warning; worktree integration is unaffected."""
+    workspace = Workspace(root_path=tmp_path, service_prefix="t", main_branch="main")
+    env_worktrees = _make_env_with_named_worktrees(workspace, tmp_path, ["repo-a"])
+    repo_repo = _PullSpyWriteRepoRepository(upstreams={"repo-a": "origin/featbranch"}, source_branch=source_branch)
+    svc = _make_pull_service(workspace, workspace_config, env_worktrees, repo_repo)
+    reporter = _RecordingPullReporter()
+
+    report = svc.pull_all(
+        scope=RepoScope.project,
+        patterns=None,
+        mode=PullMode.ff_only,
+        autostash=False,
+        reporter=reporter,  # type: ignore[arg-type]
+    )
+
+    assert len(reporter.source_warnings) == 1
+    repo_name, warning = reporter.source_warnings[0]
+    assert repo_name == "repo-a"
+    assert "main_branch 'main'" in warning
+    assert repo_repo.integrated == [("repo-a", "origin/featbranch")]
+    assert report.success is True
+
+
+def test_pull_all_on_main_source_checkout_emits_no_warning(workspace_config: WorkspaceConfig, tmp_path: Path) -> None:
+    """A source checkout on its main branch produces no source-checkout warning."""
+    workspace = Workspace(root_path=tmp_path, service_prefix="t", main_branch="main")
+    env_worktrees = _make_env_with_named_worktrees(workspace, tmp_path, ["repo-a"])
+    repo_repo = _PullSpyWriteRepoRepository(upstreams={"repo-a": "origin/featbranch"})
+    svc = _make_pull_service(workspace, workspace_config, env_worktrees, repo_repo)
+    reporter = _RecordingPullReporter()
+
+    svc.pull_all(
+        scope=RepoScope.project,
+        patterns=None,
+        mode=PullMode.ff_only,
+        autostash=False,
+        reporter=reporter,  # type: ignore[arg-type]
+    )
+
+    assert reporter.source_warnings == []

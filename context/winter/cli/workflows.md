@@ -29,7 +29,7 @@ winter ws merge master alpha --merge        # 3-way fallback when ff-only would 
 
 Use the offline `winter ws merge master alpha` form when local `master` is already current — it doesn't hit the remote,
 so it's faster and won't stall on a hanging fetch. When you need a fresh `origin/master` first, run
-`winter ws fetch alpha` (which also fast-forwards the source checkout's local main), then
+`winter ws fetch alpha` (which also fast-forwards a source checkout that is on its main branch), then
 `winter ws merge origin/master alpha`.
 
 ### Pull remote feature-branch commits into the local env
@@ -90,7 +90,9 @@ publish this and what to run instead.
 winter ws fetch --all                      # refresh refs for every env + standalone, ff each source checkout's local main
 ```
 
-Feature worktrees are left untouched; only remote-tracking refs and the source checkouts' local main move.
+Feature worktrees are left untouched; only remote-tracking refs and the source checkouts' local main move. A source
+checkout that is not on its main branch is fetched but not fast-forwarded — [usage/ws/fetch.md](./usage/ws/fetch.md)
+owns when the fast-forward runs.
 
 ### Review changes before committing
 

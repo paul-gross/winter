@@ -2,9 +2,10 @@
 
 Fetches, then integrates each matched worktree's tracked upstream (ff-only by default). For project repos, the first
 step also fast-forwards the source checkout's local main (like `winter ws fetch`) — best-effort: a non-ff-able source
-checkout logs a warning and does not fail the pull. Shares the [pattern and scope vocabulary](./patterns.md) with
-`fetch` / `push` / `merge`; this file covers only pull-specific behavior. For the family, see the
-[`winter ws` hub](./index.md).
+checkout logs a warning and does not fail the pull. When [fetch](./fetch.md) skips that fast-forward, pull reports the
+skip as a per-repo `warning:` (`--json`: a `source_checkout_warning` event) and still integrates the feature worktrees.
+Shares the [pattern and scope vocabulary](./patterns.md) with `fetch` / `push` / `merge`; this file covers only
+pull-specific behavior. For the family, see the [`winter ws` hub](./index.md).
 
 **Per-repo target ref.** Each worktree resolves its integration ref independently from its *own* tracking branch — there
 is no single env-wide feature branch. A non-pinned project worktree pulls from whatever it tracks (e.g.

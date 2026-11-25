@@ -71,7 +71,7 @@ def test_stream_repo_fetched_failure_to_stderr() -> None:
 
 
 def test_json_repo_fetched_full_envelope_carries_commits() -> None:
-    """Lock the NDJSON envelope: type, scope, repo, success, commits, error."""
+    """Lock the NDJSON envelope: type, scope, repo, success, commits, error, warning."""
     click = _CapturingClick()
     reporter = JsonFetchReporter(click)
 
@@ -85,4 +85,30 @@ def test_json_repo_fetched_full_envelope_carries_commits() -> None:
         "success": True,
         "commits": 5,
         "error": None,
+        "warning": None,
     }
+
+
+_OFF_MAIN = "source checkout is on branch 'master', not main_branch 'main'; fetched origin but did not fast-forward"
+
+
+def test_stream_repo_fetched_off_main_warns_on_stderr() -> None:
+    """A source checkout off main_branch reports the warning (naming both branches) on stderr."""
+    click = _CapturingClick()
+    reporter = StreamFetchReporter(click)
+
+    reporter.repo_fetched("project", "demo", success=True, commits=0, error=None, warning=_OFF_MAIN)
+
+    assert click.lines == [(f"[project/demo] warning: {_OFF_MAIN}", True)]
+
+
+def test_json_repo_fetched_off_main_carries_warning() -> None:
+    """The NDJSON event carries the off-main warning and still reports success."""
+    click = _CapturingClick()
+    reporter = JsonFetchReporter(click)
+
+    reporter.repo_fetched("project", "demo", success=True, commits=0, error=None, warning=_OFF_MAIN)
+
+    payload = json.loads(click.lines[0][0])
+    assert payload["success"] is True
+    assert payload["warning"] == _OFF_MAIN

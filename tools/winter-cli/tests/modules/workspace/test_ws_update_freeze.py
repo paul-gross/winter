@@ -95,6 +95,9 @@ class RecordingReporter:
     def env_skipped(self, env: str, reason: str) -> None:
         return None
 
+    def source_checkout_warning(self, repo_name: str, warning: str) -> None:
+        return None
+
     def repo_synced(
         self,
         scope_label: str,

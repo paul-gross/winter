@@ -23,6 +23,7 @@ class IPullReporter(Protocol):
         pin_ref: str = "",
     ) -> None: ...
     def env_skipped(self, env: str, reason: str) -> None: ...
+    def source_checkout_warning(self, repo_name: str, warning: str) -> None: ...
 
 
 class StreamPullReporter:
@@ -91,6 +92,9 @@ class StreamPullReporter:
     def env_skipped(self, env: str, reason: str) -> None:
         self._echo(f"[{env}] skipped: {reason}", err=True)
 
+    def source_checkout_warning(self, repo_name: str, warning: str) -> None:
+        self._echo(f"[project/{repo_name}] warning: {warning}", err=True)
+
 
 class JsonPullReporter:
     """Emits pull events as ndjson (one JSON object per line) to stdout.
@@ -138,6 +142,9 @@ class JsonPullReporter:
 
     def env_skipped(self, env: str, reason: str) -> None:
         self._emit({"type": "env_skipped", "env": env, "reason": reason})
+
+    def source_checkout_warning(self, repo_name: str, warning: str) -> None:
+        self._emit({"type": "source_checkout_warning", "repo": repo_name, "warning": warning})
 
 
 def _conforms_stream_pull_reporter(x: StreamPullReporter) -> IPullReporter:

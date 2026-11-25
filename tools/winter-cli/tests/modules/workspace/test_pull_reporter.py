@@ -236,3 +236,30 @@ def test_json_repo_synced_freeze_outcomes_carry_result_and_pin_ref() -> None:
         ("c", "refused", "not cloned"),
     ]
     assert all(p["type"] == "repo_synced" and p["scope"] == "standalone" for p in payloads)
+
+
+_OFF_MAIN = "source checkout is on a detached HEAD, not main_branch 'main'; fetched origin but did not fast-forward"
+
+
+def test_stream_source_checkout_warning_to_stderr() -> None:
+    """A skipped source-checkout fast-forward surfaces as a per-repo warning on stderr."""
+    click = _CapturingClick()
+    reporter = StreamPullReporter(click)
+
+    reporter.source_checkout_warning("demo", _OFF_MAIN)
+
+    assert click.lines == [(f"[project/demo] warning: {_OFF_MAIN}", True)]
+
+
+def test_json_source_checkout_warning_envelope() -> None:
+    """Lock the NDJSON envelope for the source-checkout warning event."""
+    click = _CapturingClick()
+    reporter = JsonPullReporter(click)
+
+    reporter.source_checkout_warning("demo", _OFF_MAIN)
+
+    assert json.loads(click.lines[0][0]) == {
+        "type": "source_checkout_warning",
+        "repo": "demo",
+        "warning": _OFF_MAIN,
+    }

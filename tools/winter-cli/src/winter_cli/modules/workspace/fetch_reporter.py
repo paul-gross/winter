@@ -17,6 +17,7 @@ class IFetchReporter(Protocol):
         success: bool,
         commits: int,
         error: str | None,
+        warning: str | None = None,
     ) -> None: ...
 
 
@@ -51,10 +52,13 @@ class StreamFetchReporter:
         success: bool,
         commits: int,
         error: str | None,
+        warning: str | None = None,
     ) -> None:
         prefix = f"[{scope_label}/{repo_name}]"
         if not success:
             self._echo(f"{prefix} error: {error or 'unknown error'}", err=True)
+        elif warning is not None:
+            self._echo(f"{prefix} warning: {warning}", err=True)
         elif commits > 0:
             self._echo(f"{prefix} ok (+{commits})")
         else:
@@ -89,6 +93,7 @@ class JsonFetchReporter:
         success: bool,
         commits: int,
         error: str | None,
+        warning: str | None = None,
     ) -> None:
         self._emit(
             {
@@ -98,6 +103,7 @@ class JsonFetchReporter:
                 "success": success,
                 "commits": commits,
                 "error": error,
+                "warning": warning,
             }
         )
 

@@ -92,7 +92,10 @@ def test_sync_ff_only_reports_commits_fast_forwarded(tmp_path: Path, repo_svc: W
     _commit(pusher, "b.txt", "b\n", "commit b")
     pusher.git.push("origin", "main")
 
-    assert repo_svc.sync_ff_only(project) == 2
+    result = repo_svc.sync_ff_only(project)
+
+    assert result.commits == 2
+    assert result.warning is None
     assert (project.main_path / "a.txt").exists()
 
 
@@ -100,7 +103,78 @@ def test_sync_ff_only_reports_zero_when_already_up_to_date(tmp_path: Path, repo_
     """No upstream movement ⇒ 0, the signal `ws fetch` renders as `up to date`."""
     project, _pusher = _source_checkout_with_origin(tmp_path)
 
-    assert repo_svc.sync_ff_only(project) == 0
+    result = repo_svc.sync_ff_only(project)
+
+    assert result.commits == 0
+    assert result.warning is None
+
+
+def _advance_origin_main(pusher: git.Repo, count: int) -> None:
+    for i in range(count):
+        _commit(pusher, f"up{i}.txt", f"{i}\n", f"upstream {i}")
+    pusher.git.push("origin", "main")
+
+
+def test_sync_ff_only_fast_forwards_when_on_main_branch(tmp_path: Path, repo_svc: WriteRepoRepository) -> None:
+    """On `main_branch`, the local main moves to origin's tip and no warning is raised."""
+    project, pusher = _source_checkout_with_origin(tmp_path)
+    _advance_origin_main(pusher, 3)
+    src = git.Repo(str(project.main_path))
+
+    result = repo_svc.sync_ff_only(project)
+
+    assert result.current_branch == "main"
+    assert result.on_main_branch is True
+    assert result.commits == 3
+    assert result.warning is None
+    assert src.heads["main"].commit.hexsha == src.remotes.origin.refs["main"].commit.hexsha
+
+
+def test_sync_ff_only_leaves_other_branch_untouched(tmp_path: Path, repo_svc: WriteRepoRepository) -> None:
+    """Off `main_branch`: fetch origin, but never merge `origin/main` into the checked-out branch.
+
+    `git merge --ff-only` acts on whatever HEAD is, so merging here would
+    silently move a source checkout left on another branch onto main's history.
+    """
+    project, pusher = _source_checkout_with_origin(tmp_path)
+    src = git.Repo(str(project.main_path))
+    src.git.checkout("-b", "master")
+    master_before = src.heads["master"].commit.hexsha
+    main_before = src.heads["main"].commit.hexsha
+    _advance_origin_main(pusher, 2)
+
+    result = repo_svc.sync_ff_only(project)
+
+    assert result.current_branch == "master"
+    assert result.on_main_branch is False
+    assert result.commits == 0
+    assert result.warning is not None
+    assert "'master'" in result.warning
+    assert "'main'" in result.warning
+    assert src.heads["master"].commit.hexsha == master_before
+    assert src.heads["main"].commit.hexsha == main_before
+    # The fetch still ran: origin/main reflects the pushed commits.
+    assert src.remotes.origin.refs["main"].commit.hexsha == pusher.head.commit.hexsha
+
+
+def test_sync_ff_only_leaves_detached_head_untouched(tmp_path: Path, repo_svc: WriteRepoRepository) -> None:
+    """A detached HEAD is never fast-forwarded; the warning says so and names `main_branch`."""
+    project, pusher = _source_checkout_with_origin(tmp_path)
+    src = git.Repo(str(project.main_path))
+    src.git.checkout("--detach")
+    head_before = src.head.commit.hexsha
+    _advance_origin_main(pusher, 2)
+
+    result = repo_svc.sync_ff_only(project)
+
+    assert result.current_branch is None
+    assert result.commits == 0
+    assert result.warning is not None
+    assert "detached HEAD" in result.warning
+    assert "'main'" in result.warning
+    assert src.head.is_detached
+    assert src.head.commit.hexsha == head_before
+    assert src.remotes.origin.refs["main"].commit.hexsha == pusher.head.commit.hexsha
 
 
 # --- integrate (ws pull) ------------------------------------------------------
