@@ -30,7 +30,15 @@ class IGitRepository(Protocol):
 
     # ── Cloning + worktrees ───────────────────────────────────────────────
 
-    def clone(self, url: str, dest: Path, *, repo_name: str) -> None: ...
+    def clone(self, url: str, dest: Path, *, repo_name: str, branch: str | None = None) -> None:
+        """Clone `url` into `dest`.
+
+        With `branch`, the clone checks out that branch tracking `origin/<branch>`
+        whatever the remote's default HEAD is; a `branch` the remote lacks raises
+        `RepoError` naming it and leaves nothing at `dest`. Without it, the clone
+        checks out the remote's default HEAD.
+        """
+        ...
 
     def add_worktree(
         self,

@@ -74,6 +74,91 @@ def test_clone_raises_repo_error_on_git_command_error(
     assert ei.value.subcommand == "clone"
 
 
+def test_clone_with_branch_keeps_the_plain_message_for_an_unrelated_failure(
+    monkeypatch: pytest.MonkeyPatch, adapter: GitPythonRepository
+) -> None:
+    git_mock = _fake_git_repo(monkeypatch)
+    git_mock.Repo.clone_from.side_effect = git.GitCommandError(
+        ("git", "clone", "origin"), 128, stderr=b"fatal: Could not read from remote repository."
+    )
+
+    with pytest.raises(RepoError) as ei:
+        adapter.clone("git@example.com:org/repo.git", _DEST_PATH, repo_name="repo", branch="rust-cli")
+
+    assert ei.value.message == "clone failed for git@example.com:org/repo.git"
+
+
+# ── clone against real git ─────────────────────────────────────────────────
+#
+# `--branch` semantics (which branch HEAD lands on, its upstream, and git's
+# cleanup of `dest` on a missing branch) are git's behavior, so these build a
+# real bare `origin` whose default HEAD is `master` with a second `rust-cli`
+# branch ahead of it.
+
+
+def _origin_with_two_branches(tmp_path: Path) -> Path:
+    seed = git.Repo.init(tmp_path / "seed", initial_branch="master")
+    with seed.config_writer() as cw:
+        cw.set_value("user", "email", "test@example.com")
+        cw.set_value("user", "name", "Test")
+        cw.set_value("commit", "gpgsign", "false")
+    (tmp_path / "seed" / "a.txt").write_text("a")
+    seed.index.add(["a.txt"])
+    seed.index.commit("master commit")
+    seed.git.checkout("-b", "rust-cli")
+    (tmp_path / "seed" / "b.txt").write_text("b")
+    seed.index.add(["b.txt"])
+    seed.index.commit("rust-cli commit")
+    seed.git.checkout("master")
+    origin = tmp_path / "origin.git"
+    git.Repo.clone_from(str(tmp_path / "seed"), str(origin), bare=True)
+    seed.close()
+    return origin
+
+
+def _head_and_upstream(path: Path) -> tuple[str, str]:
+    with git.Repo(str(path)) as r:
+        return r.active_branch.name, r.git.rev_parse("--abbrev-ref", "@{upstream}")
+
+
+def test_clone_checks_out_a_non_default_branch_tracking_its_origin(
+    tmp_path: Path, adapter: GitPythonRepository
+) -> None:
+    origin = _origin_with_two_branches(tmp_path)
+    dest = tmp_path / "projects" / "repo"
+
+    adapter.clone(str(origin), dest, repo_name="repo", branch="rust-cli")
+
+    assert _head_and_upstream(dest) == ("rust-cli", "origin/rust-cli")
+
+
+def test_clone_of_the_default_branch_lands_on_it_as_before(tmp_path: Path, adapter: GitPythonRepository) -> None:
+    origin = _origin_with_two_branches(tmp_path)
+    with_branch = tmp_path / "with-branch"
+    without_branch = tmp_path / "without-branch"
+
+    adapter.clone(str(origin), with_branch, repo_name="repo", branch="master")
+    adapter.clone(str(origin), without_branch, repo_name="repo")
+
+    assert _head_and_upstream(with_branch) == ("master", "origin/master")
+    assert _head_and_upstream(with_branch) == _head_and_upstream(without_branch)
+
+
+def test_clone_of_a_branch_missing_on_the_remote_raises_and_leaves_no_checkout(
+    tmp_path: Path, adapter: GitPythonRepository
+) -> None:
+    origin = _origin_with_two_branches(tmp_path)
+    dest = tmp_path / "projects" / "repo"
+    dest.parent.mkdir()
+
+    with pytest.raises(RepoError) as ei:
+        adapter.clone(str(origin), dest, repo_name="repo", branch="no-such-branch")
+
+    assert "branch 'no-such-branch' not found on the remote" in ei.value.message
+    assert ei.value.subcommand == "clone"
+    assert not dest.exists()
+
+
 # ── add_worktree ───────────────────────────────────────────────────────────
 
 

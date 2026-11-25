@@ -407,7 +407,7 @@ class InitService:
             if not self._fs.exists(repo_path):
                 if not repo.url:
                     raise RepoError("no `url` declared in config; cannot clone")
-                self._git_repo.clone(repo.url, repo_path, repo_name=repo.name)
+                self._git_repo.clone(repo.url, repo_path, repo_name=repo.name, branch=repo.main_branch)
                 reporter.repo_action(label, str(repo_path), "cloned")
             else:
                 reporter.repo_action(label, str(repo_path), "exists")

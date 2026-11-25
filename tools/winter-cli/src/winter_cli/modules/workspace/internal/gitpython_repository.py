@@ -40,15 +40,20 @@ class GitPythonRepository:
     # ── Cloning + worktrees ───────────────────────────────────────────────
 
     @GitOperationDeclaration("clone")
-    def clone(self, url: str, dest: Path, *, repo_name: str) -> None:
+    def clone(self, url: str, dest: Path, *, repo_name: str, branch: str | None = None) -> None:
         try:
-            git.Repo.clone_from(url, str(dest), env=self._clone_env)
+            if branch is None:
+                git.Repo.clone_from(url, str(dest), env=self._clone_env)
+            else:
+                # `--branch` checks out `branch` tracking `origin/<branch>` rather
+                # than the remote's default HEAD; git removes `dest` itself when
+                # the remote lacks the branch, so no partial checkout survives.
+                git.Repo.clone_from(url, str(dest), env=self._clone_env, branch=branch)
         except git.GitCommandError as exc:
-            raise self._error_factory.from_git(
-                exc,
-                message=f"clone failed for {url}",
-                cwd=dest.parent,
-            ) from exc
+            message = f"clone failed for {url}"
+            if branch is not None and _is_missing_remote_branch(exc, branch):
+                message = f"clone failed for {url}: branch '{branch}' not found on the remote"
+            raise self._error_factory.from_git(exc, message=message, cwd=dest.parent) from exc
 
     @GitOperationDeclaration("worktree add")
     def add_worktree(
@@ -376,3 +381,9 @@ class GitPythonRepository:
 
 def _conforms_gitpython_repository(x: GitPythonRepository) -> IGitRepository:
     return x
+
+
+def _is_missing_remote_branch(exc: git.GitCommandError, branch: str) -> bool:
+    """True when `git clone --branch <branch>` failed because the remote has no such branch."""
+    stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+    return f"Remote branch {branch} not found" in stderr

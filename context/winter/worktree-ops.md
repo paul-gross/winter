@@ -53,10 +53,14 @@ This reads `.winter/config.toml`, clones every declared repo that's missing into
 writes git-exclude entries, and runs each repo's `cmd` list. Safe to re-run. It also git-excludes the runtime
 `.winter/logs/` capture dir.
 
+Each clone checks out the repo's effective `main_branch`, tracking `origin/<main_branch>`, whatever the remote's default
+HEAD is. A `main_branch` the remote lacks is reported as that repo's error and leaves no checkout behind. An existing
+source checkout is never switched to another branch.
+
 Raw equivalent for a single repo:
 
 ```bash
-git -C <workspace-root> clone <repo-url> <workspace-root>/projects/<repo-name>
+git -C <workspace-root> clone --branch <main-branch> <repo-url> <workspace-root>/projects/<repo-name>
 ```
 
 ## Creating a feature environment

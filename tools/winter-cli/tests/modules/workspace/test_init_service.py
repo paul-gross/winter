@@ -126,11 +126,29 @@ def test_reconcile_projects_clones_missing_repo(
     # Clone was invoked through IGitRepository.
     assert git.clones == [("git@example.com:org/demo.git", WORKSPACE_ROOT / "projects" / "demo")]
     assert git.repo_names_for("clone") == ["demo"]
+    # The clone checks out the repo's declared main_branch, not the remote's default HEAD.
+    assert git.clone_branches == ["main"]
     # Identity applied.
     assert git.identities == [(WORKSPACE_ROOT / "projects" / "demo", "Bot", "bot@example.com")]
     # Reporter saw the high-level events.
     assert ("demo", str(WORKSPACE_ROOT / "projects" / "demo"), "cloned", "") in init_reporter.actions
     assert ("projects/", True) in init_reporter.targets_completed
+
+
+def test_reconcile_projects_clones_a_repo_on_its_declared_main_branch(
+    workspace_config: WorkspaceConfig, init_reporter: FakeInitReporter
+) -> None:
+    """A per-repo `main_branch` override, not the workspace default, is the branch the clone checks out."""
+    workspace_config.project_repos = [
+        ProjectRepositoryConfig(name="demo", url="git@example.com:org/demo.git", main_branch="rust-cli"),
+    ]
+    fs = FakeFilesystem()
+    git = FakeGitRepository()
+
+    ok = _service(workspace_config, fs, FakeSubprocessRunner(), git).reconcile_projects(init_reporter)
+
+    assert ok is True
+    assert git.clone_branches == ["rust-cli"]
 
 
 def test_reconcile_projects_skips_clone_when_checkout_present(
@@ -337,7 +355,7 @@ def test_run_per_repo_caps_parallelism_via_git_ops_executor(
 class _ExplodingGitRepository(FakeGitRepository):
     """FakeGitRepository whose clone raises RepoError — exercises the per-repo wrap site."""
 
-    def clone(self, url: str, dest: Path, *, repo_name: str) -> None:
+    def clone(self, url: str, dest: Path, *, repo_name: str, branch: str | None = None) -> None:
         raise RepoError(f"boom cloning {url}")
 
 

@@ -618,6 +618,7 @@ class FakeGitRepository:
 
         # Mutation log — assertion targets.
         self.clones: list[tuple[str, Path]] = []
+        self.clone_branches: list[str | None] = []
         self.added_worktrees: list[tuple[Path, Path, str, str | None]] = []
         self.removed_worktrees: list[tuple[Path, Path, bool]] = []
         self.identities: list[tuple[Path, str, str]] = []
@@ -701,9 +702,10 @@ class FakeGitRepository:
         return path in self.tracked_changes or content_tree != self.head_trees[path]
 
     # ── Writes ───────────────────────────────────────────────────────────
-    def clone(self, url: str, dest: Path, *, repo_name: str) -> None:
+    def clone(self, url: str, dest: Path, *, repo_name: str, branch: str | None = None) -> None:
         self.repo_name_calls.append(("clone", dest, repo_name))
         self.clones.append((url, dest))
+        self.clone_branches.append(branch)
 
     def add_worktree(
         self,
