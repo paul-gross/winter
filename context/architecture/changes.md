@@ -13,6 +13,9 @@ in [structure.md](./structure.md).
 | An executable test file | `crates/cli/tests/<subject>.rs`                             | Cargo's test-target discovery        |
 | A context document      | `context/<area>/<subject>.md`, linked from the area's index | Nothing: the index is edited by hand |
 
+A visible command also has a topic, and the reference to that topic is a [shared edit](#what-stays-a-shared-edit); see
+[A command](#a-command).
+
 ## What stays a shared edit
 
 | Change                                    | File                                                                       |
@@ -37,17 +40,10 @@ A command is one file, and its place in the command tree follows from where the 
 | `crates/core/src/commands/<name>.rs`         | `<name>`         |
 | `crates/core/src/commands/<group>/<name>.rs` | `<group> <name>` |
 
-A change that adds a command adds its topic under `crates/core/topics/`, with the command path joined by `/` as its id,
-as `ws/index`, and a reference to it from its group's topic, or from `root` for a command outside a group; that
-reference is a [shared edit](#what-stays-a-shared-edit). A change that adds a group, by adding its first command, adds
-the group's topic too, with the group's name as its id, and a reference to it from `root`. A hidden command and an alias
-need no topic. Unit tests in `crates/core/src/topics.rs` fail for a command or a group without its topic, and for a
-command span in a topic other than `safety` that the parser does not accept as a command to run.
-
 The build script `crates/core/build.rs` walks the directory on every build and generates the module declarations and the
-registry that `crates/core/src/parse.rs` builds the parser from. Nothing else lists commands. The directory exists only
-while it holds a command file, since git tracks no empty directory, and without it the registry is empty and the build
-passes.
+registry that `crates/core/src/parse.rs` builds the parser from. Nothing else registers commands. The directory exists
+only while it holds a command file, since git tracks no empty directory, and without it the registry is empty and the
+build passes.
 
 The build fails when an entry under `commands/` breaks one of these rules, and the first line the build script writes to
 its error output starts with the offending path:
@@ -152,6 +148,13 @@ each of them explicitly, so they are checked and rewritten like every other sour
 
 The verifiability matrix has a manual method for a change to discovery itself:
 [`workspace:manual-registration`](../verification/matrix.md#workspacemanual-registration).
+
+A change that adds a command adds its topic under `crates/core/topics/`, with the command path joined by `/` as its id,
+as `ws/index`, and a reference to it from its group's topic, or from `root` for a command outside a group; that
+reference is a [shared edit](#what-stays-a-shared-edit). A change that adds a group, by adding its first command, adds
+the group's topic too, with the group's name as its id, and a reference to it from `root`. A hidden command and an alias
+need no topic. Unit tests in `crates/core/src/topics.rs` fail for a command or a group without its topic, and for a
+command span in a topic other than `safety` that the parser does not accept as a command to run.
 
 ### Writing the result
 
