@@ -11,5 +11,5 @@ kind, and an absolute path.
 counted against `origin/<main-branch>` of its project, and the workspace against the upstream of its branch; a
 standalone is not counted. A git call that fails on a worktree ends the command with an error.
 
-`winter-workspace ws worktrees --json` prints one document with an object for each location; with `--status` each
-counted location also has `ahead`, `behind`, and `dirty`, each a number or null.
+`winter-workspace ws worktrees --json` prints one document with an object for each location. With `--status` every
+location also has `ahead`, `behind`, and `dirty`, each a number, or null where it was not counted.
