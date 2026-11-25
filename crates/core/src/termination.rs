@@ -5,6 +5,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::bootstrap::BootstrapError;
 use crate::config_edit::CatalogError;
 use crate::config_lock::LockError;
 use crate::topics::ContextError;
@@ -242,6 +243,8 @@ pub enum CommandError {
     Selection(#[from] SelectionError),
     #[error(transparent)]
     Context(#[from] ContextError),
+    #[error(transparent)]
+    Bootstrap(#[from] BootstrapError),
 }
 
 /// A failure to locate, read, write, or accept the workspace configuration.
@@ -814,6 +817,61 @@ pub enum RepoMessage {
     NoStandaloneNamed { name: String },
     #[error("cannot fingerprint {name}: {} does not exist", .path.display())]
     MissingCheckout { name: String, path: PathBuf },
+    #[error("no `url` declared in config; cannot clone")]
+    NoUrl { name: String },
+    #[error("cannot reconcile {name}: {} is not the top of a git work tree", .path.display())]
+    NotARepository { name: String, path: PathBuf },
+    /// `found` is `None` when the checkout sets no `remote.origin.url`.
+    #[error(
+        "cannot reconcile {name}: {} was declared with url {declared}, but {}",
+        .path.display(),
+        origin(.found)
+    )]
+    OriginMismatch {
+        name: String,
+        path: PathBuf,
+        declared: String,
+        found: Option<String>,
+    },
+    #[error("`{command}` exited with code {returncode}")]
+    CommandFailed {
+        name: String,
+        command: String,
+        returncode: i32,
+    },
+    /// `cause` is the text of the error that kept the command from starting.
+    #[error("`{command}` — {cause}")]
+    CommandNotStarted {
+        name: String,
+        command: String,
+        cause: String,
+    },
+    #[error("refusing to clone {name} into {}: {reason}", .path.display())]
+    UnsafeLocation {
+        name: String,
+        path: PathBuf,
+        reason: UnsafeReason,
+    },
+}
+
+/// What a checkout's `remote.origin.url` is, as the end of an origin mismatch.
+fn origin(found: &Option<String>) -> String {
+    match found {
+        Some(url) => format!("its remote.origin.url is {url}"),
+        None => "no remote.origin.url is set".to_owned(),
+    }
+}
+
+/// Why a location is refused for a clone.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum UnsafeReason {
+    #[error("outside the workspace")]
+    OutsideWorkspace,
+    #[error("reserved directory")]
+    ReservedDirectory,
+    /// `name` is that of what the location overlaps.
+    #[error("overlaps {name}")]
+    Overlaps { name: String },
 }
 
 /// What a git call that failed was made for.
@@ -837,6 +895,20 @@ pub enum GitOperation {
     ContentTree,
     /// The read of the state of the tracked files of a checkout.
     TrackedStatus,
+    /// The clone of a remote into a directory.
+    Clone,
+    /// The read or write of git configuration.
+    Config,
+    /// The lookup of the exclude file of a repository.
+    ExcludeLocate,
+    /// The read of the top directory of a work tree.
+    Toplevel,
+    /// The read of the URL of the remote `origin`.
+    OriginUrl,
+    /// The read of the commits no remote-tracking branch holds.
+    LocalOnly,
+    /// The read of the stashes of a repository.
+    StashList,
 }
 
 impl fmt::Display for GitOperation {
@@ -851,6 +923,13 @@ impl fmt::Display for GitOperation {
             Self::StashPop => "stash pop",
             Self::ContentTree => "tracked-content tree",
             Self::TrackedStatus => "tracked-files status",
+            Self::Clone => "clone",
+            Self::Config => "git config",
+            Self::ExcludeLocate => "exclude file lookup",
+            Self::Toplevel => "work tree top read",
+            Self::OriginUrl => "origin URL read",
+            Self::LocalOnly => "local-only commit probe",
+            Self::StashList => "stash list",
         })
     }
 }
@@ -2028,6 +2107,116 @@ mod tests {
         for (message, text) in cases {
             assert_eq!(message.to_string(), text);
         }
+    }
+
+    #[test]
+    fn each_bootstrap_repo_message_renders_its_wording() {
+        let path = PathBuf::from("/ws/x");
+        let unsafe_location = |reason| RepoMessage::UnsafeLocation {
+            name: "a".into(),
+            path: path.clone(),
+            reason,
+        };
+        let mismatch = |found| RepoMessage::OriginMismatch {
+            name: "a".into(),
+            path: path.clone(),
+            declared: "git@h:a.git".into(),
+            found,
+        };
+        let cases = [
+            (
+                RepoMessage::NoUrl { name: "a".into() },
+                "no `url` declared in config; cannot clone",
+            ),
+            (
+                RepoMessage::NotARepository {
+                    name: "a".into(),
+                    path: path.clone(),
+                },
+                "cannot reconcile a: /ws/x is not the top of a git work tree",
+            ),
+            (
+                mismatch(Some("git@h:b.git".into())),
+                "cannot reconcile a: /ws/x was declared with url git@h:a.git, but its remote.origin.url is git@h:b.git",
+            ),
+            (
+                mismatch(None),
+                "cannot reconcile a: /ws/x was declared with url git@h:a.git, but no remote.origin.url is set",
+            ),
+            (
+                RepoMessage::CommandFailed {
+                    name: "a".into(),
+                    command: "make setup".into(),
+                    returncode: 2,
+                },
+                "`make setup` exited with code 2",
+            ),
+            (
+                RepoMessage::CommandNotStarted {
+                    name: "a".into(),
+                    command: "make setup".into(),
+                    cause: "no such file".into(),
+                },
+                "`make setup` — no such file",
+            ),
+            (
+                unsafe_location(UnsafeReason::OutsideWorkspace),
+                "refusing to clone a into /ws/x: outside the workspace",
+            ),
+            (
+                unsafe_location(UnsafeReason::ReservedDirectory),
+                "refusing to clone a into /ws/x: reserved directory",
+            ),
+            (
+                unsafe_location(UnsafeReason::Overlaps { name: "b".into() }),
+                "refusing to clone a into /ws/x: overlaps b",
+            ),
+        ];
+        for (message, text) in cases {
+            assert_eq!(message.to_string(), text);
+        }
+    }
+
+    #[test]
+    fn each_bootstrap_git_operation_renders_its_name() {
+        let cases = [
+            (GitOperation::Clone, "clone"),
+            (GitOperation::Config, "git config"),
+            (GitOperation::ExcludeLocate, "exclude file lookup"),
+            (GitOperation::Toplevel, "work tree top read"),
+            (GitOperation::OriginUrl, "origin URL read"),
+            (GitOperation::LocalOnly, "local-only commit probe"),
+            (GitOperation::StashList, "stash list"),
+        ];
+        for (operation, text) in cases {
+            assert_eq!(operation.to_string(), text);
+        }
+    }
+
+    #[test]
+    fn each_bootstrap_error_renders_its_wording() {
+        let initialized = BootstrapError::AlreadyInitialized {
+            path: PathBuf::from("/ws/.winter/config.toml"),
+        };
+
+        assert_eq!(
+            initialized.to_string(),
+            "/ws/.winter/config.toml already exists; run `winter-workspace ws init` to reconcile it"
+        );
+        assert_eq!(
+            BootstrapError::JsonNeedsForce.to_string(),
+            "`ws prune --json` needs `--force` or `--dry-run`"
+        );
+    }
+
+    #[test]
+    fn a_bootstrap_error_ends_as_a_command_failure() {
+        let ending = Termination::Command(Box::new(CommandError::Bootstrap(
+            BootstrapError::JsonNeedsForce,
+        )));
+
+        assert_eq!(ending.error_type(), Some("Command"));
+        assert_eq!(ending.exit_code(), 1);
     }
 
     #[test]
