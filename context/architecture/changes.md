@@ -37,6 +37,13 @@ A command is one file, and its place in the command tree follows from where the 
 | `crates/core/src/commands/<name>.rs`         | `<name>`         |
 | `crates/core/src/commands/<group>/<name>.rs` | `<group> <name>` |
 
+A change that adds a command adds its topic under `crates/core/topics/`, with the command path joined by `/` as its id,
+as `ws/index`, and a reference to it from its group's topic, or from `root` for a command outside a group; that
+reference is a [shared edit](#what-stays-a-shared-edit). A change that adds a group, by adding its first command, adds
+the group's topic too, with the group's name as its id, and a reference to it from `root`. A hidden command and an alias
+need no topic. Unit tests in `crates/core/src/topics.rs` fail for a command or a group without its topic, and for a
+command span in a topic other than `safety` that the parser does not accept as a command to run.
+
 The build script `crates/core/build.rs` walks the directory on every build and generates the module declarations and the
 registry that `crates/core/src/parse.rs` builds the parser from. Nothing else lists commands. The directory exists only
 while it holds a command file, since git tracks no empty directory, and without it the registry is empty and the build
