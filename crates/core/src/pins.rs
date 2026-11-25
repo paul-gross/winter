@@ -1,10 +1,9 @@
-//! Pinning standalone repositories to recorded inputs: the ports every pin entry takes and the module's error.
+//! Pinning standalone repositories to recorded inputs: the module's error and its flows.
 
-use crate::files::{ReadFiles, WriteFiles};
 use crate::git::GitFailure;
-use crate::programs::RunPrograms;
 use crate::termination::{ConfigError, InternalError, RepoError};
-use crate::trace::CommandTracer;
+
+pub use crate::ports::Ports;
 
 pub(crate) mod advance;
 pub(crate) mod freeze;
@@ -13,14 +12,6 @@ pub(crate) mod outcome;
 pub(crate) mod repin;
 pub(crate) mod resolve;
 pub(crate) mod snapshot;
-
-/// The ports every pin entry takes, as one value.
-pub struct Ports<'p> {
-    pub files: &'p dyn ReadFiles,
-    pub writer: &'p dyn WriteFiles,
-    pub programs: &'p dyn RunPrograms,
-    pub tracer: &'p dyn CommandTracer,
-}
 
 /// What a pin flow answers on failure. The command maps `Repo` to a repo ending, `Config` to a configuration
 /// ending, and `Internal` to an internal ending.
@@ -71,7 +62,7 @@ mod tests {
 
     use super::*;
     use crate::files::OsFiles;
-    use crate::programs::{Call, Finished};
+    use crate::programs::{Call, Finished, RunPrograms};
     use crate::trace::NoTrace;
 
     struct CannotStart;

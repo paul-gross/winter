@@ -4,7 +4,9 @@
 //! names a process stream, the process environment, or a process exit; the binary binds those and maps the
 //! returned [`Termination`] to an exit code.
 
+mod agents_md;
 mod arguments;
+mod bootstrap;
 mod config_edit;
 mod config_file;
 mod config_load;
@@ -26,12 +28,15 @@ mod groups;
 mod index_lookup;
 mod locations;
 mod logging;
+mod managed_block;
 mod output;
 mod parse;
 mod pattern_match;
 mod pins;
+mod ports;
 mod process;
 mod programs;
+mod prune;
 mod registry;
 mod repository_catalog;
 mod state_registry;
@@ -41,9 +46,11 @@ mod termination;
 mod topic_sources;
 mod topics;
 mod trace;
+mod workspace_exclude;
 mod workspace_files;
 mod workspace_root;
 
+pub use bootstrap::BootstrapError;
 pub use config_edit::{CatalogError, RepositoryKind, StandaloneOption};
 pub use config_lock::{LockEntry, LockEntryFault, LockError, RefKind, read_lock, upsert_lock};
 pub use config_model::{
@@ -73,7 +80,7 @@ pub use termination::{
     EntryIdent, EnvVarFault, FileCause, GitOperation, InternalError, MergedTable, ModelTierFault,
     NestedExcludedKey, NestedOnlyKey, ParseFault, PathField, RemovedKey, RepoError, RepoKind,
     RepoMessage, RepoRef, RepositoryFault, SelectionError, Termination, TomlParseError, TypedKey,
-    Usage, UsageError, UsageRule, ValueType,
+    UnsafeReason, Usage, UsageError, UsageRule, ValueType,
 };
 pub use topics::{ContextError, eager_text};
 pub use trace::{
