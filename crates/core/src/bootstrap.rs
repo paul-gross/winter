@@ -1,6 +1,20 @@
-//! The creation and the reconciliation of a workspace: the module's error. The flows are its submodules.
+//! Workspace reconciliation: bounded checkout scheduling, managed content, and shared event rendering.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+
+use crate::agents_md::{self, Placement};
+use crate::config_load;
+use crate::config_model::{LoadMode, ProjectRepository, Workspace, WorkspaceConfig};
+use crate::diagnostics::Diagnostics;
+use crate::git::GitFailure;
+use crate::pins::outcome::rendered;
+use crate::pins::repin::RunEnd;
+use crate::ports::Ports;
+use crate::process::ProcessEnv;
+use crate::termination::{ConfigError, InternalError, Termination};
+use crate::workspace_exclude::{self, Eligible, Finalized};
+use crate::workspace_files::{PROJECTS_DIR, standalone_location};
 
 pub(crate) mod checkout;
 pub(crate) mod create;
@@ -66,4 +80,654 @@ pub enum BootstrapError {
     AlreadyInitialized { path: PathBuf },
     #[error("`ws prune --json` needs `--force` or `--dry-run`")]
     JsonNeedsForce,
+}
+
+/// A failure before reconciliation can start.
+#[derive(Debug, thiserror::Error)]
+pub enum InitError {
+    #[error("{0}")]
+    Config(#[source] Box<ConfigError>),
+    #[error("{0}")]
+    Internal(#[source] Box<InternalError>),
+}
+
+/// Events are delivered on the caller's thread. Refusal stops admission and joins active workers.
+pub type InitSink<'s> = dyn FnMut(&InitEvent, &mut Diagnostics<'_>) -> Result<(), Termination> + 's;
+
+/// The stream for a human-readable event row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextStream {
+    Stdout,
+    Stderr,
+}
+
+/// Shared human rendering; successful command completion has no row.
+pub fn text(event: &InitEvent) -> Option<(TextStream, String)> {
+    use TextStream::{Stderr, Stdout};
+    Some(match event {
+        InitEvent::TargetStarted { target } => (Stdout, format!("→ {target}")),
+        InitEvent::TargetCompleted {
+            target,
+            success: true,
+        } => (Stdout, format!("✓ {target} done")),
+        InitEvent::TargetCompleted {
+            target,
+            success: false,
+        } => (Stderr, format!("✗ {target} failed")),
+        InitEvent::RepoError { repo, error } => (Stderr, format!("[{repo}] ERROR: {error}")),
+        InitEvent::CmdStarted { repo, command } => (Stdout, format!("[{repo}] $ {command}")),
+        InitEvent::CmdOutputLine { repo, line } => (Stdout, format!("[{repo}] {line}")),
+        InitEvent::CmdCompleted { returncode: 0, .. } => return None,
+        InitEvent::CmdCompleted {
+            repo,
+            command,
+            returncode,
+        } => (Stderr, format!("[{repo}] ✗ {command} (exit {returncode})")),
+        InitEvent::RepoAction {
+            repo,
+            location,
+            action,
+            detail,
+        } => {
+            let row = match action {
+                Action::Cloned => format!("cloned to {location}"),
+                Action::Exists => format!("exists at {location}"),
+                Action::ExcludesUpdated => format!("excludes updated: {detail}"),
+                Action::Pinned => format!("pinned at {detail}"),
+                Action::WorkspaceExcludesUpdated => format!("workspace excludes updated: {detail}"),
+                Action::AgentsMdUpdated => format!("AGENTS.md safety rules updated at {location}"),
+            };
+            (Stdout, format!("[{repo}] {row}"))
+        }
+    })
+}
+
+/// Reconciles declared checkouts and refreshes only content owned by the workspace.
+pub fn reconcile(
+    ports: &Ports<'_>,
+    env: &ProcessEnv,
+    diagnostics: &mut Diagnostics<'_>,
+    start: &Path,
+    sink: &mut InitSink<'_>,
+) -> Result<RunEnd, InitError> {
+    let workspace = config_load::load(ports.files, start)
+        .map_err(|error| InitError::Config(Box::new(error)))?;
+    let mut emit = |event: InitEvent| sink(&event, diagnostics);
+    Ok(match reconcile_loaded(ports, env, &workspace, &mut emit) {
+        Ok(success) => RunEnd::Completed { success },
+        Err(ending) => RunEnd::Stopped(ending),
+    })
+}
+
+type Emit<'a> = dyn FnMut(InitEvent) -> Result<(), Termination> + 'a;
+
+fn error(emit: &mut Emit<'_>, repo: &str, error: String) -> Result<(), Termination> {
+    emit(InitEvent::RepoError {
+        repo: repo.to_owned(),
+        error,
+    })
+}
+
+fn action(
+    emit: &mut Emit<'_>,
+    repo: &str,
+    file: &Path,
+    action: Action,
+    detail: String,
+) -> Result<(), Termination> {
+    emit(InitEvent::RepoAction {
+        repo: repo.to_owned(),
+        location: file.display().to_string(),
+        action,
+        detail,
+    })
+}
+
+fn git_text(error: GitFailure) -> String {
+    match error {
+        GitFailure::Repo(error) => rendered(&error),
+        GitFailure::Internal(error) => error.to_string(),
+    }
+}
+
+fn block(
+    ports: &Ports<'_>,
+    root: &Path,
+    name: &str,
+    lines: &[String],
+    report: bool,
+    emit: &mut Emit<'_>,
+) -> Result<bool, Termination> {
+    match workspace_exclude::write_block(ports, root, name, lines) {
+        Ok(Some(file)) if report => action(
+            emit,
+            "winter",
+            &file,
+            Action::WorkspaceExcludesUpdated,
+            lines.join(", "),
+        )?,
+        Ok(_) => {}
+        Err(cause) => {
+            let (repo, label) = if report {
+                ("winter", "workspace exclude")
+            } else {
+                ("workspace", "workspace skills")
+            };
+            error(emit, repo, format!("{label} — {}", git_text(cause)))?;
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn extension(ports: &Ports<'_>, root: &Path, project: &ProjectRepository) -> bool {
+    project.common.extension
+        && ports.files.is_file(
+            &root
+                .join(PROJECTS_DIR)
+                .join(&project.common.name)
+                .join("winter-ext.toml"),
+        )
+}
+
+fn projects_only(config: &WorkspaceConfig) -> impl Iterator<Item = &ProjectRepository> {
+    config.project_repositories.iter().filter(|project| {
+        !config
+            .standalone_repositories
+            .iter()
+            .any(|standalone| standalone.common.name == project.common.name)
+    })
+}
+
+fn eligible(ports: &Ports<'_>, workspace: &Workspace) -> Vec<Eligible> {
+    let root = &workspace.root;
+    let config = &workspace.config;
+    let standalone = config
+        .standalone_repositories
+        .iter()
+        .map(|repo| {
+            (
+                &repo.common.name,
+                standalone_location(root, &repo.common.name, &repo.path),
+            )
+        })
+        .filter(|(_, location)| ports.files.exists(location));
+    let projects = projects_only(config)
+        .filter(|project| extension(ports, root, project))
+        .map(|project| {
+            (
+                &project.common.name,
+                root.join(PROJECTS_DIR).join(&project.common.name),
+            )
+        });
+    standalone
+        .chain(projects)
+        .filter_map(|(name, location)| {
+            let resolved = ports.files.resolve(&location);
+            let resolved_root = ports.files.resolve(root);
+            if resolved == resolved_root || !resolved.starts_with(&resolved_root) {
+                return None;
+            }
+            // Confinement follows links; the exclude pattern names the declared checkout entry,
+            // not the in-workspace directory to which that entry happens to point.
+            let relative = location.strip_prefix(root).ok()?;
+            Some(Eligible {
+                name: name.clone(),
+                relative: relative.display().to_string(),
+                extra: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+fn reconcile_loaded(
+    ports: &Ports<'_>,
+    env: &ProcessEnv,
+    workspace: &Workspace,
+    emit: &mut Emit<'_>,
+) -> Result<bool, Termination> {
+    let root = &workspace.root;
+    let config = &workspace.config;
+    emit(InitEvent::TargetStarted {
+        target: "projects/".to_owned(),
+    })?;
+    let mut projects_ok = true;
+    if let Err(cause) = ports.writer.create_dir_all(&root.join(PROJECTS_DIR)) {
+        error(emit, "winter", cause.to_string())?;
+        projects_ok = false;
+    }
+    for (name, line) in [
+        ("winter-dir/projects", "/projects/"),
+        ("winter-workspace/artifacts", "/.winter/logs/"),
+    ] {
+        projects_ok &= block(ports, root, name, &[line.to_owned()], true, emit)?;
+    }
+    let declared = checkout::Declared {
+        root,
+        identity: config.git_identity.as_ref(),
+        projects: &config.project_repositories,
+        standalones: &config.standalone_repositories,
+    };
+    let excludes = |own: &[String]| config.git_excludes.iter().chain(own).cloned().collect();
+    let projects: Vec<_> = config
+        .project_repositories
+        .iter()
+        .map(|repo| checkout::Checkout {
+            name: &repo.common.name,
+            url: repo.common.url.as_deref(),
+            location: root.join(PROJECTS_DIR).join(&repo.common.name),
+            git_excludes: excludes(&repo.common.git_excludes),
+            cmd: &repo.common.cmd,
+            nested: repo.nested.is_some(),
+            branch: Some(&repo.common.main_branch),
+            standalone: None,
+        })
+        .collect();
+    projects_ok &= fan_out(ports, env, &declared, &projects, emit)?;
+    let lines = [".claude/skills", ".codex/skills", ".opencode/skill"]
+        .into_iter()
+        .flat_map(|directory| {
+            [
+                format!("{directory}/{}-*", config.prefix),
+                format!("{directory}/{}", config.prefix),
+            ]
+        })
+        .collect::<Vec<_>>();
+    projects_ok &= block(
+        ports,
+        root,
+        "winter-workspace/workspace-skills",
+        &lines,
+        false,
+        emit,
+    )?;
+    emit(InitEvent::TargetCompleted {
+        target: "projects/".to_owned(),
+        success: projects_ok,
+    })?;
+
+    let active = !config.standalone_repositories.is_empty()
+        || projects_only(config).any(|project| {
+            let common = &project.common;
+            !common.extension
+                || extension(ports, root, project)
+                || (common.load != Some(LoadMode::None)
+                    && (common.load.is_some() || common.entry.is_some()))
+        });
+    let mut standalone_ok = true;
+    if active {
+        emit(InitEvent::TargetStarted {
+            target: "standalone/".to_owned(),
+        })?;
+        let standalones: Vec<_> = config
+            .standalone_repositories
+            .iter()
+            .map(|repo| checkout::Checkout {
+                name: &repo.common.name,
+                url: repo.common.url.as_deref(),
+                location: standalone_location(root, &repo.common.name, &repo.path),
+                git_excludes: excludes(&repo.common.git_excludes),
+                cmd: &repo.common.cmd,
+                nested: false,
+                branch: None,
+                standalone: Some(repo),
+            })
+            .collect();
+        standalone_ok &= fan_out(ports, env, &declared, &standalones, emit)?;
+    }
+    let eligible = if active {
+        eligible(ports, workspace)
+    } else {
+        Vec::new()
+    };
+    match workspace_exclude::finalize(ports, root, config.adopt_extensions, &eligible, &[]) {
+        Ok(Finalized::Updated { file, names }) => action(
+            emit,
+            "winter-extensions",
+            &file,
+            Action::WorkspaceExcludesUpdated,
+            if names.is_empty() {
+                "cleared".to_owned()
+            } else {
+                names.join(", ")
+            },
+        )?,
+        Ok(_) => {}
+        Err(cause) => {
+            error(emit, "winter-extensions", git_text(cause))?;
+            standalone_ok = false;
+        }
+    }
+    if active {
+        emit(InitEvent::TargetCompleted {
+            target: "standalone/".to_owned(),
+            success: standalone_ok,
+        })?;
+    }
+    let mut safety_ok = true;
+    match agents_md::refresh(ports.writer, root) {
+        Ok(Placement::Updated) => action(
+            emit,
+            "workspace",
+            &root.join("AGENTS.md"),
+            Action::AgentsMdUpdated,
+            String::new(),
+        )?,
+        Ok(Placement::Conflict(conflict)) => {
+            error(
+                emit,
+                "workspace",
+                match conflict {
+                    agents_md::Conflict::MalformedBlock { path } => {
+                        format!("{}: malformed safety block", path.display())
+                    }
+                    agents_md::Conflict::NotUtf8 { path } => {
+                        format!("{}: safety file is not UTF-8", path.display())
+                    }
+                },
+            )?;
+            safety_ok = false;
+        }
+        Ok(_) => {}
+        Err(cause) => {
+            error(emit, "workspace", cause.to_string())?;
+            safety_ok = false;
+        }
+    }
+    Ok(projects_ok && standalone_ok && safety_ok)
+}
+
+/// Admission belongs to the receiver, so a refused event cannot start another repository.
+fn fan_out(
+    ports: &Ports<'_>,
+    env: &ProcessEnv,
+    declared: &checkout::Declared<'_>,
+    checkouts: &[checkout::Checkout<'_>],
+    emit: &mut Emit<'_>,
+) -> Result<bool, Termination> {
+    enum Message {
+        Event(InitEvent),
+        Done(bool),
+    }
+    // A worker that unwinds must still wake the receiver; the scope then propagates its panic.
+    struct Completion<'a> {
+        send: &'a mpsc::Sender<Message>,
+        success: bool,
+    }
+    impl Drop for Completion<'_> {
+        fn drop(&mut self) {
+            let _ = self.send.send(Message::Done(self.success));
+        }
+    }
+    std::thread::scope(|scope| {
+        let (send, receive) = mpsc::channel();
+        let mut next = 0..checkouts.len();
+        let spawn = |index: usize| {
+            let checkout = &checkouts[index];
+            let send = send.clone();
+            scope.spawn(move || {
+                let mut completion = Completion {
+                    send: &send,
+                    success: false,
+                };
+                let result = checkout::run(ports, env, declared, checkout, &mut |event| {
+                    let _ = send.send(Message::Event(event));
+                });
+                completion.success = result.is_ok();
+                if let Err(cause) = result {
+                    let _ = send.send(Message::Event(InitEvent::RepoError {
+                        repo: checkout.name.to_owned(),
+                        error: cause.to_string(),
+                    }));
+                }
+            });
+        };
+        let mut active = 0;
+        for checkout in next.by_ref().take(4) {
+            spawn(checkout);
+            active += 1;
+        }
+        let mut success = true;
+        while active > 0 {
+            match receive.recv().expect("active workers retain their sender") {
+                Message::Event(event) => emit(event)?,
+                Message::Done(ok) => {
+                    success &= ok;
+                    active -= 1;
+                    if let Some(checkout) = next.next() {
+                        spawn(checkout);
+                        active += 1;
+                    }
+                }
+            }
+        }
+        Ok(success)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::files::{Edit, MemoryFiles, WriteFiles};
+    use crate::programs::{Call, Exit, Finished, RunPrograms};
+    use crate::trace::NoTrace;
+    use std::io;
+    use std::sync::{Condvar, Mutex};
+
+    struct Writer;
+    impl WriteFiles for Writer {
+        fn create_dir_all(&self, _: &Path) -> io::Result<()> {
+            Ok(())
+        }
+        fn remove(&self, _: &Path) -> io::Result<()> {
+            unreachable!()
+        }
+        fn update(&self, _: &Path, _: &mut Edit<'_>) -> io::Result<bool> {
+            unreachable!()
+        }
+    }
+
+    #[derive(Default)]
+    struct Activity {
+        active: usize,
+        maximum: usize,
+        started: usize,
+        ended: usize,
+        released: bool,
+    }
+    #[derive(Default)]
+    struct Recording {
+        activity: Mutex<Activity>,
+        changed: Condvar,
+    }
+    impl RunPrograms for Recording {
+        fn run(&self, _: &Call<'_>) -> io::Result<Finished> {
+            Ok(Finished {
+                exit: Exit::Code(0),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        }
+        fn stream(&self, _: &Call<'_>, line: &mut dyn FnMut(&[u8])) -> io::Result<Exit> {
+            {
+                let mut state = self.activity.lock().expect("activity");
+                state.active += 1;
+                state.started += 1;
+                state.maximum = state.maximum.max(state.active);
+                self.changed.notify_all();
+            }
+            line(b"ready");
+            let mut state = self.activity.lock().expect("activity");
+            while !state.released {
+                state = self.changed.wait(state).expect("release");
+            }
+            state.active -= 1;
+            state.ended += 1;
+            Ok(Exit::Code(0))
+        }
+    }
+    impl Recording {
+        fn release_first_batch(&self) {
+            let state = self.activity.lock().expect("activity");
+            // A broken admission limit fails within a bound rather than hanging the test suite.
+            let (mut state, timeout) = self
+                .changed
+                .wait_timeout_while(state, std::time::Duration::from_secs(5), |state| {
+                    state.started < 4
+                })
+                .expect("first batch");
+            state.released = true;
+            self.changed.notify_all();
+            assert!(!timeout.timed_out(), "four workers must reach the barrier");
+        }
+    }
+
+    fn concurrent(stop: bool) {
+        let files = MemoryFiles::default();
+        let programs = Recording::default();
+        let ports = Ports {
+            files: &files,
+            writer: &Writer,
+            programs: &programs,
+            tracer: &NoTrace,
+        };
+        let declared = checkout::Declared {
+            root: Path::new("/ws"),
+            identity: None,
+            projects: &[],
+            standalones: &[],
+        };
+        let names: Vec<_> = (0..9).map(|i| format!("repo{i}")).collect();
+        let commands = vec!["setup".to_owned()];
+        let checkouts: Vec<_> = names
+            .iter()
+            .map(|name| checkout::Checkout {
+                name,
+                url: Some("fixture"),
+                location: Path::new("/ws").join(name),
+                git_excludes: Vec::new(),
+                cmd: &commands,
+                nested: false,
+                branch: None,
+                standalone: None,
+            })
+            .collect();
+        let caller = std::thread::current().id();
+        let mut events = Vec::new();
+        let mut released = false;
+        let result = fan_out(
+            &ports,
+            &ProcessEnv::from_vars([]),
+            &declared,
+            &checkouts,
+            &mut |event| {
+                assert_eq!(std::thread::current().id(), caller);
+                let ready = matches!(event, InitEvent::CmdOutputLine { .. });
+                events.push(event);
+                if ready && !released {
+                    programs.release_first_batch();
+                    released = true;
+                    if stop {
+                        return Err(Termination::BareGroup {
+                            help: "original sink failure".into(),
+                        });
+                    }
+                }
+                Ok(())
+            },
+        );
+        let state = programs.activity.lock().expect("activity");
+        assert_eq!(state.active, 0, "workers joined before return");
+        assert_eq!(state.maximum, 4, "bounded repository fan-out");
+        assert_eq!(state.started, if stop { 4 } else { 9 });
+        assert_eq!(state.ended, state.started);
+        if stop {
+            assert!(
+                matches!(result, Err(Termination::BareGroup { help }) if help == "original sink failure")
+            );
+            assert!(
+                matches!(events.last(), Some(InitEvent::CmdOutputLine { .. })),
+                "nothing delivered after refusal"
+            );
+        } else {
+            assert!(matches!(result, Ok(true)));
+            for name in &names {
+                let rows: Vec<_> = events
+                    .iter()
+                    .filter(|event| match event {
+                        InitEvent::RepoAction { repo, .. }
+                        | InitEvent::CmdStarted { repo, .. }
+                        | InitEvent::CmdOutputLine { repo, .. }
+                        | InitEvent::CmdCompleted { repo, .. } => repo == name,
+                        _ => false,
+                    })
+                    .collect();
+                assert!(
+                    matches!(
+                        rows.as_slice(),
+                        [
+                            InitEvent::RepoAction {
+                                action: Action::Cloned,
+                                ..
+                            },
+                            InitEvent::CmdStarted { .. },
+                            InitEvent::CmdOutputLine { .. },
+                            InitEvent::CmdCompleted { returncode: 0, .. }
+                        ]
+                    ),
+                    "{rows:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn four_workers_deliver_ordered_events_on_the_calling_thread() {
+        concurrent(false);
+    }
+
+    #[test]
+    fn refusal_stops_admission_and_joins_workers_preserving_the_ending() {
+        concurrent(true);
+    }
+
+    #[test]
+    fn rendering_selects_streams_and_omits_successful_command_completion() {
+        assert_eq!(
+            text(&InitEvent::CmdCompleted {
+                repo: "r".into(),
+                command: "c".into(),
+                returncode: 0
+            }),
+            None
+        );
+        assert_eq!(
+            text(&InitEvent::CmdCompleted {
+                repo: "r".into(),
+                command: "c".into(),
+                returncode: -9
+            }),
+            Some((TextStream::Stderr, "[r] ✗ c (exit -9)".into()))
+        );
+        assert_eq!(
+            text(&InitEvent::TargetStarted {
+                target: "projects/".into()
+            }),
+            Some((TextStream::Stdout, "→ projects/".into()))
+        );
+        assert_eq!(
+            text(&InitEvent::TargetCompleted {
+                target: "projects/".into(),
+                success: false
+            }),
+            Some((TextStream::Stderr, "✗ projects/ failed".into()))
+        );
+        assert_eq!(
+            text(&InitEvent::RepoError {
+                repo: "r".into(),
+                error: "oops".into()
+            }),
+            Some((TextStream::Stderr, "[r] ERROR: oops".into()))
+        );
+    }
 }

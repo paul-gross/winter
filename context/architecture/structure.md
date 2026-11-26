@@ -167,9 +167,11 @@ program ports, `Diagnostics`, and `Log` are re-exported by `lib.rs`, so that an 
 workers. An operation span is created and dropped locally on its worker and need not be `Send`; the command span stays
 open until those operations end. Tracer state locks cover neither an operation handle's lifetime nor exporter work.
 These bounds grant no permission to start a thread. Only `bootstrap.rs` may start scoped workers for reconciliation,
-and every worker must be joined before reconciliation returns, on failure as on success. This is permission for that
-implementation, not a claim that reconciliation starts workers. No library worker may outlive its caller;
-`trace-export` is the sole thread allowed to do so, under the cap described above.
+with at most four repositories active at once, and every worker must be joined before reconciliation returns, on
+failure as on success. Workers send events over a channel; the calling thread alone delivers them to the sink in
+arrival order, preserving each repository's event order. A sink error stops admission and further output, but active
+workers finish and are joined before the original ending is returned. No library worker may outlive its caller;
+`trace-export` is the sole thread allowed to do so, under the cap described above. Reconciliation does not defer SIGINT.
 
 The program port runs git or `/bin/sh -c`. A call carries a timeout, environment removals and overlays, and its stdin
 choice. Removals apply before overlays, for that call alone; neither changes the stored snapshot. `run` captures
@@ -185,6 +187,14 @@ in-memory invocation grants no such authorization: its stdin handle is not the p
 alone applies the permission when starting the child; a denied request uses null input. `Invocation` carries the
 permission through `run` to `OsPrograms::new`; only `main.rs` grants it in production. A domain module never reaches
 process stdin itself. The isolated test exception is owned by [testing.md](../standards/testing.md#tiers).
+
+`bootstrap::reconcile` owns configuration loading, target eligibility, scheduling, and persistence coordination. It
+uses `bootstrap::checkout` for repository steps, `workspace_exclude` for managed blocks and finalization, and
+`agents_md::refresh` for the existing safety block. Ordinary failures accumulate without suppressing later work;
+finalization also runs when the standalone target is skipped. `InitError` describes an initial failure, `InitSink`
+receives events, and `RunEnd` distinguishes completion from a sink-stopped run. Its shared `text` renderer and
+`TextStream` select the human row and its stream; [changes.md](./changes.md#a-command) describes how the command sink
+writes it. These responsibilities belong in the domain, not the command adapter.
 
 | Module                               | Holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

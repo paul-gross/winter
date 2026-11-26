@@ -98,8 +98,12 @@ A domain entry that reports each step of a run as it is reached takes an event s
 over `output::Results`. The sink is called once per event with the `Diagnostics` of the entry. It writes a `--json`
 event through `Results::event` and a human row of stdout through `Results::line`. A human row that belongs on stderr is
 the one exception to "the command file writes none": the sink writes it through `diagnostics::notice`, because it is a
-row of the command's own result and not a notice of the domain. `ws update` is the command that has one: the row of a
-pin error and the row of a run that had errors. Every other line on stderr of such a run is still written by the entry.
+row of the command's own result and not a notice of the domain. `ws update` uses it for the row of a pin error and the
+row of a run that had errors. For `ws init`, `bootstrap::text` is the shared renderer: it returns a `TextStream` and
+row, or no row for a successful command completion. Failed targets, repository errors, and non-zero command
+completions are stderr rows; the sink writes them through `diagnostics::notice`, and stdout rows through
+`Results::line`. JSON events still go through `Results::event`, including successful command completions. Every other
+line on stderr of such a run is still written by the entry.
 An `Err` from the sink is the ending of the invocation, which the entry hands back for the command file to return.
 
 A command file does not spell its own command path as a string literal. The path follows from where the file is, and
@@ -208,6 +212,11 @@ three variants hold their errors in boxes that become `Termination::Repo`, `Term
 `Termination::Internal` as they are, and it answers a `RunEnd` otherwise: a completed run becomes `Termination::Success`
 or, when an outcome was a pin error, `Termination::Reported`, and a run the sink stopped becomes the ending the sink
 gave.
+
+`bootstrap::reconcile` returns `InitError` for an initial configuration or internal failure, with boxed errors mapped
+to `Termination::Config` or `Termination::Internal`. Otherwise it returns `RunEnd`: a successful completion maps to
+`Termination::Success`, a completion with reported failures to `Termination::Reported`, and a stopped run to the
+original sink ending. Its orchestration and worker boundaries are owned by [structure.md](./structure.md#modules).
 
 An entry that reports a condition on stderr takes a `&mut Diagnostics`, the borrow of the stderr handle and the log its
 command file built, and writes through `crates/core/src/diagnostics.rs`: `repository_catalog::list` writes the drift

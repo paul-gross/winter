@@ -54,7 +54,9 @@ pub use agents_md::{Conflict, Placement, SAFETY_BLOCK, Shim, place, refresh, shi
 pub use bootstrap::checkout::{
     Cause, Checkout, CheckoutError, Declared, Step, run as run_checkout,
 };
-pub use bootstrap::{Action, BootstrapError, InitEvent};
+pub use bootstrap::{
+    Action, BootstrapError, InitError, InitEvent, InitSink, TextStream, reconcile, text,
+};
 pub use config_edit::{CatalogError, RepositoryKind, StandaloneOption};
 pub use config_lock::{LockEntry, LockEntryFault, LockError, RefKind, read_lock, upsert_lock};
 pub use config_model::{
