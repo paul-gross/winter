@@ -328,6 +328,81 @@ fn finalize_failure_is_reported_even_without_a_standalone_target() {
 }
 
 #[test]
+fn finalization_alone_fails_after_successful_projects_and_safety_refresh() {
+    struct FailAfterProjects<'a> {
+        tree: &'a TempTree,
+        output: Vec<u8>,
+        pending: Vec<u8>,
+        injected: bool,
+    }
+
+    impl Write for FailAfterProjects<'_> {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.output.extend_from_slice(bytes);
+            for byte in bytes {
+                self.pending.push(*byte);
+                if *byte == b'\n' {
+                    let event: Value =
+                        serde_json::from_slice(&self.pending).expect("complete JSON event");
+                    self.pending.clear();
+                    if event
+                        == json!({"type":"target_completed","target":"projects/","success":true})
+                    {
+                        // Earlier exclude writes must succeed; corrupt only the finalizer's input.
+                        fs::write(self.tree.workspace_dir().join(EXCLUDE), [0xff])?;
+                        self.injected = true;
+                    }
+                }
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let projects = BOTH
+        .split("[[standalone_repository]]")
+        .next()
+        .expect("projects");
+    let tree = fixture(projects, true, false);
+    write(&tree, "AGENTS.md", SAFETY);
+    let mut output = FailAfterProjects {
+        tree: &tree,
+        output: Vec::new(),
+        pending: Vec::new(),
+        injected: false,
+    };
+    let mut ended = invocation(&tree, &["ws", "init", "--json"]).run_with_stdout(&mut output);
+    assert!(
+        output.injected,
+        "projects must succeed before fault injection"
+    );
+    ended.stdout = String::from_utf8(output.output).expect("UTF-8 events");
+    let rows = events(&ended, 1);
+    assert!(action(&rows, "api", "cloned"));
+    assert_eq!(read(&tree, "projects/api/runs"), "setup\n");
+    let errors: Vec<_> = rows.iter().filter(|e| e["type"] == "repo_error").collect();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0]["repo"], "winter-extensions");
+    assert!(
+        errors[0]["error"]
+            .as_str()
+            .expect("error")
+            .contains("not UTF-8")
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|e| e["type"] == "target_started" && e["target"] == "standalone/")
+    );
+    assert!(action(&rows, "workspace", "agents_md_updated"));
+    assert_ne!(read(&tree, "AGENTS.md"), SAFETY);
+    assert!(!read(&tree, "AGENTS.md").contains("\nold\n"));
+}
+
+#[test]
 fn non_git_root_reconciles_both_kinds_without_creating_root_excludes() {
     let tree = fixture(BOTH, false, false);
     let rows = events(&run(&tree, true), 0);
