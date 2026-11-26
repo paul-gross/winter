@@ -430,6 +430,18 @@ fn a_standalone_outside_the_workspace_or_in_a_reserved_directory_is_refused() {
     std::fs::create_dir(&outside).expect("a directory");
     symlink(&outside, f.root.join("link")).expect("a link");
 
+    // Resolved, this ends inside the workspace; creating the way to it would not.
+    let through = format!(
+        "../escape/../{}/lib",
+        f.root.file_name().expect("a name").to_string_lossy()
+    );
+    for path in [through.as_str(), "area/../lib"] {
+        assert_eq!(
+            refused(&f, &standalone("lib", path, None)),
+            UnsafeReason::OutsideWorkspace,
+            "{path}"
+        );
+    }
     // The root itself is present.
     assert_eq!(
         refused(&f, &standalone("lib", ".", None)),
@@ -814,4 +826,181 @@ fn a_standalone_that_fails_its_pin_leaves_the_record_of_another() {
 
     assert_eq!(failure(&ran).step, Step::Pin);
     assert_eq!(f.lock().expect("a lock"), recorded);
+}
+
+#[test]
+fn a_present_standalone_is_verified_and_never_confined() {
+    let mut f = fixture();
+    f.standalones = vec![standalone("other", "area", None)];
+    let git = Git::new(&f.tree).expect("git");
+    let url = url("api");
+    let repo = Repo {
+        url: Some(&url),
+        ..Repo::default()
+    };
+
+    for path in [".winter/ext/lib", "area/lib"] {
+        let location = f.root.join(path);
+        std::fs::create_dir_all(location.parent().expect("a parent")).expect("a directory");
+        git.clone_remote("api", &location).expect("a clone");
+
+        let ran = f.standalone(&standalone("lib", path, None), &repo);
+
+        done(&ran);
+        assert_eq!(actions(&ran.0), [exists()], "{path}");
+    }
+}
+
+#[test]
+fn a_mismatch_carries_the_git_call_it_rests_on() {
+    let f = fixture();
+    let url = url("api");
+    let repo = Repo {
+        url: Some(&url),
+        ..Repo::default()
+    };
+    let own = f.root.join("projects/own");
+    Git::new(&f.tree)
+        .expect("git")
+        .init(&own, "main")
+        .expect("an init");
+    std::fs::create_dir_all(f.root.join("projects/plain")).expect("a directory");
+
+    let unset = f.project("own", &repo);
+    let plain = f.project("plain", &repo);
+
+    assert_eq!(failure(&unset).step, Step::Location);
+    let error = repo_error(&unset);
+    assert!(matches!(
+        error.message,
+        RepoMessage::OriginMismatch { found: None, .. }
+    ));
+    assert_eq!(error.subcommand.as_deref(), Some("config"));
+    assert_eq!(error.exit, Some(1));
+    assert!(unset.0.is_empty(), "{:?}", unset.0);
+
+    let error = repo_error(&plain);
+    assert!(matches!(error.message, RepoMessage::NotARepository { .. }));
+    assert_eq!(error.subcommand.as_deref(), Some("rev-parse"));
+    let stderr = error.stderr.as_deref().expect("what git said");
+    assert!(failure(&plain).to_string().contains(stderr), "{stderr}");
+}
+
+#[test]
+fn a_clone_of_a_relative_url_exists_on_the_next_run() {
+    let f = fixture();
+    let repo = Repo {
+        url: Some("../remotes/api.git"),
+        ..Repo::default()
+    };
+
+    let first = f.project("api", &repo);
+    let second = f.project("api", &repo);
+
+    done(&first);
+    done(&second);
+    assert_eq!(actions(&second.0), [exists()]);
+}
+
+#[test]
+fn a_failing_identity_or_excludes_step_is_named_and_ends_the_run() {
+    let mut f = fixture();
+    let url = url("api");
+    let repo = Repo {
+        url: Some(&url),
+        excludes: &["build/"],
+        cmd: &["echo ran"],
+        ..Repo::default()
+    };
+    done(&f.project(
+        "api",
+        &Repo {
+            url: Some(&url),
+            ..Repo::default()
+        },
+    ));
+    let git_dir = f.root.join("projects/api/.git");
+
+    // A directory where the exclude file belongs cannot be read.
+    std::fs::create_dir_all(git_dir.join("info/exclude")).expect("a directory");
+    let unwritable = f.project("api", &repo);
+
+    assert_eq!(failure(&unwritable).step, Step::Excludes);
+    assert!(matches!(failure(&unwritable).cause, Cause::Io(_)));
+    assert_eq!(actions(&unwritable.0), [exists()]);
+    assert_eq!(output(&unwritable.0), Vec::<&str>::new());
+
+    f.identity = Some(GitIdentity {
+        name: "Ada".to_owned(),
+        email: "ada@example.invalid".to_owned(),
+    });
+    std::fs::write(git_dir.join("config.lock"), "").expect("a held lock");
+    let locked = f.project("api", &repo);
+
+    assert_eq!(failure(&locked).step, Step::Identity);
+    assert_eq!(actions(&locked.0), [exists()]);
+}
+
+#[test]
+fn a_work_tree_without_a_dot_git_has_no_exclude_file() {
+    let f = fixture();
+    let holder = f.root.join("holder");
+    let inner = holder.join("inner");
+    Git::new(&f.tree)
+        .expect("git")
+        .init(&holder, "main")
+        .expect("an init");
+    std::fs::create_dir(&inner).expect("a directory");
+    let worktree = inner.display().to_string();
+    f.git(&holder, &["config", "core.worktree", &worktree]);
+
+    let ran = f.run_at(
+        "inner",
+        inner,
+        &Repo {
+            excludes: &["build/"],
+            ..Repo::default()
+        },
+        None,
+    );
+
+    assert_eq!(failure(&ran).step, Step::Excludes);
+    assert!(matches!(
+        repo_error(&ran).message,
+        RepoMessage::NoExcludeFile { .. }
+    ));
+}
+
+#[test]
+fn a_short_recorded_commit_is_reported_as_it_is() {
+    let f = fixture();
+    let first = cloned_standalone(&f);
+    let short = &first[..6];
+    f.record("lib", "v1", RefKind::Commit, short);
+
+    let ran = f.standalone(&standalone("lib", "", Some("v1")), &Repo::default());
+
+    done(&ran);
+    assert_eq!(
+        actions(&ran.0),
+        [exists(), (Action::Pinned, format!("commit {short}"))]
+    );
+}
+
+#[test]
+fn output_that_is_no_utf8_is_decoded_with_replacements() {
+    let f = fixture();
+    let url = url("api");
+
+    let ran = f.project(
+        "api",
+        &Repo {
+            url: Some(&url),
+            cmd: &["printf 'a\\377b\\n'"],
+            ..Repo::default()
+        },
+    );
+
+    done(&ran);
+    assert_eq!(output(&ran.0), ["a\u{fffd}b"]);
 }

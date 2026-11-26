@@ -24,8 +24,8 @@ pub enum RefKind {
 }
 
 impl RefKind {
-    /// The text of the kind in the lock file.
-    fn as_str(self) -> &'static str {
+    /// The text of the kind in the lock file, which is also how a kind is named to the user.
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Branch => "branch",
             Self::Tag => "tag",

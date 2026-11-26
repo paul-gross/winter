@@ -660,3 +660,25 @@ fn each_checkout_operation_is_one_span_named_for_its_subcommand() {
     assert_eq!(*spans.0.lock().expect("the spans"), expected);
     assert_eq!(f.out(&["config", "--local", "user.name"]).trim(), "A");
 }
+
+#[test]
+fn clone_takes_a_url_that_starts_with_a_dash_as_a_url() {
+    let f = fixture();
+    let root = f.tree.root();
+
+    let answer = clone(
+        &f.programs,
+        &Spans::default(),
+        "api",
+        root,
+        "--no-checkout",
+        &root.join("dest"),
+        None,
+    );
+
+    let Err(GitFailure::Repo(error)) = answer else {
+        panic!("{answer:?}");
+    };
+    let stderr = error.stderr.expect("what git said");
+    assert!(stderr.contains("'--no-checkout'"), "{stderr}");
+}
