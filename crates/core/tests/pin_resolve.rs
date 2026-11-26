@@ -34,11 +34,14 @@ fn fixture() -> Fixture {
     .expect("a remote");
     let clone = tree.root().join("clone");
     git.clone_remote("origin", &clone).expect("a clone");
-    let programs = OsPrograms::new(&ProcessEnv::from_vars(
-        tree.env()
-            .variables()
-            .map(|(name, value)| (name.to_owned(), value.to_owned())),
-    ));
+    let programs = OsPrograms::new(
+        &ProcessEnv::from_vars(
+            tree.env()
+                .variables()
+                .map(|(name, value)| (name.to_owned(), value.to_owned())),
+        ),
+        false,
+    );
     Fixture {
         tree,
         programs,
@@ -135,7 +138,7 @@ fn a_commit_resolution_records_one_rev_parse_span_with_the_repo_alone() {
     f.resolve(&spans, &head).expect("resolved");
 
     assert_eq!(
-        *spans.0.borrow(),
+        *spans.0.lock().expect("the spans"),
         vec![(
             "git rev-parse".to_owned(),
             vec![("winter.repo".to_owned(), "api".to_owned())]

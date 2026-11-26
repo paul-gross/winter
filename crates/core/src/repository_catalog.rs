@@ -601,9 +601,12 @@ fn remove_block_with(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::{Cell, RefCell};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicU32, Ordering},
+    };
 
     use super::*;
     use crate::files::{Edit, MemoryFiles};
@@ -621,16 +624,25 @@ mod tests {
 
     /// One file held in memory, and how often it was replaced.
     struct Held {
-        content: RefCell<Vec<u8>>,
-        replacements: Cell<u32>,
+        content: Mutex<Vec<u8>>,
+        replacements: AtomicU32,
     }
 
     impl WriteFiles for Held {
+        fn create_dir_all(&self, _: &Path) -> std::io::Result<()> {
+            unreachable!("catalog only updates files")
+        }
+
+        fn remove(&self, _: &Path) -> std::io::Result<()> {
+            unreachable!("catalog only updates files")
+        }
+
         fn update(&self, _path: &Path, edit: &mut Edit<'_>) -> std::io::Result<bool> {
-            let replacement = edit(Some(&self.content.borrow()));
+            let mut content = self.content.lock().expect("content lock");
+            let replacement = edit(Some(&content));
             Ok(replacement.is_some_and(|replacement| {
-                self.content.replace(replacement);
-                self.replacements.set(self.replacements.get() + 1);
+                *content = replacement;
+                self.replacements.fetch_add(1, Ordering::Relaxed);
                 true
             }))
         }
@@ -650,8 +662,8 @@ name = \"web\"
 
     fn held_with(content: &str) -> Held {
         Held {
-            content: RefCell::new(content.as_bytes().to_vec()),
-            replacements: Cell::new(0),
+            content: Mutex::new(content.as_bytes().to_vec()),
+            replacements: AtomicU32::new(0),
         }
     }
 
@@ -668,10 +680,10 @@ name = \"web\"
 
         assert!(matches!(removal, Ok(Removal::Done)), "{removal:?}");
         assert_eq!(
-            String::from_utf8_lossy(&file.content.into_inner()),
+            String::from_utf8_lossy(&file.content.into_inner().expect("content lock")),
             expected
         );
-        assert_eq!(file.replacements.get(), 1);
+        assert_eq!(file.replacements.load(Ordering::Relaxed), 1);
     }
 
     const API: &str = "[[project_repository]]\nname = \"api\"\n";
@@ -749,8 +761,11 @@ name = \"web\"
         );
 
         assert!(matches!(removal, Ok(Removal::Entangled)), "{removal:?}");
-        assert_eq!(file.content.into_inner(), TWO_BLOCKS.as_bytes());
-        assert_eq!(file.replacements.get(), 0);
+        assert_eq!(
+            file.content.into_inner().expect("content lock"),
+            TWO_BLOCKS.as_bytes()
+        );
+        assert_eq!(file.replacements.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -766,10 +781,10 @@ name = \"web\"
 
         assert!(matches!(removal, Ok(Removal::Done)), "{removal:?}");
         assert_eq!(
-            file.content.into_inner(),
+            file.content.into_inner().expect("content lock"),
             b"[[project_repository]]\nname = \"web\"\n"
         );
-        assert_eq!(file.replacements.get(), 1);
+        assert_eq!(file.replacements.load(Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -809,26 +824,30 @@ name = \"web\"
             );
 
             assert!(matches!(removal, Ok(Removal::Entangled)), "{removal:?}");
-            assert_eq!(file.content.into_inner(), TWO_BLOCKS.as_bytes());
-            assert_eq!(file.replacements.get(), 0);
+            assert_eq!(
+                file.content.into_inner().expect("content lock"),
+                TWO_BLOCKS.as_bytes()
+            );
+            assert_eq!(file.replacements.load(Ordering::Relaxed), 0);
         }
     }
 
     /// The files of a workspace held in memory by path, read and replaced through the two sides of the port.
     #[derive(Default)]
-    struct Stored(RefCell<BTreeMap<PathBuf, Vec<u8>>>);
+    struct Stored(Mutex<BTreeMap<PathBuf, Vec<u8>>>);
 
     impl Stored {
         fn with(self, path: &str, content: &str) -> Self {
             self.0
-                .borrow_mut()
+                .lock()
+                .expect("files lock")
                 .insert(path.into(), content.as_bytes().to_vec());
             self
         }
 
         /// The text of the file at `path`, or `None` when no such file is held.
         fn text(&self, path: &str) -> Option<String> {
-            let files = self.0.borrow();
+            let files = self.0.lock().expect("files lock");
             let bytes = files.get(Path::new(path))?;
             Some(String::from_utf8_lossy(bytes).into_owned())
         }
@@ -836,11 +855,11 @@ name = \"web\"
 
     impl ReadFiles for Stored {
         fn read(&self, path: &Path) -> std::io::Result<Option<Vec<u8>>> {
-            Ok(self.0.borrow().get(path).cloned())
+            Ok(self.0.lock().expect("files lock").get(path).cloned())
         }
 
         fn is_file(&self, path: &Path) -> bool {
-            self.0.borrow().contains_key(path)
+            self.0.lock().expect("files lock").contains_key(path)
         }
 
         fn exists(&self, path: &Path) -> bool {
@@ -861,10 +880,22 @@ name = \"web\"
     }
 
     impl WriteFiles for Stored {
+        fn create_dir_all(&self, _: &Path) -> std::io::Result<()> {
+            unreachable!("catalog only updates files")
+        }
+
+        fn remove(&self, _: &Path) -> std::io::Result<()> {
+            unreachable!("catalog only updates files")
+        }
+
         fn update(&self, path: &Path, edit: &mut Edit<'_>) -> std::io::Result<bool> {
-            let current = self.0.borrow().get(path).cloned();
+            let current = self.0.lock().expect("files lock").get(path).cloned();
+            // The edit may read another file through this same double.
             Ok(edit(current.as_deref()).is_some_and(|replacement| {
-                self.0.borrow_mut().insert(path.to_path_buf(), replacement);
+                self.0
+                    .lock()
+                    .expect("files lock")
+                    .insert(path.to_path_buf(), replacement);
                 true
             }))
         }
@@ -898,7 +929,7 @@ name = \"web\"
             ),
             "{ended:?}"
         );
-        assert_eq!(writer.replacements.get(), 0);
+        assert_eq!(writer.replacements.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -916,7 +947,7 @@ name = \"web\"
             ),
             "{ended:?}"
         );
-        assert_eq!(writer.replacements.get(), 0);
+        assert_eq!(writer.replacements.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -1040,9 +1071,15 @@ name = \"web\"
                 ),
                 "{edited}: {ended:?}"
             );
-            assert_eq!(under_the_lock.replacements.get(), 0, "{edited}");
             assert_eq!(
-                String::from_utf8_lossy(&under_the_lock.content.into_inner()),
+                under_the_lock.replacements.load(Ordering::Relaxed),
+                0,
+                "{edited}"
+            );
+            assert_eq!(
+                String::from_utf8_lossy(
+                    &under_the_lock.content.into_inner().expect("content lock")
+                ),
                 "[[project_repository\n",
                 "{edited}"
             );
@@ -1080,8 +1117,11 @@ name = \"web\"
                     let diagnostic = ended.unwrap_err().to_string();
                     assert!(diagnostic.contains(&kind.to_string()), "{diagnostic}");
                     assert!(diagnostic.contains(path), "{diagnostic}");
-                    assert_eq!(writer.replacements.get(), 0);
-                    assert_eq!(*writer.content.borrow(), text.as_bytes());
+                    assert_eq!(writer.replacements.load(Ordering::Relaxed), 0);
+                    assert_eq!(
+                        *writer.content.lock().expect("content lock"),
+                        text.as_bytes()
+                    );
                 }
             }
         }
@@ -1091,6 +1131,13 @@ name = \"web\"
     struct Failing(std::io::ErrorKind);
 
     impl WriteFiles for Failing {
+        fn create_dir_all(&self, _: &Path) -> std::io::Result<()> {
+            unreachable!("catalog only updates files")
+        }
+
+        fn remove(&self, _: &Path) -> std::io::Result<()> {
+            unreachable!("catalog only updates files")
+        }
         fn update(&self, _path: &Path, _edit: &mut Edit<'_>) -> std::io::Result<bool> {
             Err(std::io::Error::from(self.0))
         }
@@ -1168,10 +1215,10 @@ name = \"web\"
 
         assert!(ended.is_ok(), "{ended:?}");
         assert_eq!(
-            String::from_utf8_lossy(&under_the_lock.content.into_inner()),
+            String::from_utf8_lossy(&under_the_lock.content.into_inner().expect("content lock")),
             [WEB, DOCS].concat()
         );
-        assert_eq!(under_the_lock.replacements.get(), 1);
+        assert_eq!(under_the_lock.replacements.load(Ordering::Relaxed), 1);
         assert_eq!(loaded.text(SHARED).as_deref(), Some(TWO_BLOCKS));
     }
 
@@ -1808,14 +1855,21 @@ path = \"vendor\"
 
             let held = Stored::default().with(SHARED, "");
             let vanished = Held {
-                content: RefCell::new(Vec::new()),
-                replacements: Cell::new(0),
+                content: Mutex::new(Vec::new()),
+                replacements: AtomicU32::new(0),
             };
             struct Gone(Held);
             impl WriteFiles for Gone {
+                fn create_dir_all(&self, _: &Path) -> std::io::Result<()> {
+                    unreachable!("catalog only updates files")
+                }
+
+                fn remove(&self, _: &Path) -> std::io::Result<()> {
+                    unreachable!("catalog only updates files")
+                }
                 fn update(&self, _: &Path, edit: &mut Edit<'_>) -> std::io::Result<bool> {
                     Ok(edit(None).is_some_and(|_| {
-                        self.0.replacements.set(1);
+                        self.0.replacements.store(1, Ordering::Relaxed);
                         true
                     }))
                 }
@@ -1837,7 +1891,7 @@ path = \"vendor\"
                 ),
                 "{ended:?}"
             );
-            assert_eq!(gone.0.replacements.get(), 0);
+            assert_eq!(gone.0.replacements.load(Ordering::Relaxed), 0);
         }
 
         #[test]
@@ -1864,23 +1918,30 @@ path = \"vendor\"
         /// first load, and keeps what the edit returns.
         struct Raced {
             bytes: Vec<u8>,
-            written: RefCell<Option<Vec<u8>>>,
+            written: Mutex<Option<Vec<u8>>>,
         }
 
         impl Raced {
             fn with(bytes: &str) -> Self {
                 Self {
                     bytes: bytes.as_bytes().to_vec(),
-                    written: RefCell::new(None),
+                    written: Mutex::new(None),
                 }
             }
         }
 
         impl WriteFiles for Raced {
+            fn create_dir_all(&self, _: &Path) -> std::io::Result<()> {
+                unreachable!("catalog only updates files")
+            }
+
+            fn remove(&self, _: &Path) -> std::io::Result<()> {
+                unreachable!("catalog only updates files")
+            }
             fn update(&self, _path: &Path, edit: &mut Edit<'_>) -> std::io::Result<bool> {
                 let replacement = edit(Some(&self.bytes));
                 let replaced = replacement.is_some();
-                *self.written.borrow_mut() = replacement;
+                *self.written.lock().expect("written lock") = replacement;
                 Ok(replaced)
             }
         }
@@ -1900,7 +1961,7 @@ path = \"vendor\"
                 catalog(ended),
                 CatalogError::DuplicateUrl { url, .. } if url == "https://h.invalid/a"
             ));
-            assert!(raced.written.borrow().is_none());
+            assert!(raced.written.lock().expect("written lock").is_none());
         }
 
         #[test]
@@ -1910,7 +1971,12 @@ path = \"vendor\"
             let ended = add_raced(&raced, &request("https://h.invalid/a"));
 
             assert!(ended.is_ok(), "{ended:?}");
-            let written = raced.written.borrow().clone().expect("written");
+            let written = raced
+                .written
+                .lock()
+                .expect("written lock")
+                .clone()
+                .expect("written");
             let text = String::from_utf8(written).expect("text");
             assert!(
                 text.starts_with("[[project_repository]]\nurl = \"https://h.invalid/other\"\n")
@@ -1932,7 +1998,7 @@ path = \"vendor\"
                 ),
                 "{ended:?}"
             );
-            assert!(raced.written.borrow().is_none());
+            assert!(raced.written.lock().expect("written lock").is_none());
         }
 
         #[test]
@@ -1951,7 +2017,7 @@ path = \"vendor\"
                 catalog(ended),
                 CatalogError::DuplicatePath { path } if path == "vendor"
             ));
-            assert!(raced.written.borrow().is_none());
+            assert!(raced.written.lock().expect("written lock").is_none());
         }
 
         #[test]
@@ -1967,7 +2033,7 @@ path = \"vendor\"
                 ),
                 "{ended:?}"
             );
-            assert!(raced.written.borrow().is_none());
+            assert!(raced.written.lock().expect("written lock").is_none());
         }
 
         #[test]

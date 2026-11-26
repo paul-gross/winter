@@ -76,7 +76,7 @@ pub use pins::resolve::{Resolution, resolve};
 pub use pins::snapshot::{PinSnapshot, snapshot};
 pub use pins::{PinError, Ports as PinPorts};
 pub use process::{Identity, Interrupts, Invocation, ProcessEnv, run};
-pub use programs::{Call, Exit, Finished, OsPrograms, Pacing, Program, RunPrograms};
+pub use programs::{Call, Exit, Finished, OsPrograms, Pacing, Program, RunPrograms, Stdin};
 pub use termination::{
     AgentOverrideFault, ChoiceKey, CommandError, ConfigError, ConfigFileName, ConfigValue,
     EntryIdent, EnvVarFault, FileCause, GitOperation, InternalError, MergedTable, ModelTierFault,

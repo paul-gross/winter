@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Reads files.
-pub trait ReadFiles {
+pub trait ReadFiles: Sync {
     /// The bytes of the file at `path`, or `Ok(None)` when no such file exists.
     fn read(&self, path: &Path) -> io::Result<Option<Vec<u8>>>;
 
@@ -99,7 +99,15 @@ fn resolve_walk<F: ReadFiles + ?Sized>(
 pub type Edit<'a> = dyn FnMut(Option<&[u8]>) -> Option<Vec<u8>> + 'a;
 
 /// Writes files.
-pub trait WriteFiles {
+pub trait WriteFiles: Sync {
+    /// Creates `path` and any missing parent directories; an existing directory succeeds.
+    fn create_dir_all(&self, path: &Path) -> io::Result<()>;
+
+    /// Removes an entry, recursively for a directory, without following symbolic links in the tree.
+    /// A symbolic link is itself removed, even when dangling. A missing entry succeeds.
+    /// Ancestor directories are followed; this operation provides neither confinement nor rollback.
+    fn remove(&self, path: &Path) -> io::Result<()>;
+
     /// One read-modify-write of the file at `path`, and whether the file was replaced.
     ///
     /// `edit` is given the current bytes and decides the new ones. An exclusive advisory lock on the directory
@@ -239,6 +247,27 @@ impl ReadFiles for OsFiles {
 }
 
 impl WriteFiles for OsFiles {
+    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        std::fs::create_dir_all(path)
+    }
+
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let result = if metadata.is_dir() {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        };
+        match result {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        }
+    }
+
     fn update(&self, path: &Path, edit: &mut Edit<'_>) -> io::Result<bool> {
         let directory = path
             .parent()
@@ -528,6 +557,74 @@ mod tests {
     use winter_workspace_test_support::TempTree;
 
     use super::*;
+
+    #[test]
+    fn directories_are_created_recursively_and_an_existing_directory_succeeds() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let path = tree.root().join("created/child");
+        OsFiles.create_dir_all(&path).expect("create parents");
+        OsFiles.create_dir_all(&path).expect("existing directory");
+        assert!(path.is_dir());
+        let file = path.join("file");
+        std::fs::write(&file, b"kept").expect("file");
+        assert!(OsFiles.create_dir_all(&file).is_err());
+        assert!(OsFiles.create_dir_all(&file.join("child")).is_err());
+        assert_eq!(std::fs::read(file).expect("unchanged file"), b"kept");
+    }
+
+    #[test]
+    fn removal_handles_files_directories_and_missing_entries() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let path = tree.root().join("removed");
+        OsFiles.remove(&path).expect("missing entry");
+        std::fs::write(&path, b"bytes").expect("file");
+        OsFiles.remove(&path).expect("remove file");
+        assert!(!path.exists());
+        std::fs::create_dir_all(path.join("nested")).expect("directories");
+        std::fs::write(path.join("nested/file"), b"bytes").expect("nested file");
+        OsFiles.remove(&path).expect("remove whole directory");
+        assert!(!path.exists());
+        OsFiles.remove(&path).expect("already removed");
+    }
+
+    #[test]
+    fn removal_unlinks_live_and_dangling_links_without_touching_their_targets() {
+        let tree = TempTree::new().expect("an isolated tree");
+        let target = tree.root().join("kept");
+        std::fs::create_dir(&target).expect("target directory");
+        std::fs::write(target.join("file"), b"kept").expect("target file");
+        for target in [target.clone(), target.join("file"), target.join("missing")] {
+            let link = tree.root().join("link");
+            std::os::unix::fs::symlink(&target, &link).expect("link");
+            OsFiles.remove(&link).expect("unlink");
+            assert!(std::fs::symlink_metadata(link).is_err());
+        }
+        assert!(target.is_dir());
+        assert_eq!(
+            std::fs::read(target.join("file")).expect("kept file"),
+            b"kept"
+        );
+
+        let removed = tree.root().join("removed");
+        std::fs::create_dir_all(removed.join("nested")).expect("subtree");
+        for (name, destination) in [
+            ("directory", target.clone()),
+            ("file", target.join("file")),
+            ("dangling", target.join("missing")),
+        ] {
+            std::os::unix::fs::symlink(destination, removed.join("nested").join(name))
+                .expect("nested link");
+        }
+        OsFiles
+            .remove(&removed)
+            .expect("remove subtree without following links");
+        assert!(!removed.exists());
+        assert!(target.is_dir());
+        assert_eq!(
+            std::fs::read(target.join("file")).expect("kept file"),
+            b"kept"
+        );
+    }
 
     fn names(directory: &Path) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(directory)

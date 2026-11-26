@@ -32,9 +32,9 @@ pub(crate) fn answer(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::sync::Mutex;
 
     use super::*;
     use crate::env_index::IndexSource;
@@ -47,14 +47,15 @@ mod tests {
     /// Files that count how often each path is read.
     struct CountedReads {
         files: MemoryFiles,
-        reads: RefCell<BTreeMap<PathBuf, usize>>,
+        reads: Mutex<BTreeMap<PathBuf, usize>>,
     }
 
     impl ReadFiles for CountedReads {
         fn read(&self, path: &Path) -> std::io::Result<Option<Vec<u8>>> {
             *self
                 .reads
-                .borrow_mut()
+                .lock()
+                .expect("reads lock")
                 .entry(path.to_path_buf())
                 .or_default() += 1;
             self.files.read(path)
@@ -88,14 +89,14 @@ mod tests {
                 .with(CONFIG, b"env_aliases = [\"one\", \"two\"]\n")
                 .with(LOCAL_CONFIG, b"envs_per_workspace = 12\n")
                 .with(STATE, b"[env_index]\nfeature-x = 15\n"),
-            reads: RefCell::default(),
+            reads: Mutex::default(),
         };
 
         let answer =
             answer(&files, Path::new("/ws/alpha/project"), "feature-x").expect("an answer");
 
         assert_eq!(answer.index, 15);
-        let reads = files.reads.borrow();
+        let reads = files.reads.lock().expect("reads lock");
         assert_eq!(reads.get(Path::new(CONFIG)), Some(&1));
         assert_eq!(reads.get(Path::new(LOCAL_CONFIG)), Some(&1));
     }

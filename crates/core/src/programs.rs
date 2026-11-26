@@ -24,6 +24,8 @@ use crate::process::ProcessEnv;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Program {
     Git,
+    /// `/bin/sh -c`, with the command line supplied as the first argument.
+    Shell,
 }
 
 impl Program {
@@ -31,8 +33,16 @@ impl Program {
     pub fn name(self) -> &'static str {
         match self {
             Self::Git => "git",
+            Self::Shell => "/bin/sh",
         }
     }
+}
+
+/// The input a child receives. Inheritance also requires the invocation's permission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stdin {
+    Null,
+    Inherit,
 }
 
 /// One start of a program: its arguments, the subcommand first, its working directory, how long it may run, and
@@ -47,6 +57,10 @@ pub struct Call<'a> {
     /// Variables laid over the environment of the child for this call alone: a name the child already has takes
     /// the value given here.
     pub env: &'a [(&'a OsStr, &'a OsStr)],
+    /// Names removed after program defaults and before the per-call overlay.
+    pub remove: &'a [&'a OsStr],
+    /// Inheritance requires the adapter's invocation-level permission as well.
+    pub stdin: Stdin,
 }
 
 /// What a program that ran to its end wrote, and how it ended.
@@ -95,17 +109,27 @@ impl Pacing {
 }
 
 /// Starts programs.
-pub trait RunPrograms {
+pub trait RunPrograms: Sync {
     /// The sleep and the draw a retried call paces itself with.
     fn pacing(&self) -> Pacing {
         Pacing::real()
     }
 
-    /// Starts the program of `call` and waits for it, until its timeout when it has one. Its stdin reads empty,
+    /// Starts the program of `call` and waits for it, until its timeout when it has one. Its stdin follows `call`,
     /// and its stdout and stderr are captured whole. A program that outlives its timeout is killed, with its
     /// children, and ends as `Exit::Signal(9)` with the timeout line as its stderr. An error only when the
     /// program cannot be started.
     fn run(&self, call: &Call<'_>) -> io::Result<Finished>;
+
+    /// Delivers merged stdout and stderr live as byte lines, without newline delimiters. A final
+    /// unterminated line is delivered too; bytes are not decoded. Completion retains code or signal.
+    /// Implementations without streaming return `Unsupported` without starting a program.
+    fn stream(&self, _: &Call<'_>, _: &mut dyn FnMut(&[u8])) -> io::Result<Exit> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "streaming programs",
+        ))
+    }
 }
 
 /// The variable of the snapshot that no child is given.
@@ -130,20 +154,64 @@ pub struct OsPrograms {
     environment: BTreeMap<OsString, OsString>,
     /// `PATH` as the snapshot holds it.
     path: Option<OsString>,
+    inherit_stdin: bool,
 }
 
 impl OsPrograms {
-    /// The programs as an invocation with the environment `snapshot` starts them.
-    pub fn new(snapshot: &ProcessEnv) -> Self {
+    /// The programs as an invocation with the environment `snapshot` starts them. Only the binary
+    /// authorizes inherited process stdin; otherwise even `Stdin::Inherit` reads empty input.
+    pub fn new(snapshot: &ProcessEnv, inherit_stdin: bool) -> Self {
         let environment = child_environment(snapshot.pairs());
         let path = environment.get(OsStr::new("PATH")).cloned();
-        Self { environment, path }
+        Self {
+            environment,
+            path,
+            inherit_stdin,
+        }
+    }
+
+    fn command(&self, call: &Call<'_>) -> io::Result<std::process::Command> {
+        let program = match call.program {
+            Program::Shell => PathBuf::from("/bin/sh"),
+            Program::Git => find_program("git", self.path.as_deref(), call.cwd, &is_executable)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "no executable file named git in a directory of PATH",
+                    )
+                })?,
+        };
+        let mut command = std::process::Command::new(program);
+        if call.program == Program::Shell {
+            command.arg("-c");
+        }
+        command
+            .args(call.args)
+            .current_dir(call.cwd)
+            .env_clear()
+            .envs(&self.environment);
+        if call.program == Program::Git {
+            for name in MESSAGE_LOCALE {
+                command.env(name, "C");
+            }
+        }
+        for name in call.remove {
+            command.env_remove(name);
+        }
+        command.envs(call.env.iter().copied()).stdin(
+            if self.inherit_stdin && call.stdin == Stdin::Inherit {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            },
+        );
+        Ok(command)
     }
 }
 
-/// The environment of a git child, from the names and values of the snapshot: each as given, without
+/// The base environment of a child, from the names and values of the snapshot: each as given, without
 /// [`LAUNCH_TIME`], with [`SSH_COMMAND`] added when the snapshot holds no such name, an empty value being
-/// one, and with each of [`MESSAGE_LOCALE`] set to `C`.
+/// one. The command builder forces git's message locale to C; shell commands retain this snapshot's locale.
 fn child_environment<'s>(
     snapshot: impl Iterator<Item = (&'s OsStr, &'s OsStr)>,
 ) -> BTreeMap<OsString, OsString> {
@@ -154,29 +222,14 @@ fn child_environment<'s>(
     environment
         .entry(SSH_COMMAND.into())
         .or_insert_with(|| SSH_COMMAND_DEFAULT.into());
-    for name in MESSAGE_LOCALE {
-        environment.insert(name.into(), "C".into());
-    }
     environment
 }
 
 impl RunPrograms for OsPrograms {
     fn run(&self, call: &Call<'_>) -> io::Result<Finished> {
         let name = call.program.name();
-        let program = find_program(name, self.path.as_deref(), call.cwd, &is_executable)
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("no executable file named {name} in a directory of PATH"),
-                )
-            })?;
-        let mut child = std::process::Command::new(&program)
-            .args(call.args)
-            .current_dir(call.cwd)
-            .env_clear()
-            .envs(&self.environment)
-            .envs(call.env.iter().copied())
-            .stdin(Stdio::null())
+        let mut child = self
+            .command(call)?
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
@@ -221,6 +274,80 @@ impl RunPrograms for OsPrograms {
             stdout: pipes.stdout,
             stderr: pipes.stderr,
         })
+    }
+
+    fn stream(&self, call: &Call<'_>, line: &mut dyn FnMut(&[u8])) -> io::Result<Exit> {
+        let (mut reader, writer) = io::pipe()?;
+        let mut child = self
+            .command(call)?
+            .stdout(writer.try_clone()?)
+            .stderr(writer)
+            .spawn()?;
+        let deadline = call.timeout.map(|timeout| Instant::now() + timeout);
+        let result = stream_lines(&mut reader, deadline, line).and_then(|expired| {
+            match (expired, deadline) {
+                (false, Some(deadline)) => wait_for_exit(&mut child, deadline),
+                (expired, _) => Ok(expired),
+            }
+        });
+        match result {
+            Ok(false) => {
+                let status = child.wait()?;
+                match (status.code(), status.signal()) {
+                    (Some(code), _) => Ok(Exit::Code(code)),
+                    (_, Some(signal)) => Ok(Exit::Signal(signal)),
+                    _ => Err(io::Error::other("program ended without a code or signal")),
+                }
+            }
+            result => {
+                self.kill_tree(&mut child, call.cwd);
+                let _ = child.wait();
+                result.map(|_| Exit::Signal(9))
+            }
+        }
+    }
+}
+
+fn stream_lines(
+    reader: &mut io::PipeReader,
+    deadline: Option<Instant>,
+    line: &mut dyn FnMut(&[u8]),
+) -> io::Result<bool> {
+    let mut pending = Vec::new();
+    loop {
+        let remaining = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        if remaining.is_some_and(|remaining| remaining.is_zero()) {
+            if !pending.is_empty() {
+                line(&pending);
+            }
+            return Ok(true);
+        }
+        let timeout = remaining.map(|remaining| Timespec {
+            tv_sec: i64::try_from(remaining.as_secs()).unwrap_or(i64::MAX),
+            tv_nsec: i64::from(remaining.subsec_nanos()),
+        });
+        let mut fds = [PollFd::new(&*reader, PollFlags::IN)];
+        match poll(&mut fds, timeout.as_ref()) {
+            Ok(0) => continue,
+            Ok(_) => {}
+            Err(Errno::INTR) => continue,
+            Err(error) => return Err(error.into()),
+        }
+        let ended = read_some(Some(reader), &mut pending)?;
+        let mut consumed = 0;
+        for (index, byte) in pending.iter().enumerate() {
+            if *byte == b'\n' {
+                line(&pending[consumed..index]);
+                consumed = index + 1;
+            }
+        }
+        pending.drain(..consumed);
+        if ended {
+            if !pending.is_empty() {
+                line(&pending);
+            }
+            return Ok(false);
+        }
     }
 }
 
@@ -503,8 +630,6 @@ mod tests {
             [
                 "GIT_SSH_COMMAND",
                 "HOME",
-                "LANGUAGE",
-                "LC_ALL",
                 "OTEL_EXPORTER_OTLP_ENDPOINT",
                 "TRACEPARENT",
                 "TRACESTATE"
@@ -535,11 +660,11 @@ mod tests {
     }
 
     #[test]
-    fn the_message_locale_is_c_whatever_the_snapshot_holds() {
+    fn the_base_environment_preserves_the_message_locale() {
         let environment = environment(&[("LANGUAGE", "de"), ("LC_ALL", "de_DE.UTF-8")]);
 
-        assert_eq!(environment[OsStr::new("LANGUAGE")], "C");
-        assert_eq!(environment[OsStr::new("LC_ALL")], "C");
+        assert_eq!(environment[OsStr::new("LANGUAGE")], "de");
+        assert_eq!(environment[OsStr::new("LC_ALL")], "de_DE.UTF-8");
     }
 
     #[test]
@@ -556,5 +681,31 @@ mod tests {
     fn an_exit_is_its_code_or_minus_its_signal() {
         assert_eq!(Exit::Code(128).number(), 128);
         assert_eq!(Exit::Signal(9).number(), -9);
+    }
+
+    #[test]
+    fn a_port_without_streaming_reports_unsupported() {
+        struct CaptureOnly;
+        impl RunPrograms for CaptureOnly {
+            fn run(&self, _: &Call<'_>) -> io::Result<Finished> {
+                unreachable!("stream must not fall back to capture");
+            }
+        }
+        let call = Call {
+            program: Program::Shell,
+            args: &[],
+            cwd: Path::new("/"),
+            timeout: None,
+            env: &[],
+            remove: &[],
+            stdin: Stdin::Null,
+        };
+        assert_eq!(
+            CaptureOnly
+                .stream(&call, &mut |_| unreachable!("no output"))
+                .expect_err("unsupported")
+                .kind(),
+            io::ErrorKind::Unsupported
+        );
     }
 }

@@ -57,6 +57,7 @@ fn main() -> ExitCode {
                     version: env!("CARGO_PKG_VERSION"),
                 },
                 stdin: &mut stdin,
+                inherit_stdin: true,
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdout_is_terminal,

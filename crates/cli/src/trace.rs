@@ -9,7 +9,6 @@
 //! has not answered by then is left to itself and ends with the process, so nothing here or in `main` may wait
 //! for it afterwards, by a join or by dropping something that thread owns.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io::Write;
@@ -70,14 +69,14 @@ const ERROR_TYPE_ATTRIBUTE: &str = "error.type";
 const SPAN_LIMIT: u32 = 128;
 
 /// What stands in for the construction of the exporter.
-type Build<E> = Box<dyn FnOnce(&TraceConfig) -> Result<E, String>>;
+type Build<E> = Box<dyn FnOnce(&TraceConfig) -> Result<E, String> + Send>;
 
 /// The result of the one export, as the exporter answered it: `None` until it was called.
 type Kept = Arc<Mutex<Option<Result<(), String>>>>;
 
 /// The tracer of one invocation. `E` is the exporter the span is handed to: the OTLP exporter in `main`.
 pub(crate) struct Tracer<E> {
-    state: RefCell<State<E>>,
+    state: Mutex<State<E>>,
 }
 
 /// Where the tracer of an invocation stands.
@@ -125,7 +124,7 @@ impl<E: SpanExporter + 'static> Tracer<E> {
             },
         };
         Self {
-            state: RefCell::new(state),
+            state: Mutex::new(state),
         }
     }
 
@@ -139,7 +138,11 @@ impl<E: SpanExporter + 'static> Tracer<E> {
     /// the invocation. A tracer that is unavailable reports that, when a command was announced, and names no
     /// header: nothing was to be sent. Anything else does nothing, and starts no thread.
     pub(crate) fn finish(&self, error_type: Option<&'static str>, stderr: &mut dyn Write) {
-        match self.state.replace(State::Idle) {
+        let state = std::mem::replace(
+            &mut *self.state.lock().unwrap_or_else(PoisonError::into_inner),
+            State::Idle,
+        );
+        match state {
             State::Idle | State::Waiting { .. } | State::Unavailable { log: None, .. } => {}
             State::Unavailable {
                 cause,
@@ -295,7 +298,11 @@ impl<E: SpanExporter + 'static> CommandTracer for Tracer<E> {
     /// unavailable keeps `log` for its record, and so does one whose exporter cannot be built, or whose
     /// building panics: the panic is caught here and leaves tracing unavailable, with its message as the cause.
     fn command_started(&self, command_path: &[String], log: TraceLog) {
-        let next = match self.state.replace(State::Idle) {
+        let state = std::mem::replace(
+            &mut *self.state.lock().unwrap_or_else(PoisonError::into_inner),
+            State::Idle,
+        );
+        let next = match state {
             State::Waiting { config, build } => {
                 // A panic of the tracing stack while it is built is caught here, so that it ends neither the
                 // command nor the invocation: tracing is unavailable instead. The panic hook has kept it from
@@ -324,7 +331,7 @@ impl<E: SpanExporter + 'static> CommandTracer for Tracer<E> {
             },
             other => other,
         };
-        self.state.replace(next);
+        *self.state.lock().unwrap_or_else(PoisonError::into_inner) = next;
     }
 }
 
@@ -332,7 +339,7 @@ impl<E: SpanExporter + 'static> Tracer<E> {
     /// The tracer and the context an operation span starts under, when the command span is open and
     /// recording.
     fn operation_parent(&self) -> Option<(opentelemetry_sdk::trace::SdkTracer, Context)> {
-        let state = self.state.borrow();
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let State::Open { provider, span, .. } = &*state else {
             return None;
         };
@@ -562,11 +569,9 @@ fn is_generic_exporter(name: &OsStr) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
     use std::ffi::OsString;
     use std::path::PathBuf;
-    use std::rc::Rc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc::{Receiver, Sender};
     use std::thread::ThreadId;
 
@@ -713,7 +718,7 @@ mod tests {
     struct Probe {
         tracer: Tracer<Recorder>,
         handed: Handed,
-        built: Rc<Cell<usize>>,
+        built: Arc<AtomicUsize>,
     }
 
     enum Exporter {
@@ -727,12 +732,12 @@ mod tests {
 
     fn probe(settings: TraceSettings, exporter: Exporter) -> Probe {
         let handed = Handed::default();
-        let built = Rc::new(Cell::new(0));
+        let built = Arc::new(AtomicUsize::new(0));
         let build: Build<Recorder> = {
             let handed = handed.clone();
-            let built = Rc::clone(&built);
+            let built = Arc::clone(&built);
             Box::new(move |_| {
-                built.set(built.get() + 1);
+                built.fetch_add(1, Ordering::SeqCst);
                 let then = match exporter {
                     Exporter::Records => Then::Succeeds,
                     Exporter::Fails => Then::Fails,
@@ -819,6 +824,7 @@ mod tests {
                 version: "0.1.0",
             },
             stdin: &mut stdin,
+            inherit_stdin: false,
             stdout: &mut Vec::new(),
             stderr: &mut Vec::new(),
             stdout_is_terminal: false,
@@ -863,6 +869,59 @@ mod tests {
     }
 
     #[test]
+    fn scoped_workers_open_children_of_the_command_and_export_once_after_they_join() {
+        let probe = probe(TraceSettings::On(on()), Exporter::Records);
+        announce(&probe.tracer, Logging::Debug);
+        let tracer: &dyn CommandTracer = &probe.tracer;
+        let together = std::sync::Barrier::new(2);
+
+        thread::scope(|scope| {
+            for operation in ["first", "second"] {
+                let together = &together;
+                scope.spawn(move || {
+                    let mut span = tracer.operation(operation, &[("winter.repo", operation)]);
+                    // Both handles stay open at once: neither owns the tracer's state lock.
+                    together.wait();
+                    if operation == "second" {
+                        span.failed("Git");
+                    }
+                });
+            }
+        });
+
+        assert!(probe.handed.spans().is_empty(), "workers do not export");
+        assert_eq!(finished(&probe.tracer, None), "");
+        let spans = probe.handed.spans();
+        assert_eq!(spans.len(), 3);
+        let command = spans
+            .iter()
+            .find(|span| span.name == "winter ws index")
+            .expect("the command span");
+        for name in ["first", "second"] {
+            let child = spans
+                .iter()
+                .find(|span| span.name == name)
+                .expect("a worker span");
+            assert_eq!(child.parent_span_id, command.span_context.span_id());
+            assert_eq!(
+                child.span_context.trace_id(),
+                command.span_context.trace_id()
+            );
+            assert!(attributes(child).contains(&("winter.repo".to_owned(), name.to_owned())));
+            assert_eq!(
+                child.status,
+                if name == "second" {
+                    Status::error("")
+                } else {
+                    Status::Unset
+                }
+            );
+        }
+        assert_ne!(probe.handed.exported_on(), thread::current().id());
+        assert_eq!(finished(&probe.tracer, None), "");
+    }
+
+    #[test]
     fn with_tracing_off_the_builder_is_never_called_and_finish_writes_nothing() {
         for announced in [false, true] {
             let probe = probe(TraceSettings::Off, Exporter::Records);
@@ -871,7 +930,7 @@ mod tests {
             }
 
             assert_eq!(finished(&probe.tracer, Some("Usage")), "", "{announced}");
-            assert_eq!(probe.built.get(), 0, "{announced}");
+            assert_eq!(probe.built.load(Ordering::SeqCst), 0, "{announced}");
             assert_eq!(probe.handed.spans(), [], "{announced}");
         }
     }
@@ -883,7 +942,7 @@ mod tests {
         run_library(&probe.tracer, Logging::Debug, &["--version"]);
 
         assert_eq!(finished(&probe.tracer, None), "");
-        assert_eq!(probe.built.get(), 0);
+        assert_eq!(probe.built.load(Ordering::SeqCst), 0);
         assert_eq!(probe.handed.spans(), []);
     }
 
@@ -902,7 +961,7 @@ mod tests {
         let written = finished(&probe.tracer, None);
 
         assert_eq!(written, "");
-        assert_eq!(probe.built.get(), 1);
+        assert_eq!(probe.built.load(Ordering::SeqCst), 1);
         let span = probe.handed.span();
         assert_eq!(span.name, "winter ws index");
         assert_eq!(span.span_kind, SpanKind::Internal);
@@ -1042,7 +1101,7 @@ mod tests {
         let written = finished(&probe.tracer, Some("Usage"));
 
         assert_eq!(written, "");
-        assert_eq!(probe.built.get(), 1);
+        assert_eq!(probe.built.load(Ordering::SeqCst), 1);
         assert_eq!(probe.handed.spans(), []);
     }
 
@@ -1276,7 +1335,7 @@ mod tests {
             let written = finished(&probe.tracer, Some("Usage"));
 
             assert_eq!(written, record, "{logging:?}");
-            assert_eq!(probe.built.get(), 1, "{logging:?}");
+            assert_eq!(probe.built.load(Ordering::SeqCst), 1, "{logging:?}");
             assert_eq!(probe.handed.spans(), [], "{logging:?}");
         }
     }
@@ -1299,7 +1358,7 @@ mod tests {
             let written = finished(&probe.tracer, Some("Usage"));
 
             assert_eq!(written, record, "{logging:?}");
-            assert_eq!(probe.built.get(), 1, "{logging:?}");
+            assert_eq!(probe.built.load(Ordering::SeqCst), 1, "{logging:?}");
             assert_eq!(probe.handed.spans(), [], "{logging:?}");
             assert_eq!(finished(&probe.tracer, None), "", "{logging:?}");
         }
@@ -1324,7 +1383,7 @@ mod tests {
             let written = finished(&probe.tracer, None);
 
             assert_eq!(written, record, "{logging:?}");
-            assert_eq!(probe.built.get(), 0, "{logging:?}");
+            assert_eq!(probe.built.load(Ordering::SeqCst), 0, "{logging:?}");
             assert_eq!(probe.handed.spans(), [], "{logging:?}");
         }
     }
@@ -1340,7 +1399,7 @@ mod tests {
             run_library(&probe.tracer, Logging::Debug, &["nope"]);
 
             assert_eq!(finished(&probe.tracer, Some("Usage")), "");
-            assert_eq!(probe.built.get(), 0);
+            assert_eq!(probe.built.load(Ordering::SeqCst), 0);
         }
     }
 
@@ -1523,7 +1582,7 @@ mod tests {
         announce(&tracer, Logging::Unswitched);
 
         assert!(
-            matches!(*tracer.state.borrow(), State::Open { .. }),
+            matches!(*tracer.state.lock().expect("the state"), State::Open { .. }),
             "the command span is open"
         );
         say(READY_LINE);

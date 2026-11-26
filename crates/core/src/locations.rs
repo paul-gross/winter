@@ -257,8 +257,8 @@ fn probe_worktrees<'p>(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::io;
+    use std::sync::Mutex;
 
     use super::*;
     use crate::files::MemoryFiles;
@@ -274,20 +274,20 @@ mod tests {
 
     /// A program port that keeps each call and answers it as the test says.
     struct Scripted<A> {
-        calls: RefCell<Vec<Called>>,
+        calls: Mutex<Vec<Called>>,
         answer: A,
     }
 
     impl<A: Fn(&[String], &Path) -> io::Result<Finished>> Scripted<A> {
         fn new(answer: A) -> Self {
             Self {
-                calls: RefCell::new(Vec::new()),
+                calls: Mutex::new(Vec::new()),
                 answer,
             }
         }
 
         fn calls(&self) -> Vec<Called> {
-            self.calls.borrow().clone()
+            self.calls.lock().expect("calls lock").clone()
         }
 
         /// The subcommand of each call with the last part of its working directory.
@@ -302,7 +302,7 @@ mod tests {
         }
     }
 
-    impl<A: Fn(&[String], &Path) -> io::Result<Finished>> RunPrograms for Scripted<A> {
+    impl<A: Fn(&[String], &Path) -> io::Result<Finished> + Sync> RunPrograms for Scripted<A> {
         fn run(&self, call: &Call<'_>) -> io::Result<Finished> {
             let args: Vec<String> = call
                 .args
@@ -310,7 +310,8 @@ mod tests {
                 .map(|arg| arg.to_string_lossy().into_owned())
                 .collect();
             self.calls
-                .borrow_mut()
+                .lock()
+                .expect("calls lock")
                 .push((args.clone(), call.cwd.to_path_buf()));
             (self.answer)(&args, call.cwd)
         }
@@ -824,9 +825,9 @@ mod tests {
     #[test]
     fn a_workspace_call_that_fails_gives_no_count_writes_no_record_and_ends_the_probe() {
         for failing in 0..9 {
-            let made = RefCell::new(0);
+            let made = std::sync::atomic::AtomicUsize::new(0);
             let programs = Scripted::new(|args: &[String], cwd: &Path| {
-                let call = made.replace_with(|made| *made + 1);
+                let call = made.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if call == failing {
                     ended(128, b"", b"fatal: the call fails\n")
                 } else {

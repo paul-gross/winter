@@ -12,8 +12,8 @@ Run from the repository root, after the bootstrap of [development.md](../tooling
 
 | Method                      | Command                                          | Proves                                                                          | Use when                                                   |
 | --------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `workspace:unit-test`       | `cargo test -p winter-workspace-core --lib`      | A pure rule: parsing, derivation, ordering, classification.                     | The rule has no file, git, or process input.               |
-| `workspace:component-test`  | `cargo test -p winter-workspace-core --test '*'` | A behaviour against a fixture workspace, run in process with in-memory handles. | The behaviour reads or writes files or git state.          |
+| `workspace:unit-test`       | `cargo test -p winter-workspace-core --lib`      | Pure rules and the file port's isolated filesystem tests. | The rule has no external input, or exercises the documented file-port exception. |
+| `workspace:component-test`  | `cargo test -p winter-workspace-core --test '*'` | Library behaviour against fixture workspaces and direct program-adapter behaviour under pinned environments. | The behaviour reads or writes files or git state, or exercises the program adapter. |
 | `workspace:executable-test` | `cargo test -p winter-workspace --tests`         | Process-level contract: streams, exit code, environment.                        | The claim is about the process, not the library.           |
 | `workspace:architecture`    | `cargo test -p winter-workspace-dev`             | Package edges, library output rules, context-tree rules, workflow and aliases.  | The change adds a package, an edge, or a context document. |
 | `workspace:slice-gate`      | `cargo dev gate slice`                           | Formatting, lints, and every test but the recorded scenarios pass.              | Always, before handing a change over.                      |

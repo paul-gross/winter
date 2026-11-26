@@ -8,7 +8,7 @@ command that runs each tier is in [the verifiability matrix](../verification/mat
 | Tier       | Lives in                         | Starts a process | Proves                                                             |
 | ---------- | -------------------------------- | ---------------- | ------------------------------------------------------------------ |
 | Unit       | `#[cfg(test)]` beside the code   | No, except below | A pure rule: parsing, derivation, ordering, classification.        |
-| Component  | `crates/core/tests/<subject>.rs` | Git only         | A behaviour of the library, run in process with in-memory handles. |
+| Component  | `crates/core/tests/<subject>.rs` | Git or program-port fixtures | A behaviour of the library or its program adapter, run in process. |
 | Executable | `crates/cli/tests/<subject>.rs`  | The built binary | The process-level contract: streams, exit code, environment.       |
 
 Choose the lowest tier that can make the claim:
@@ -42,6 +42,14 @@ Choose the lowest tier that can make the claim:
   directories of the host that stand in for a missing `PATH`, and let git read the configuration of the host. The git it
   starts is the host's, on the pinned `PATH`, or a stand-in the test wrote to `bin/` of its tree, which comes first
   there and records its calls under `calls/`.
+- A direct component test of the program adapter calls `OsPrograms` with a snapshot built from its tree's
+  `PinnedEnv::variables`. It may run `/bin/sh` with a script the test supplies, and base utilities on the pinned
+  `PATH`, solely to exercise the adapter. Its working directory, files, and children remain in its isolated tree.
+  A test of authorized stdin inheritance runs the adapter inside a child test fixture started through `invoke`,
+  under the pinned environment, with stdin bytes the parent supplies. The fixture is ignored and guarded by
+  `WINTER_TEST_FIXTURE`, as in [Tests that must fail](#tests-that-must-fail). Only that fixture may authorize inheritance;
+  the test process never passes the developer's stdin to a child. This exception permits no arbitrary process
+  spawning and changes none of the signal restrictions below.
 - An executable test starts the binary Cargo built, at `env!("CARGO_BIN_EXE_winter-workspace")`, through `invoke`. It is
   for a claim about the process and not about the library. `invoke_with_stdout` starts it with a stdout that cannot be
   written, one of the three faults of `StdoutFault`: `ClosedPipe`, a pipe whose reader is gone; `Full`, a device with no
@@ -209,9 +217,10 @@ package. In practice:
   The one exception is the repository's committed `scenarios/`, which a test may read and never writes: it copies what
   it needs into its tree.
 - It starts a child only through `invoke`, `invoke_with_stdout`, or `Git`, by an absolute path and under the pinned
-  environment. No shell stands between a test and its child, and no name is looked up on `PATH`. A test of the support
-  package that needs a child with a behaviour of its own runs `/bin/sh` as that child, with a script the test spells
-  out.
+  environment, except for library calls through the program port and the direct adapter tests described in
+  [Tiers](#tiers), whose program lookup uses the pinned `PATH`. No shell stands between a harness call and its child.
+  A test of the support package that needs a child with a behaviour of its own runs `/bin/sh` as that child, with a
+  script the test spells out.
 - It resolves no host name. Fixture remotes are the tree's own bare repositories.
 - It opens no socket but those [The trace collector](#the-trace-collector) lists.
 - It sends no signal to another process. There are three exceptions, and no other. The runner sends SIGKILL to the
@@ -224,8 +233,9 @@ package. In practice:
   outside this rule: its step runner, in `crates/dev/src/step.rs`, kills the process group of a step it ends.
 - It lets nothing of the developer's environment or home directory reach a child or decide a result. The test process
   reads its own environment only for `WINTER_TEST_` variables and for the directory of the host's git on `PATH`. The two
-  fixtures of `crates/cli/src/trace.rs` are the exception: each is a child that reads the whole environment it was
-  started with, which is the pinned one of its parent's tree.
+  fixtures of `crates/cli/src/trace.rs` and the program-adapter stdin fixture are the exceptions: each is a child that
+  reads the environment it was started with, which is the pinned one of its parent's tree. The stdin fixture reads
+  only the stdin bytes its parent supplied through `invoke`.
 
 The driver's own tests, in `crates/dev/`, test the tooling and not the product. Those of the gates and of the
 architecture rules do not use the isolated tree: they start Cargo and `/bin/sh` directly, read the checkout, and write

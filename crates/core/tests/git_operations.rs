@@ -1,9 +1,9 @@
 //! The git operations over the program port, run against the host's git in fixture repositories.
 
-use std::cell::RefCell;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use winter_workspace_core::{
     Call, CommandTracer, Diagnostics, Finished, GitFailure, GitOperation, Log, OperationSpan,
@@ -19,7 +19,7 @@ use spans::Spans;
 
 /// A tracer that records the span names that were marked failed.
 #[derive(Default)]
-struct Failures(RefCell<Vec<(String, String)>>);
+struct Failures(Mutex<Vec<(String, String)>>);
 
 struct Marked<'a>(&'a Failures, &'static str);
 
@@ -27,7 +27,8 @@ impl OperationSpan for Marked<'_> {
     fn failed(&mut self, error_type: &'static str) {
         self.0
             .0
-            .borrow_mut()
+            .lock()
+            .expect("the failures")
             .push((self.1.to_owned(), error_type.to_owned()));
     }
 }
@@ -71,11 +72,14 @@ fn fixture() -> Fixture {
         .expect("a head")
         .trim()
         .to_owned();
-    let programs = OsPrograms::new(&ProcessEnv::from_vars(
-        tree.env()
-            .variables()
-            .map(|(name, value)| (name.to_owned(), value.to_owned())),
-    ));
+    let programs = OsPrograms::new(
+        &ProcessEnv::from_vars(
+            tree.env()
+                .variables()
+                .map(|(name, value)| (name.to_owned(), value.to_owned())),
+        ),
+        false,
+    );
     Fixture {
         tree,
         programs,
@@ -220,7 +224,7 @@ fn each_checkout_is_one_git_checkout_span_attributed_with_the_repo_alone() {
 
     let attributes = vec![("winter.repo".to_owned(), "api".to_owned())];
     assert_eq!(
-        *spans.0.borrow(),
+        *spans.0.lock().expect("the spans"),
         vec![
             ("git checkout".to_owned(), attributes.clone()),
             ("git checkout".to_owned(), attributes),
@@ -276,7 +280,7 @@ fn fetch_with_stub(
     )
     .expect("a stub");
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).expect("executable");
-    let programs = Instant(OsPrograms::new(&env_of(f, Some(timeout))));
+    let programs = Instant(OsPrograms::new(&env_of(f, Some(timeout)), false));
     let mut err = Vec::new();
     let answer = fetch(
         &programs,
@@ -353,7 +357,7 @@ fn a_fetch_retried_once_is_one_git_fetch_span() {
     answer.expect("a fetch");
     assert_eq!(started, 2);
     assert_eq!(
-        *spans.0.borrow(),
+        *spans.0.lock().expect("the spans"),
         vec![(
             "git fetch".to_owned(),
             vec![("winter.repo".to_owned(), "api".to_owned())]
@@ -472,7 +476,7 @@ fn tree_and_dirty_are_one_span_each_attributed_with_the_repo_alone() {
 
     let attributes = vec![("winter.repo".to_owned(), "api".to_owned())];
     assert_eq!(
-        *spans.0.borrow(),
+        *spans.0.lock().expect("the spans"),
         vec![
             ("git write-tree".to_owned(), attributes.clone()),
             ("git status".to_owned(), attributes),
@@ -500,7 +504,7 @@ fn the_tree_of_a_directory_that_is_no_repository_fails_with_its_span_marked() {
         }
     ));
     assert_eq!(
-        *failures.0.borrow(),
+        *failures.0.lock().expect("the failures"),
         vec![("git write-tree".to_owned(), "RepoError".to_owned())]
     );
 }

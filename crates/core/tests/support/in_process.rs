@@ -5,10 +5,10 @@
 
 #![allow(dead_code, reason = "each test target uses part of the scaffold")]
 
-use std::cell::RefCell;
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde_json::Value;
 use winter_workspace_core::{
@@ -122,6 +122,7 @@ impl InProcess {
                 version: "0.1.0",
             },
             stdin: &mut stdin,
+            inherit_stdin: false,
             stdout,
             stderr: &mut stderr,
             stdout_is_terminal: self.stdout_is_terminal,
@@ -133,7 +134,7 @@ impl InProcess {
             termination,
             stdout: String::new(),
             stderr: String::from_utf8(stderr).expect("UTF-8 on stderr"),
-            announced: tracer.announced.into_inner(),
+            announced: tracer.announced.into_inner().expect("the announcement"),
         }
     }
 }
@@ -185,12 +186,16 @@ impl Ended {
 /// The tracer of the scaffold: it keeps the command path it is told, and fails when it is told a second one.
 #[derive(Default)]
 struct Recording {
-    announced: RefCell<Option<Vec<String>>>,
+    announced: Mutex<Option<Vec<String>>>,
 }
 
 impl CommandTracer for Recording {
     fn command_started(&self, command_path: &[String], _: TraceLog) {
-        let earlier = self.announced.replace(Some(command_path.to_vec()));
+        let earlier = self
+            .announced
+            .lock()
+            .expect("the announcement")
+            .replace(command_path.to_vec());
         assert_eq!(earlier, None, "a command was announced twice");
     }
 }
