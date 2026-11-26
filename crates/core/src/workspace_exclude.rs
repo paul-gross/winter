@@ -3,7 +3,6 @@
 //! The file is `info/exclude` under the git directory of the workspace root, so each linked worktree used as a
 //! root has its own. A block is one managed block of exclude patterns; the rest of the file is the user's.
 
-use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +21,13 @@ const REPO: &str = "winter";
 /// The block of the local configuration files, written whatever the adoption mode and never stripped.
 const CONFIG_BLOCK: &str = "winter-config";
 const CONFIG_LINE: &str = ".winter/config/**/*.local.*";
+
+/// An exclude file that cannot be edited as text.
+#[derive(Debug, thiserror::Error)]
+#[error("the exclude file {} is not UTF-8", .path.display())]
+struct ExcludeNotUtf8 {
+    path: PathBuf,
+}
 
 /// The exclude file of a workspace root.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,14 +91,13 @@ pub fn locate_for_write(
         return Ok(Located::NotARepository);
     };
     let file = exclude_file(&directory);
-    let common = files.resolve(&root.join(git::common_dir(programs, tracer, REPO, root)?));
+    let common = git::exclude_common_directory(programs, tracer, REPO, root)?;
+    let common = files.resolve(&root.join(common));
     if directory != common {
-        enable_worktree_config(programs, tracer, root, &common)?;
-        let key = "core.excludesFile";
-        let current = git::config_get(programs, tracer, REPO, root, &["--worktree", "--get", key])?;
-        if current.as_deref() != Some(file.as_os_str()) {
-            let args = ["--worktree".as_ref(), key.as_ref(), file.as_os_str()];
-            git::config_write(programs, tracer, REPO, root, &args)?;
+        separate_worktree_config(programs, tracer, root, &common)?;
+        let current = git::worktree_excludes_file(programs, tracer, REPO, root)?;
+        if current.as_deref() != Some(file.as_path()) {
+            git::set_worktree_excludes_file(programs, tracer, REPO, root, &file)?;
         }
     }
     Ok(Located::File(file))
@@ -192,7 +197,7 @@ fn git_directory(
     if !files.is_file(&dot_git) && !files.is_dir(&dot_git) {
         return Ok(None);
     }
-    let named = git::absolute_git_dir(programs, tracer, REPO, root)?;
+    let named = git::exclude_git_directory(programs, tracer, REPO, root)?;
     Ok(Some(files.resolve(&named)))
 }
 
@@ -202,33 +207,25 @@ fn exclude_file(git_directory: &Path) -> PathBuf {
 
 /// Turns `extensions.worktreeConfig` on where it is off. The settings that would then apply to every worktree
 /// from the common `config` move to the common `config.worktree` first.
-fn enable_worktree_config(
+fn separate_worktree_config(
     programs: &dyn RunPrograms,
     tracer: &dyn CommandTracer,
     root: &Path,
     common: &Path,
 ) -> Result<(), GitFailure> {
-    let extension = "extensions.worktreeConfig";
-    let args = ["--local", "--type=bool", "--get", extension];
-    let enabled = git::config_get(programs, tracer, REPO, root, &args)?;
-    if enabled.as_deref() == Some(OsStr::new("true")) {
+    if git::worktree_config_enabled(programs, tracer, REPO, root)? {
         return Ok(());
     }
     let shared = common.join("config");
     let own = common.join("config.worktree");
-    let file = OsStr::new("--file");
     for key in ["core.bare", "core.worktree"] {
-        let key = OsStr::new(key);
-        let args = [file, shared.as_os_str(), OsStr::new("--get"), key];
-        let Some(value) = git::config_get(programs, tracer, REPO, root, &args)? else {
+        let Some(value) = git::file_setting(programs, tracer, REPO, root, &shared, key)? else {
             continue;
         };
-        let args = [file, own.as_os_str(), key, &value];
-        git::config_write(programs, tracer, REPO, root, &args)?;
-        let args = [file, shared.as_os_str(), OsStr::new("--unset"), key];
-        git::config_write(programs, tracer, REPO, root, &args)?;
+        git::set_file_setting(programs, tracer, REPO, root, &own, key, &value)?;
+        git::unset_file_setting(programs, tracer, REPO, root, &shared, key)?;
     }
-    git::config_write(programs, tracer, REPO, root, &[extension, "true"])
+    git::enable_worktree_config(programs, tracer, REPO, root)
 }
 
 /// One update of the exclude file to what `edit` makes of its text, and whether it was written.
@@ -251,10 +248,10 @@ fn rewrite(
         })
         .map_err(internal)?;
     if unreadable {
-        let message = format!("{} is not UTF-8", file.display());
+        let path = file.to_path_buf();
         return Err(internal(io::Error::new(
             io::ErrorKind::InvalidData,
-            message,
+            ExcludeNotUtf8 { path },
         )));
     }
     Ok(written)
