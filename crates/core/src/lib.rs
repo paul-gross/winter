@@ -50,6 +50,7 @@ mod workspace_exclude;
 mod workspace_files;
 mod workspace_root;
 
+pub use agents_md::{Conflict, Placement, SAFETY_BLOCK, Shim, place, refresh, shim};
 pub use bootstrap::BootstrapError;
 pub use config_edit::{CatalogError, RepositoryKind, StandaloneOption};
 pub use config_lock::{LockEntry, LockEntryFault, LockError, RefKind, read_lock, upsert_lock};
