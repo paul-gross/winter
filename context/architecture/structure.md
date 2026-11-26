@@ -168,9 +168,11 @@ workers. An operation span is created and dropped locally on its worker and need
 open until those operations end. Tracer state locks cover neither an operation handle's lifetime nor exporter work.
 These bounds grant no permission to start a thread. Only `bootstrap.rs` may start scoped workers for reconciliation,
 with at most four repositories active at once, and every worker must be joined before reconciliation returns, on
-failure as on success. Workers send events over a channel; the calling thread alone delivers them to the sink in
-arrival order, preserving each repository's event order. A sink error stops admission and further output, but active
-workers finish and are joined before the original ending is returned. No library worker may outlive its caller;
+failure as on success. Workers send events and completion messages over a bounded channel, which backpressures
+producers when full; the calling thread alone delivers events to the sink in arrival order, preserving each
+repository's event order. A sink error stops admission and further output and disconnects the receiver before joining,
+releasing blocked event and completion senders. Active workers finish and are joined before the original ending is
+returned. No library worker may outlive its caller;
 `trace-export` is the sole thread allowed to do so, under the cap described above. Reconciliation does not defer SIGINT.
 
 The program port runs git or `/bin/sh -c`. A call carries a timeout, environment removals and overlays, and its stdin

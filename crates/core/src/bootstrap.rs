@@ -459,13 +459,37 @@ fn fan_out(
     checkouts: &[checkout::Checkout<'_>],
     emit: &mut Emit<'_>,
 ) -> Result<bool, Termination> {
-    enum Message {
-        Event(InitEvent),
-        Done(bool),
-    }
+    schedule(checkouts.len(), emit, &|index, send| {
+        let checkout = &checkouts[index];
+        let result = checkout::run(ports, env, declared, checkout, &mut |event| {
+            let _ = send.send(Message::Event(event));
+        });
+        if let Err(cause) = &result {
+            let _ = send.send(Message::Event(InitEvent::RepoError {
+                repo: checkout.name.to_owned(),
+                error: cause.to_string(),
+            }));
+        }
+        result.is_ok()
+    })
+}
+
+// Bound queued events independently of checkout count and command output volume.
+const EVENT_CAPACITY: usize = 32;
+
+enum Message {
+    Event(InitEvent),
+    Done(bool),
+}
+
+fn schedule(
+    count: usize,
+    emit: &mut Emit<'_>,
+    run: &(impl Fn(usize, &mpsc::SyncSender<Message>) -> bool + Sync),
+) -> Result<bool, Termination> {
     // A worker that unwinds must still wake the receiver; the scope then propagates its panic.
     struct Completion<'a> {
-        send: &'a mpsc::Sender<Message>,
+        send: &'a mpsc::SyncSender<Message>,
         success: bool,
     }
     impl Drop for Completion<'_> {
@@ -474,26 +498,18 @@ fn fan_out(
         }
     }
     std::thread::scope(|scope| {
-        let (send, receive) = mpsc::channel();
-        let mut next = 0..checkouts.len();
+        // Keep the receiver inside the scope callback: every exit (including refusal or
+        // unwinding) disconnects blocked event and completion senders before scope joins.
+        let (send, receive) = mpsc::sync_channel(EVENT_CAPACITY);
+        let mut next = 0..count;
         let spawn = |index: usize| {
-            let checkout = &checkouts[index];
             let send = send.clone();
             scope.spawn(move || {
                 let mut completion = Completion {
                     send: &send,
                     success: false,
                 };
-                let result = checkout::run(ports, env, declared, checkout, &mut |event| {
-                    let _ = send.send(Message::Event(event));
-                });
-                completion.success = result.is_ok();
-                if let Err(cause) = result {
-                    let _ = send.send(Message::Event(InitEvent::RepoError {
-                        repo: checkout.name.to_owned(),
-                        error: cause.to_string(),
-                    }));
-                }
+                completion.success = run(index, &send);
             });
         };
         let mut active = 0;
@@ -720,6 +736,123 @@ mod tests {
     #[test]
     fn refusal_stops_admission_and_joins_workers_preserving_the_ending() {
         concurrent(true);
+    }
+
+    fn saturated_events(stop: bool, completion: bool) {
+        let (finished, joined) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            saturated_events_run(stop, completion);
+            finished.send(()).expect("test awaits completion");
+        });
+        // Do not use a scope here: on a deadlock regression its implicit join
+        // would defeat the deadline. A failed test leaves only in-memory threads.
+        joined
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("scheduler must disconnect blocked senders and join within the deadline");
+        worker.join().expect("scheduler assertions");
+    }
+
+    fn saturated_events_run(stop: bool, completion: bool) {
+        use std::sync::Barrier;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let filled = Barrier::new(4);
+        let (ready, waiting) = mpsc::channel();
+        let ended = AtomicUsize::new(0);
+        let output = |repo: usize, line: usize| {
+            Message::Event(InitEvent::CmdOutputLine {
+                repo: repo.to_string(),
+                line: line.to_string(),
+            })
+        };
+        let mut events = Vec::new();
+        let result = schedule(
+            if stop { 9 } else { 4 },
+            &mut |event| {
+                if events.is_empty() {
+                    // The receiver holds the first event while all four producers
+                    // witness a full queue. No elapsed-time assertion or sleep.
+                    for _ in 0..4 {
+                        waiting
+                            .recv_timeout(std::time::Duration::from_secs(5))
+                            .expect("each producer must encounter backpressure");
+                    }
+                    if !completion {
+                        assert_eq!(ended.load(Ordering::SeqCst), 0);
+                    }
+                }
+                events.push(event);
+                if stop {
+                    Err(Termination::BareGroup {
+                        help: "saturated sink refusal".into(),
+                    })
+                } else {
+                    Ok(())
+                }
+            },
+            &|index, send| {
+                assert!(index < 4, "refusal must not admit another worker");
+                if index == 0 {
+                    // The first event reaches the sink; the remainder fill the queue.
+                    for line in 0..=EVENT_CAPACITY {
+                        assert!(send.send(output(index, line)).is_ok());
+                    }
+                }
+                filled.wait();
+                let message = match send.try_send(output(index, EVENT_CAPACITY + 1)) {
+                    Err(mpsc::TrySendError::Full(message)) => message,
+                    _ => panic!("the stalled sink must backpressure each producer"),
+                };
+                ready.send(()).expect("sink is waiting");
+                if !completion {
+                    let sent = send.send(message);
+                    assert_eq!(sent.is_err(), stop);
+                }
+                // In completion mode, return with the queue still full. The
+                // scheduler's Completion guard must send Done into that queue.
+                ended.fetch_add(1, Ordering::SeqCst);
+                true
+            },
+        );
+        assert_eq!(ended.load(Ordering::SeqCst), 4, "all workers joined");
+        if stop {
+            assert!(matches!(
+                result,
+                Err(Termination::BareGroup { help }) if help == "saturated sink refusal"
+            ));
+            assert_eq!(events.len(), 1, "no delivery after refusal");
+        } else {
+            assert!(matches!(result, Ok(true)));
+            assert_eq!(events.len(), EVENT_CAPACITY + 5);
+            let leader: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    InitEvent::CmdOutputLine { repo, line } if repo == "0" => Some(line.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                leader,
+                (0..=EVENT_CAPACITY + 1)
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn full_event_queue_backpressures_workers_until_sink_resumes() {
+        saturated_events(false, false);
+    }
+
+    #[test]
+    fn refusal_disconnects_full_queue_before_joining_blocked_workers() {
+        saturated_events(true, false);
+    }
+
+    #[test]
+    fn refusal_disconnects_full_queue_before_joining_completion_senders() {
+        saturated_events(true, true);
     }
 
     #[test]
