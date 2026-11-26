@@ -51,7 +51,10 @@ mod workspace_files;
 mod workspace_root;
 
 pub use agents_md::{Conflict, Placement, SAFETY_BLOCK, Shim, place, refresh, shim};
-pub use bootstrap::BootstrapError;
+pub use bootstrap::checkout::{
+    Cause, Checkout, CheckoutError, Declared, Step, run as run_checkout,
+};
+pub use bootstrap::{Action, BootstrapError, InitEvent};
 pub use config_edit::{CatalogError, RepositoryKind, StandaloneOption};
 pub use config_lock::{LockEntry, LockEntryFault, LockError, RefKind, read_lock, upsert_lock};
 pub use config_model::{
@@ -63,8 +66,8 @@ pub use config_model::{
 pub use diagnostics::Diagnostics;
 pub use files::{OsFiles, ReadFiles, ScratchFile, ScratchFiles, WriteFiles};
 pub use git::{
-    GitFailure, Sha, checkout_branch, checkout_detached, clean, dirty, fetch, head, stash_pop,
-    stash_push, tree, verify,
+    GitFailure, Sha, checkout_branch, checkout_detached, clean, clone, dirty, fetch, head,
+    origin_url, set_config, stash_pop, stash_push, toplevel, tree, verify,
 };
 pub use logging::{Level, Log};
 pub use managed_block::{Markers, Position, Shape, blocks, replace_or_insert, shape, strip};

@@ -8,7 +8,8 @@ use std::sync::Mutex;
 use winter_workspace_core::{
     Call, CommandTracer, Diagnostics, Finished, GitFailure, GitOperation, Log, OperationSpan,
     OsFiles, OsPrograms, Pacing, ProcessEnv, RepoMessage, RunPrograms, TraceLog, checkout_branch,
-    checkout_detached, clean, dirty, fetch, head, stash_pop, stash_push, tree, verify,
+    checkout_detached, clean, clone, dirty, fetch, head, origin_url, set_config, stash_pop,
+    stash_push, toplevel, tree, verify,
 };
 use winter_workspace_test_support::{CommitSpec, Git, TempTree};
 
@@ -518,4 +519,144 @@ fn dirty_of_a_directory_that_is_no_repository_is_an_error() {
     let answer = dirty(&f.programs, &Spans::default(), "api", &plain);
 
     assert!(matches!(answer, Err(GitFailure::Repo(_))), "{answer:?}");
+}
+
+const URL: &str = "https://fixture.invalid/origin.git";
+
+#[test]
+fn clone_lands_on_the_default_head_or_on_the_named_branch() {
+    let f = fixture();
+    let mut side = commit("two", "b.txt", "b\n");
+    side.branch = Some("side".to_owned());
+    f.git().push_to_remote("origin", &side).expect("a push");
+    let root = f.tree.root();
+    let plain = root.join("plain");
+    let branched = root.join("branched");
+
+    for (dest, branch) in [(&plain, None), (&branched, Some("side"))] {
+        clone(
+            &f.programs,
+            &Spans::default(),
+            "api",
+            root,
+            URL,
+            dest,
+            branch,
+        )
+        .expect("a clone");
+    }
+
+    let current = |path: &Path| {
+        f.git()
+            .run(path, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .expect("a branch")
+    };
+    assert_eq!(current(&plain).trim(), "main");
+    assert_eq!(current(&branched).trim(), "side");
+}
+
+#[test]
+fn toplevel_and_origin_url_answer_none_without_marking_their_spans() {
+    let f = fixture();
+    let plain = f.tree.root().join("plain");
+    std::fs::create_dir(&plain).expect("a directory");
+    f.git()
+        .init(&f.tree.root().join("own"), "main")
+        .expect("an init");
+    let failures = Failures::default();
+
+    let top = toplevel(&f.programs, &failures, "api", &f.clone).expect("a top");
+    let none = toplevel(&f.programs, &failures, "api", &plain).expect("an answer");
+    let url = origin_url(&f.programs, &failures, "api", &f.clone).expect("a url");
+    let unset =
+        origin_url(&f.programs, &failures, "api", &f.tree.root().join("own")).expect("an answer");
+
+    assert_eq!(top.as_deref(), Some(f.clone.as_path()));
+    assert_eq!(none, None);
+    assert_eq!(url.as_deref(), Some(std::ffi::OsStr::new(URL)));
+    assert_eq!(unset, None);
+    assert!(failures.0.lock().expect("the failures").is_empty());
+}
+
+#[test]
+fn clone_set_config_and_origin_url_name_their_operation_when_git_fails() {
+    let f = fixture();
+    let root = f.tree.root();
+    let plain = root.join("plain");
+    std::fs::create_dir(&plain).expect("a directory");
+    let failures = Failures::default();
+    std::fs::write(f.clone.join(".git/config"), "[broken\n").expect("a config");
+
+    let answers = [
+        (
+            GitOperation::Clone,
+            clone(
+                &f.programs,
+                &failures,
+                "api",
+                root,
+                "https://fixture.invalid/absent.git",
+                &root.join("dest"),
+                None,
+            ),
+        ),
+        (
+            GitOperation::Config,
+            set_config(&f.programs, &failures, "api", &plain, "user.name", "A"),
+        ),
+        (
+            GitOperation::OriginUrl,
+            origin_url(&f.programs, &failures, "api", &f.clone).map(drop),
+        ),
+    ];
+
+    for (expected, answer) in answers {
+        let Err(GitFailure::Repo(error)) = answer else {
+            panic!("{expected}: {answer:?}");
+        };
+        assert!(
+            matches!(
+                error.message,
+                RepoMessage::GitFailure { operation, .. } if operation == expected
+            ),
+            "{:?}",
+            error.message
+        );
+    }
+    let marked: Vec<String> = failures
+        .0
+        .lock()
+        .expect("the failures")
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    assert_eq!(marked, ["git clone", "git config", "git config"]);
+}
+
+#[test]
+fn each_checkout_operation_is_one_span_named_for_its_subcommand() {
+    let f = fixture();
+    let spans = Spans::default();
+    let root = f.tree.root();
+
+    clone(
+        &f.programs,
+        &spans,
+        "api",
+        root,
+        URL,
+        &root.join("dest"),
+        None,
+    )
+    .expect("a clone");
+    toplevel(&f.programs, &spans, "api", &f.clone).expect("a top");
+    origin_url(&f.programs, &spans, "api", &f.clone).expect("a url");
+    set_config(&f.programs, &spans, "api", &f.clone, "user.name", "A").expect("a write");
+
+    let attributes = vec![("winter.repo".to_owned(), "api".to_owned())];
+    let expected: Vec<_> = ["git clone", "git rev-parse", "git config", "git config"]
+        .map(|name| (name.to_owned(), attributes.clone()))
+        .into();
+    assert_eq!(*spans.0.lock().expect("the spans"), expected);
+    assert_eq!(f.out(&["config", "--local", "user.name"]).trim(), "A");
 }
