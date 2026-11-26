@@ -138,6 +138,7 @@ fn blocks_are_listed_in_file_order_with_their_lines() {
         .claude/skills/w-*\n\
         # <<< web\n\
         between\n\
+        # >>>  (managed by winter)\n\
         # >>> winter-dir/projects (managed by winter)\n\
         # <<< winter-dir/projects\n\
         # >>> api (managed by winter)\n\
