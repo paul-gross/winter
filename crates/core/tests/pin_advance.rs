@@ -46,11 +46,14 @@ fn fixture() -> Fixture {
         .expect("head")
         .trim()
         .to_owned();
-    let programs = OsPrograms::new(&ProcessEnv::from_vars(
-        tree.env()
-            .variables()
-            .map(|(name, value)| (name.to_owned(), value.to_owned())),
-    ));
+    let programs = OsPrograms::new(
+        &ProcessEnv::from_vars(
+            tree.env()
+                .variables()
+                .map(|(name, value)| (name.to_owned(), value.to_owned())),
+        ),
+        false,
+    );
     Fixture {
         tree,
         programs,

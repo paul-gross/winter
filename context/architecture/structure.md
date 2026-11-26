@@ -139,9 +139,9 @@ the process environment, and answers the exit code of an ending. Two files read 
 the trace settings are read at, and `trace.rs`, for the instant a span ends. The instant a span the sampler records
 starts at, when the settings give no launch time, is read by the tracing SDK when the span is opened, and by no source
 of the binary. `interrupt.rs` alone reads or changes the disposition of a signal, writes to a file descriptor by its
-number, and ends the process without returning. `trace.rs` alone removes a variable from the process environment, starts
-a thread, and, through the exporter, opens a socket. That is why a test can call `run` with in-memory handles and
-observe everything a command does. The test modules of `interrupt.rs` and `trace.rs` are the exceptions: a test of the
+number, and ends the process without returning. In the binary, `trace.rs` alone removes a variable from the process
+environment, starts a thread, and, through the exporter, opens a socket. That is why a test can call `run` with
+in-memory handles and observe everything a command does. The test modules of `interrupt.rs` and `trace.rs` are the exceptions: a test of the
 handler, of the hiding of the variables, or of the tracer under an interrupt reads the path of its own test executable
 to start its fixture, and the fixture reads the variable that names it and writes its lines to the process stdout,
 because the test that started it reads them there. The fixtures of `trace.rs` also read the environment they were
@@ -154,12 +154,37 @@ started with, and the one of the tracer sets the disposition of SIGINT and raise
 `crates/core/src/lib.rs` is a facade: its modules are private, and the public surface is the named re-exports it lists.
 A command receives a `Context`, built by `run` from the invocation, and reaches the outside only through it. Its `files`
 field is the read side of the file port: a domain module that reads a file or lists a directory takes `&dyn ReadFiles`
-and never names the file system itself. Its `file_writer` field is the write side, `&dyn WriteFiles`: one
-read-modify-write of one file under a lock, which replaces the file through a temporary file beside it. Its `scratch`
-field is `&dyn ScratchFiles`: a copy of a file, or a path that holds nothing, in a directory of its own under a given
-temporary directory, which goes with its handle. Its `programs` field is the program port, `&dyn RunPrograms`: a domain
-module that starts a program takes it, and never starts a process itself. The file and program ports, `Diagnostics`, and
-`Log` are re-exported by `lib.rs`, so that an entry test can build them.
+and never names the file system itself. Its `file_writer` field is the write side, `&dyn WriteFiles`: directory
+creation, entry removal, and one read-modify-write of one file under a lock, which replaces the file through a temporary
+file beside it. Removal follows ancestor directories but removes symbolic links themselves, including dangling ones,
+and does not follow links within a removed tree. A missing entry succeeds; removal grants neither confinement nor
+rollback. Its `scratch` field is `&dyn ScratchFiles`: a copy of a file, or a path that holds nothing, in a directory of
+its own under a given temporary directory, which goes with its handle. Its `programs` field is the program port,
+`&dyn RunPrograms`: a domain module that starts a program takes it, and never starts a process itself. The file and
+program ports, `Diagnostics`, and `Log` are re-exported by `lib.rs`, so that an entry test can build them.
+
+`ReadFiles`, `WriteFiles`, `RunPrograms`, and `CommandTracer` are `Sync`, so their references may be shared with scoped
+workers. An operation span is created and dropped locally on its worker and need not be `Send`; the command span stays
+open until those operations end. Tracer state locks cover neither an operation handle's lifetime nor exporter work.
+These bounds grant no permission to start a thread. Only `bootstrap.rs` may start scoped workers for reconciliation,
+and every worker must be joined before reconciliation returns, on failure as on success. This is permission for that
+implementation, not a claim that reconciliation starts workers. No library worker may outlive its caller;
+`trace-export` is the sole thread allowed to do so, under the cap described above.
+
+The program port runs git or `/bin/sh -c`. A call carries a timeout, environment removals and overlays, and its stdin
+choice. Removals apply before overlays, for that call alone; neither changes the stored snapshot. `run` captures
+stdout and stderr separately; `stream` delivers their merged byte lines through a callback, without newline delimiters,
+and delivers a final unterminated line too. Its default implementation returns `Unsupported`. The adapter uses one
+shared OS pipe for streaming, preserves write order, and enforces the deadline for either form without a reader thread;
+EOF alone is not child exit. Both programs use the snapshot without `WINTER_LAUNCH_TIME` and with the default SSH
+command when absent; only git gets the forced C locale, while Shell preserves the snapshot's locale.
+
+Program stdin is a separate permission from the environment snapshot. Calls normally select empty stdin; inheriting
+process stdin requires both the call's explicit request and authorization supplied at the process boundary. An
+in-memory invocation grants no such authorization: its stdin handle is not the process stdin. The program adapter
+alone applies the permission when starting the child; a denied request uses null input. `Invocation` carries the
+permission through `run` to `OsPrograms::new`; only `main.rs` grants it in production. A domain module never reaches
+process stdin itself. The isolated test exception is owned by [testing.md](../standards/testing.md#tiers).
 
 | Module                               | Holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -114,8 +114,9 @@ pub fn span_name(command_path: &[String]) -> String {
 
 /// The port [`run`](crate::run) announces the command to: the host's tracer opens the command span there.
 ///
-/// It takes `&self` because the host shares its tracer with the process boundary, which ends the span.
-pub trait CommandTracer {
+/// It takes `&self` because the host shares its tracer with the process boundary, which ends the span, and
+/// with scoped workers, which open their own operation spans.
+pub trait CommandTracer: Sync {
     /// Called at most once for an invocation, when a command name was resolved and logging is: before the
     /// command runs, and before a command's help or a usage error of a command alike. An invocation that ends
     /// at the root never calls it.

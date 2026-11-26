@@ -368,6 +368,8 @@ fn git<A: AsRef<OsStr>>(
     programs
         .run(&Call {
             program: Program::Git,
+            stdin: crate::programs::Stdin::Null,
+            remove: &[],
             args: &args,
             cwd,
             timeout: None,

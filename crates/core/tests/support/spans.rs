@@ -1,6 +1,6 @@
 //! A tracer that records the operation spans a test opens, for the component tests that assert them.
 
-use std::cell::RefCell;
+use std::sync::Mutex;
 
 use winter_workspace_core::{CommandTracer, OperationSpan, TraceLog};
 
@@ -9,7 +9,7 @@ pub type Span = (String, Vec<(String, String)>);
 
 /// Records every operation span opened through it, in order.
 #[derive(Default)]
-pub struct Spans(pub RefCell<Vec<Span>>);
+pub struct Spans(pub Mutex<Vec<Span>>);
 
 struct Open;
 
@@ -29,7 +29,10 @@ impl CommandTracer for Spans {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect();
-        self.0.borrow_mut().push((name.to_owned(), attributes));
+        self.0
+            .lock()
+            .expect("the spans")
+            .push((name.to_owned(), attributes));
         Box::new(Open)
     }
 }

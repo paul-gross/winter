@@ -62,6 +62,8 @@ pub struct Invocation<'a> {
     pub env: ProcessEnv,
     pub identity: Identity,
     pub stdin: &'a mut dyn BufRead,
+    /// Whether children may inherit the host's stdin descriptor, independently of this buffered reader.
+    pub inherit_stdin: bool,
     pub stdout: &'a mut dyn Write,
     pub stderr: &'a mut dyn Write,
     pub stdout_is_terminal: bool,
@@ -169,6 +171,7 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
         env,
         identity,
         stdin,
+        inherit_stdin,
         stdout,
         stderr,
         stdout_is_terminal,
@@ -212,7 +215,7 @@ pub(crate) fn run_with(entries: &[Entry], invocation: Invocation<'_>) -> Termina
                     return Termination::Internal(Box::new(InternalError::unexpected(error)));
                 }
             };
-            let programs = OsPrograms::new(&env);
+            let programs = OsPrograms::new(&env, inherit_stdin);
             let mut cx = Context {
                 cwd: &cwd,
                 env: &env,
@@ -259,6 +262,7 @@ pub(crate) fn run_in_memory(entries: &[Entry], args: &[&str]) -> (Termination, S
                 version: "0.1.0",
             },
             stdin: &mut stdin,
+            inherit_stdin: false,
             stdout: &mut stdout,
             stderr: &mut stderr,
             stdout_is_terminal: false,

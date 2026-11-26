@@ -47,12 +47,15 @@ impl Fixture {
 
     /// The snapshot, with the stderr it wrote.
     fn run(&self, standalones: &[StandaloneRepository]) -> (Vec<PinSnapshot>, String) {
-        let programs = OsPrograms::new(&ProcessEnv::from_vars(
-            self.tree
-                .env()
-                .variables()
-                .map(|(name, value)| (name.to_owned(), value.to_owned())),
-        ));
+        let programs = OsPrograms::new(
+            &ProcessEnv::from_vars(
+                self.tree
+                    .env()
+                    .variables()
+                    .map(|(name, value)| (name.to_owned(), value.to_owned())),
+            ),
+            false,
+        );
         let ports = PinPorts {
             files: &OsFiles,
             writer: &OsFiles,
