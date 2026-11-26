@@ -73,6 +73,20 @@ pub enum Action {
     AgentsMdUpdated,
 }
 
+impl Action {
+    /// The action name in a reconciliation event's JSON representation.
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::Cloned => "cloned",
+            Self::Exists => "exists",
+            Self::ExcludesUpdated => "excludes_updated",
+            Self::Pinned => "pinned",
+            Self::WorkspaceExcludesUpdated => "workspace_excludes_updated",
+            Self::AgentsMdUpdated => "agents_md_updated",
+        }
+    }
+}
+
 /// A rule of workspace creation or pruning that the invocation violates.
 #[derive(Debug, thiserror::Error)]
 pub enum BootstrapError {
@@ -513,6 +527,23 @@ mod tests {
     use crate::trace::NoTrace;
     use std::io;
     use std::sync::{Condvar, Mutex};
+
+    #[test]
+    fn action_wire_names_are_stable() {
+        for (action, name) in [
+            (Action::Cloned, "cloned"),
+            (Action::Exists, "exists"),
+            (Action::ExcludesUpdated, "excludes_updated"),
+            (Action::Pinned, "pinned"),
+            (
+                Action::WorkspaceExcludesUpdated,
+                "workspace_excludes_updated",
+            ),
+            (Action::AgentsMdUpdated, "agents_md_updated"),
+        ] {
+            assert_eq!(action.wire_name(), name);
+        }
+    }
 
     struct Writer;
     impl WriteFiles for Writer {
