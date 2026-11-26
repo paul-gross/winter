@@ -4,13 +4,11 @@
 //! succeeded, and the first failure is the answer.
 
 use std::ffi::{OsStr, OsString};
-use std::fmt;
 use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::bootstrap::{Action, InitEvent};
-use crate::config_lock::RefKind;
 use crate::config_model::{GitIdentity, ProjectRepository, StandaloneRepository};
 use crate::files::ReadFiles;
 use crate::git::{self, GitFailure};
@@ -20,7 +18,7 @@ use crate::pins::outcome::rendered;
 use crate::ports::Ports;
 use crate::process::ProcessEnv;
 use crate::programs::{Call, Exit, Program, Stdin};
-use crate::termination::{RepoError, RepoMessage, UnsafeReason};
+use crate::termination::{InternalError, RepoError, RepoMessage, UnsafeReason};
 use crate::workspace_files::{PROJECTS_DIR, standalone_location};
 
 /// One repository to reconcile.
@@ -79,32 +77,34 @@ impl Step {
     }
 }
 
-/// Why a step failed.
-#[derive(Debug)]
+/// Why a step failed. A repo error reads as [`rendered`] gives it, wherever it is carried; any other error as
+/// its own text.
+#[derive(Debug, thiserror::Error)]
 pub enum Cause {
-    Git(GitFailure),
-    Repo(Box<RepoError>),
-    Io(io::Error),
-    Pin(PinError),
+    #[error("{}", rendered(.0))]
+    Repo(#[source] Box<RepoError>),
+    /// A git that could not be started.
+    #[error("{0}")]
+    Internal(#[source] Box<InternalError>),
+    #[error("{0}")]
+    Io(#[source] io::Error),
+    #[error("{}", pin_text(.0))]
+    Pin(#[source] PinError),
 }
 
-impl fmt::Display for Cause {
-    /// A repo error reads as [`rendered`] gives it, wherever it is carried; any other error as its own text.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Git(GitFailure::Repo(error))
-            | Self::Repo(error)
-            | Self::Pin(PinError::Repo(error)) => f.write_str(&rendered(error)),
-            Self::Git(GitFailure::Internal(error)) => error.fmt(f),
-            Self::Io(error) => error.fmt(f),
-            Self::Pin(error) => error.fmt(f),
-        }
+fn pin_text(error: &PinError) -> String {
+    match error {
+        PinError::Repo(error) => rendered(error),
+        error => error.to_string(),
     }
 }
 
 impl From<GitFailure> for Cause {
     fn from(failure: GitFailure) -> Self {
-        Self::Git(failure)
+        match failure {
+            GitFailure::Repo(error) => Self::Repo(error),
+            GitFailure::Internal(error) => Self::Internal(error),
+        }
     }
 }
 
@@ -119,6 +119,7 @@ impl From<io::Error> for Cause {
 #[error("{cause} {}", outcome(*.step, *.pins))]
 pub struct CheckoutError {
     pub step: Step,
+    #[source]
     pub cause: Cause,
     /// Whether the repository has a pin step: a standalone does, a project does not.
     pins: bool,
@@ -231,28 +232,32 @@ fn location(
     if c.standalone.is_some() && resolved == ports.files.resolve(declared.root) {
         return Err(unsafe_location(c, UnsafeReason::OutsideWorkspace));
     }
-    let not_a_repository = || {
-        refused(RepoMessage::NotARepository {
-            name: name(),
-            path: path(),
-        })
+    let not_a_repository = || RepoMessage::NotARepository {
+        name: name(),
+        path: path(),
     };
     // Git cannot start in what is no directory.
     if !ports.files.is_dir(&c.location) {
-        return Err(not_a_repository());
+        return Err(refused(not_a_repository()));
     }
-    if git::toplevel(ports.programs, ports.tracer, c.name, &c.location)? != Some(resolved) {
-        return Err(not_a_repository());
+    let top = git::probe_toplevel(ports.programs, ports.tracer, c.name, &c.location)?;
+    if top.answer != Some(resolved) {
+        return Err(refused_by(top.call, not_a_repository()));
     }
     if let Some(url) = c.url {
-        let found = git::origin_url(ports.programs, ports.tracer, c.name, &c.location)?;
-        if found.as_deref() != Some(OsStr::new(url)) {
-            return Err(refused(RepoMessage::OriginMismatch {
+        let origin = git::probe_origin_url(ports.programs, ports.tracer, c.name, &c.location)?;
+        let found = origin.answer;
+        if !found
+            .as_deref()
+            .is_some_and(|found| is_origin(ports.files, declared.root, url, found))
+        {
+            let message = RepoMessage::OriginMismatch {
                 name: name(),
                 path: path(),
                 declared: url.to_owned(),
                 found: found.map(|found| found.to_string_lossy().into_owned()),
-            }));
+            };
+            return Err(refused_by(origin.call, message));
         }
     }
     emit(action(c, Action::Exists, String::new()));
@@ -267,13 +272,45 @@ fn unsafe_location(c: &Checkout<'_>, reason: UnsafeReason) -> Cause {
     })
 }
 
+/// A repo error that rests on what the git call `call` answered.
+fn refused_by(mut call: Box<RepoError>, message: RepoMessage) -> Cause {
+    call.message = message;
+    Cause::Repo(call)
+}
+
+/// Whether `found`, the `remote.origin.url` of a checkout, is the declared `url`. The two compare as exact
+/// strings, but for a relative path: the clone, run in the root, records it as the root followed by the path.
+fn is_origin(files: &dyn ReadFiles, root: &Path, url: &str, found: &OsStr) -> bool {
+    if found == OsStr::new(url) {
+        return true;
+    }
+    // Git takes a colon before the first slash for a URL or an SSH address.
+    let colon_first = url
+        .find(':')
+        .is_some_and(|colon| url.find('/').is_none_or(|slash| colon < slash));
+    !colon_first
+        && Path::new(url).is_relative()
+        && [root.to_path_buf(), files.resolve(root)]
+            .iter()
+            .any(|root| root.join(url).as_os_str() == found)
+}
+
 /// Whether a standalone may be cloned into its location, symbolic links resolved: below the root, outside the
 /// reserved directories, and apart from every other declared repository.
+///
+/// A location with a `..` is outside the workspace wherever it ends: creating the directories on the way
+/// follows it as written, through places the resolved location says nothing of.
 fn confined(
     files: &dyn ReadFiles,
     declared: &Declared<'_>,
     c: &Checkout<'_>,
 ) -> Result<(), UnsafeReason> {
+    if c.location
+        .components()
+        .any(|part| part == Component::ParentDir)
+    {
+        return Err(UnsafeReason::OutsideWorkspace);
+    }
     let root = declared.root;
     let location = files.resolve(&c.location);
     let resolved_root = files.resolve(root);
@@ -570,14 +607,13 @@ fn pin(
     if let Some((kind, commit)) =
         materialize(ports, declared.root, standalone).map_err(Cause::Pin)?
     {
-        let kind = match kind {
-            RefKind::Branch => "branch",
-            RefKind::Tag => "tag",
-            RefKind::Commit => "commit",
-        };
         // A recorded commit is kept as read, so it may be shorter than the 8 characters shown.
         let short: String = commit.chars().take(8).collect();
-        emit(action(c, Action::Pinned, format!("{kind} {short}")));
+        emit(action(
+            c,
+            Action::Pinned,
+            format!("{} {short}", kind.as_str()),
+        ));
     }
     Ok(())
 }
@@ -646,11 +682,38 @@ mod tests {
 
         for cause in [
             Cause::Repo(error()),
-            Cause::Git(GitFailure::Repo(error())),
+            Cause::from(GitFailure::Repo(error())),
             Cause::Pin(PinError::Repo(error())),
         ] {
             assert_eq!(cause.to_string(), text);
         }
+    }
+
+    #[test]
+    fn a_failure_keeps_its_cause_as_its_source() {
+        let failure = CheckoutError {
+            step: Step::Excludes,
+            cause: Cause::Io(io::Error::other("boom")),
+            pins: false,
+        };
+
+        let cause = std::error::Error::source(&failure).expect("a cause");
+        let io = cause.source().expect("the error behind the cause");
+
+        assert_eq!(io.to_string(), "boom");
+    }
+
+    #[test]
+    fn a_relative_url_is_also_the_path_the_clone_records_for_it() {
+        let files = MemoryFiles::default();
+        let is =
+            |url: &str, found: &str| is_origin(&files, Path::new("/ws"), url, OsStr::new(found));
+
+        assert!(is("../remote.git", "/ws/../remote.git"));
+        assert!(is("dir/a:b", "/ws/dir/a:b"));
+        assert!(!is("../remote.git", "/remote.git"));
+        assert!(!is("host:a.git", "/ws/host:a.git"));
+        assert!(!is("https://h/a", "https://h/a.git"));
     }
 
     fn env(pairs: &[(&str, &str)]) -> ProcessEnv {

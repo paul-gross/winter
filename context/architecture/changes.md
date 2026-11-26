@@ -18,14 +18,14 @@ A visible command also has a topic, and the reference to that topic is a [shared
 
 ## What stays a shared edit
 
-| Change                                    | File                                                                       |
-| ----------------------------------------- | -------------------------------------------------------------------------- |
-| A domain module                           | One `mod` line in `crates/core/src/lib.rs`, or in the parent module's file |
-| A `Termination` variant                   | `crates/core/src/termination.rs`                                           |
-| A `CommandError` or `ConfigError` variant | `crates/core/src/termination.rs`                                           |
-| A port, or a field of `Context`           | `crates/core/src/context.rs` and `crates/core/src/process.rs`              |
-| A third-party crate                       | The package's `Cargo.toml`, and `Cargo.lock`                               |
-| A module only a domain entry may call     | The list of names in `crates/dev/src/architecture.rs`                      |
+| Change                                    | File                                                                                                                                                                                                 |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A domain module                           | One `mod` line in `crates/core/src/lib.rs`, or in the parent module's file                                                                                                                           |
+| A `Termination` variant                   | `crates/core/src/termination.rs`                                                                                                                                                                     |
+| A `CommandError` or `ConfigError` variant | `crates/core/src/termination.rs`                                                                                                                                                                     |
+| A port, or a field of `Context`           | `crates/core/src/context.rs` and `crates/core/src/process.rs`                                                                                                                                        |
+| A third-party crate                       | The package's `Cargo.toml`, and `Cargo.lock`                                                                                                                                                         |
+| A module only a domain entry may call     | The list of names in `crates/dev/src/architecture.rs`                                                                                                                                                |
 | A topic                                   | A Markdown file under `crates/core/topics/`, found by the library's build script, and a reference to it from `root` or from its group's topic, since the build refuses a topic `root` does not reach |
 
 Work that is built as parallel changes lands these edits first, in one change, with the module files it declares present
@@ -114,13 +114,13 @@ handler, and there `pending` stays false.
 
 A command file names none of these:
 
-| Area                                 | Names a command file may not hold                                                                                                                                                                        |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The file port                        | `ReadFiles`, `WriteFiles`, `ScratchFiles`, `OsFiles`                                                                                                                                                     |
-| The program port                     | `RunPrograms`, `OsPrograms`                                                                                                                                                                              |
+| Area                                 | Names a command file may not hold                                                                                                                                                                                      |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The file port                        | `ReadFiles`, `WriteFiles`, `ScratchFiles`, `OsFiles`                                                                                                                                                                   |
+| The program port                     | `RunPrograms`, `OsPrograms`                                                                                                                                                                                            |
 | Modules a domain entry stands on     | `workspace_root`, `workspace_files`, `config_file`, `config_load`, `config_lock`, `config_merge`, `config_model`, `config_edit`, `state_registry`, `environments`, `drift`, `workspace_exclude`, `git::`, `checkout::` |
-| File formats                         | `toml::`, `toml_edit`                                                                                                                                                                                    |
-| Writing, and how a failed write ends | `writeln!`, `write!(`, `to_writer`, `InternalError`, `Backtrace`                                                                                                                                         |
+| File formats                         | `toml::`, `toml_edit`                                                                                                                                                                                                  |
+| Writing, and how a failed write ends | `writeln!`, `write!(`, `to_writer`, `InternalError`, `Backtrace`                                                                                                                                                       |
 
 The architecture test checks the names by scanning each file under `crates/core/src/commands/` as text. A test module
 and a comment are checked like the rest, and a failure names the file, the line, and the name.
@@ -203,10 +203,11 @@ whose variants `Config` and `Internal` become `Termination::Config` and `Termina
 what each of the two carries, and so never names the type of an internal failure. The `ListError` of `locations::list`
 has a third variant, `Repo`, for a git call of a worktree probe that failed, which becomes `Termination::Repo`. It holds
 its error in a box already, because a `Result` whose error is as wide as a `RepoError` is refused by the `clippy` step,
-and the command file hands that box on. `pins::repin::repin` and `pins::freeze::freeze` fail with `PinError`, whose three variants hold their
-errors in boxes that become `Termination::Repo`, `Termination::Config`, and `Termination::Internal` as they are, and it
-answers a `RunEnd` otherwise: a completed run becomes `Termination::Success` or, when an outcome was a pin error,
-`Termination::Reported`, and a run the sink stopped becomes the ending the sink gave.
+and the command file hands that box on. `pins::repin::repin` and `pins::freeze::freeze` fail with `PinError`, whose
+three variants hold their errors in boxes that become `Termination::Repo`, `Termination::Config`, and
+`Termination::Internal` as they are, and it answers a `RunEnd` otherwise: a completed run becomes `Termination::Success`
+or, when an outcome was a pin error, `Termination::Reported`, and a run the sink stopped becomes the ending the sink
+gave.
 
 An entry that reports a condition on stderr takes a `&mut Diagnostics`, the borrow of the stderr handle and the log its
 command file built, and writes through `crates/core/src/diagnostics.rs`: `repository_catalog::list` writes the drift

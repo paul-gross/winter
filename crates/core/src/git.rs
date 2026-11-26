@@ -309,6 +309,13 @@ pub fn clone(
     succeeded(programs, repo, root, GitOperation::Clone, &args, &mut *span).map(drop)
 }
 
+/// What a git read answered, `None` when git had no answer, and the call that asked, for an error that rests
+/// on it. The message of `call` is that of a failure of the operation; a caller states its own.
+pub(crate) struct Probe<T> {
+    pub(crate) answer: Option<T>,
+    pub(crate) call: Box<RepoError>,
+}
+
 /// The top directory of the work tree that holds `path`, as git names it; `None` when git answers none, a
 /// non-zero exit.
 pub fn toplevel(
@@ -317,9 +324,22 @@ pub fn toplevel(
     repo: &str,
     path: &Path,
 ) -> Result<Option<PathBuf>, GitFailure> {
+    probe_toplevel(programs, tracer, repo, path).map(|probe| probe.answer)
+}
+
+/// [`toplevel`], with the call.
+pub(crate) fn probe_toplevel(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+) -> Result<Probe<PathBuf>, GitFailure> {
     let _span = tracer.operation(REV_PARSE_SPAN, &[(REPO_ATTRIBUTE, repo)]);
-    let finished = run(programs, path, &["rev-parse", "--show-toplevel"])?;
-    Ok((finished.exit == Exit::Code(0)).then(|| line(finished.stdout).into()))
+    let args = ["rev-parse", "--show-toplevel"];
+    let finished = run(programs, path, &args)?;
+    let call = call_error(&finished, repo, path, GitOperation::Toplevel, &args);
+    let answer = (finished.exit == Exit::Code(0)).then(|| line(finished.stdout).into());
+    Ok(Probe { answer, call })
 }
 
 /// The `remote.origin.url` of the checkout at `path`, as its configuration holds it; `None` when it is unset.
@@ -329,8 +349,28 @@ pub fn origin_url(
     repo: &str,
     path: &Path,
 ) -> Result<Option<OsString>, GitFailure> {
-    let args = ["--get", "remote.origin.url"].map(OsStr::new);
-    config_get(programs, tracer, repo, path, GitOperation::OriginUrl, &args)
+    probe_origin_url(programs, tracer, repo, path).map(|probe| probe.answer)
+}
+
+/// [`origin_url`], with the call.
+pub(crate) fn probe_origin_url(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+) -> Result<Probe<OsString>, GitFailure> {
+    let mut span = tracer.operation(CONFIG_SPAN, &[(REPO_ATTRIBUTE, repo)]);
+    let args = ["config", "--get", "remote.origin.url"];
+    let operation = GitOperation::OriginUrl;
+    let finished = run(programs, path, &args)?;
+    let call = call_error(&finished, repo, path, operation, &args);
+    // Exit 1 is how git says the key is unset.
+    if finished.exit == Exit::Code(1) {
+        return Ok(Probe { answer: None, call });
+    }
+    let finished = ended(finished, repo, path, operation, &args, &mut *span)?;
+    let answer = Some(line(finished.stdout));
+    Ok(Probe { answer, call })
 }
 
 /// Sets `key` to `value` in the configuration of the repository of the checkout at `path`.
@@ -400,7 +440,7 @@ pub(crate) fn worktree_config_enabled(
     path: &Path,
 ) -> Result<bool, GitFailure> {
     let args = ["--local", "--type=bool", "--get", WORKTREE_CONFIG].map(OsStr::new);
-    let value = config_get(programs, tracer, repo, path, GitOperation::Config, &args)?;
+    let value = config_get(programs, tracer, repo, path, &args)?;
     Ok(value.is_some_and(|value| value == "true"))
 }
 
@@ -430,7 +470,7 @@ pub(crate) fn file_setting(
         OsStr::new("--get"),
         OsStr::new(key),
     ];
-    config_get(programs, tracer, repo, path, GitOperation::Config, &args)
+    config_get(programs, tracer, repo, path, &args)
 }
 
 /// Sets `key` to `value` in the configuration file `file`.
@@ -479,7 +519,7 @@ pub(crate) fn worktree_excludes_file(
     path: &Path,
 ) -> Result<Option<OsString>, GitFailure> {
     let args = ["--worktree", "--get", EXCLUDES_FILE].map(OsStr::new);
-    config_get(programs, tracer, repo, path, GitOperation::Config, &args)
+    config_get(programs, tracer, repo, path, &args)
 }
 
 /// Sets the `core.excludesFile` of the worktree at `path` alone to `file`.
@@ -499,13 +539,12 @@ pub(crate) fn set_worktree_excludes_file(
 }
 
 /// What `git config <args>`, a `--get`, reads in `path`: `None` on exit 1, which is how git says the key is
-/// unset. Any other non-zero exit is the error of `operation`.
+/// unset. Any other non-zero exit is an error.
 fn config_get(
     programs: &dyn RunPrograms,
     tracer: &dyn CommandTracer,
     repo: &str,
     path: &Path,
-    operation: GitOperation,
     args: &[&OsStr],
 ) -> Result<Option<OsString>, GitFailure> {
     let mut span = tracer.operation(CONFIG_SPAN, &[(REPO_ATTRIBUTE, repo)]);
@@ -514,7 +553,14 @@ fn config_get(
     if finished.exit == Exit::Code(1) {
         return Ok(None);
     }
-    let finished = ended(finished, repo, path, operation, &args, &mut *span)?;
+    let finished = ended(
+        finished,
+        repo,
+        path,
+        GitOperation::Config,
+        &args,
+        &mut *span,
+    )?;
     Ok(Some(line(finished.stdout)))
 }
 
@@ -612,12 +658,25 @@ fn ended<A: AsRef<OsStr>>(
         return Ok(finished);
     }
     span.failed(REPO_ERROR_TYPE);
+    Err(GitFailure::Repo(call_error(
+        &finished, repo, cwd, operation, args,
+    )))
+}
+
+/// The repo error that carries the finished call of git made for `operation`.
+fn call_error<A: AsRef<OsStr>>(
+    finished: &Finished,
+    repo: &str,
+    cwd: &Path,
+    operation: GitOperation,
+    args: &[A],
+) -> Box<RepoError> {
     let stderr = String::from_utf8_lossy(&finished.stderr);
     let stderr = stderr.trim();
     let mut args = args
         .iter()
         .map(|arg| arg.as_ref().to_string_lossy().into_owned());
-    Err(GitFailure::Repo(Box::new(RepoError {
+    Box::new(RepoError {
         message: RepoMessage::GitFailure {
             operation,
             repo: repo.to_owned(),
@@ -628,7 +687,7 @@ fn ended<A: AsRef<OsStr>>(
         cwd: Some(cwd.to_path_buf()),
         exit: Some(finished.exit.number()),
         stderr: (!stderr.is_empty()).then(|| stderr.to_owned()),
-    })))
+    })
 }
 
 #[cfg(test)]
