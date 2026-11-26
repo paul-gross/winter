@@ -34,6 +34,7 @@ const FETCH_SPAN: &str = "git fetch";
 const STASH_PUSH_SPAN: &str = "git stash push";
 const STASH_POP_SPAN: &str = "git stash pop";
 const CONFIG_SPAN: &str = "git config";
+const CLONE_SPAN: &str = "git clone";
 
 /// The one attribute of a span: the name of the repository the operation works on.
 pub(crate) const REPO_ATTRIBUTE: &str = "winter.repo";
@@ -287,6 +288,64 @@ pub fn stash_pop(
     .map(drop)
 }
 
+/// Clones `url` into `dest`, the checkout of the repository `repo`, running git in `root`: `git clone
+/// [--branch <branch>] -- <url> <dest>`, with the whole history and no submodule recursion. Without a `branch`
+/// the clone lands on the remote's default `HEAD`. It has no timeout and is not retried.
+pub fn clone(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    root: &Path,
+    url: &str,
+    dest: &Path,
+    branch: Option<&str>,
+) -> Result<(), GitFailure> {
+    let mut span = tracer.operation(CLONE_SPAN, &[(REPO_ATTRIBUTE, repo)]);
+    let mut args = vec![OsStr::new("clone")];
+    if let Some(branch) = branch {
+        args.extend([OsStr::new("--branch"), OsStr::new(branch)]);
+    }
+    args.extend([OsStr::new("--"), OsStr::new(url), dest.as_os_str()]);
+    succeeded(programs, repo, root, GitOperation::Clone, &args, &mut *span).map(drop)
+}
+
+/// The top directory of the work tree that holds `path`, as git names it; `None` when git answers none, a
+/// non-zero exit.
+pub fn toplevel(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+) -> Result<Option<PathBuf>, GitFailure> {
+    let _span = tracer.operation(REV_PARSE_SPAN, &[(REPO_ATTRIBUTE, repo)]);
+    let finished = run(programs, path, &["rev-parse", "--show-toplevel"])?;
+    Ok((finished.exit == Exit::Code(0)).then(|| line(finished.stdout).into()))
+}
+
+/// The `remote.origin.url` of the checkout at `path`, as its configuration holds it; `None` when it is unset.
+pub fn origin_url(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+) -> Result<Option<OsString>, GitFailure> {
+    let args = ["--get", "remote.origin.url"].map(OsStr::new);
+    config_get(programs, tracer, repo, path, GitOperation::OriginUrl, &args)
+}
+
+/// Sets `key` to `value` in the configuration of the repository of the checkout at `path`.
+pub fn set_config(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+    key: &str,
+    value: &str,
+) -> Result<(), GitFailure> {
+    let args = [key, value].map(OsStr::new);
+    config_write(programs, tracer, repo, path, &args)
+}
+
 /// The git directory whose `info/exclude` the checkout at `path` reads, absolute, as git names it.
 pub(crate) fn exclude_git_directory(
     programs: &dyn RunPrograms,
@@ -341,7 +400,7 @@ pub(crate) fn worktree_config_enabled(
     path: &Path,
 ) -> Result<bool, GitFailure> {
     let args = ["--local", "--type=bool", "--get", WORKTREE_CONFIG].map(OsStr::new);
-    let value = config_get(programs, tracer, repo, path, &args)?;
+    let value = config_get(programs, tracer, repo, path, GitOperation::Config, &args)?;
     Ok(value.is_some_and(|value| value == "true"))
 }
 
@@ -371,7 +430,7 @@ pub(crate) fn file_setting(
         OsStr::new("--get"),
         OsStr::new(key),
     ];
-    config_get(programs, tracer, repo, path, &args)
+    config_get(programs, tracer, repo, path, GitOperation::Config, &args)
 }
 
 /// Sets `key` to `value` in the configuration file `file`.
@@ -420,7 +479,7 @@ pub(crate) fn worktree_excludes_file(
     path: &Path,
 ) -> Result<Option<OsString>, GitFailure> {
     let args = ["--worktree", "--get", EXCLUDES_FILE].map(OsStr::new);
-    config_get(programs, tracer, repo, path, &args)
+    config_get(programs, tracer, repo, path, GitOperation::Config, &args)
 }
 
 /// Sets the `core.excludesFile` of the worktree at `path` alone to `file`.
@@ -440,12 +499,13 @@ pub(crate) fn set_worktree_excludes_file(
 }
 
 /// What `git config <args>`, a `--get`, reads in `path`: `None` on exit 1, which is how git says the key is
-/// unset. Any other non-zero exit is an error.
+/// unset. Any other non-zero exit is the error of `operation`.
 fn config_get(
     programs: &dyn RunPrograms,
     tracer: &dyn CommandTracer,
     repo: &str,
     path: &Path,
+    operation: GitOperation,
     args: &[&OsStr],
 ) -> Result<Option<OsString>, GitFailure> {
     let mut span = tracer.operation(CONFIG_SPAN, &[(REPO_ATTRIBUTE, repo)]);
@@ -454,14 +514,7 @@ fn config_get(
     if finished.exit == Exit::Code(1) {
         return Ok(None);
     }
-    let finished = ended(
-        finished,
-        repo,
-        path,
-        GitOperation::Config,
-        &args,
-        &mut *span,
-    )?;
+    let finished = ended(finished, repo, path, operation, &args, &mut *span)?;
     Ok(Some(line(finished.stdout)))
 }
 

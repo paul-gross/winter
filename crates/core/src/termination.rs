@@ -846,6 +846,9 @@ pub enum RepoMessage {
         command: String,
         cause: String,
     },
+    /// `path` is the location of the checkout, which has no `.git` that names an exclude file.
+    #[error("could not locate .git/info/exclude at {}", .path.display())]
+    NoExcludeFile { name: String, path: PathBuf },
     #[error("refusing to clone {name} into {}: {reason}", .path.display())]
     UnsafeLocation {
         name: String,
@@ -2158,6 +2161,13 @@ mod tests {
                     cause: "no such file".into(),
                 },
                 "`make setup` — no such file",
+            ),
+            (
+                RepoMessage::NoExcludeFile {
+                    name: "a".into(),
+                    path: path.clone(),
+                },
+                "could not locate .git/info/exclude at /ws/x",
             ),
             (
                 unsafe_location(UnsafeReason::OutsideWorkspace),
