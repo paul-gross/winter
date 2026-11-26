@@ -96,7 +96,7 @@ pub fn locate_for_write(
     if directory != common {
         separate_worktree_config(programs, tracer, root, &common)?;
         let current = git::worktree_excludes_file(programs, tracer, REPO, root)?;
-        if current.as_deref() != Some(file.as_path()) {
+        if current.as_deref() != Some(file.as_os_str()) {
             git::set_worktree_excludes_file(programs, tracer, REPO, root, &file)?;
         }
     }

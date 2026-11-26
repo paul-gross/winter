@@ -411,16 +411,16 @@ pub(crate) fn unset_file_setting(
     config_write(programs, tracer, repo, path, &args)
 }
 
-/// The `core.excludesFile` the worktree at `path` has of its own, `None` when it has none.
+/// The `core.excludesFile` the worktree at `path` has of its own, `None` when it has none. It is the text as
+/// git holds it: git reads a trailing `/` as part of the name, which a comparison of paths would not.
 pub(crate) fn worktree_excludes_file(
     programs: &dyn RunPrograms,
     tracer: &dyn CommandTracer,
     repo: &str,
     path: &Path,
-) -> Result<Option<PathBuf>, GitFailure> {
+) -> Result<Option<OsString>, GitFailure> {
     let args = ["--worktree", "--get", EXCLUDES_FILE].map(OsStr::new);
-    let value = config_get(programs, tracer, repo, path, &args)?;
-    Ok(value.map(PathBuf::from))
+    config_get(programs, tracer, repo, path, &args)
 }
 
 /// Sets the `core.excludesFile` of the worktree at `path` alone to `file`.

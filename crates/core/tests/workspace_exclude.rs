@@ -405,26 +405,30 @@ fn each_linked_worktree_of_one_repository_is_given_an_exclude_file_of_its_own() 
 }
 
 #[test]
-fn a_worktree_whose_excludes_file_names_another_file_is_given_its_own_again() {
+fn a_worktree_whose_excludes_file_is_any_other_text_is_given_its_own_again() {
     let f = fixture();
     let main = f.plain();
     let linked = f.worktree(&main, "linked");
     f.locate_for_write(&linked).expect("located");
-    f.out(
-        &linked,
-        &["config", "--worktree", "core.excludesFile", "/elsewhere"],
-    );
-
-    f.locate_for_write(&linked).expect("located");
-
     let file = f.exclude_of(&linked);
-    assert_eq!(
+    let file = file.to_str().expect("a UTF-8 path");
+
+    // git reads the last two as another file, though each has the components of the right one.
+    for other in [
+        "/elsewhere".to_owned(),
+        format!("{file}/"),
+        format!("{file}/."),
+    ] {
         f.out(
             &linked,
-            &["config", "--worktree", "--get", "core.excludesFile"]
-        ),
-        file.to_str().expect("a UTF-8 path")
-    );
+            &["config", "--worktree", "core.excludesFile", &other],
+        );
+
+        f.locate_for_write(&linked).expect("located");
+
+        let args = ["config", "--worktree", "--get", "core.excludesFile"];
+        assert_eq!(f.out(&linked, &args), file, "{other}");
+    }
 }
 
 #[test]
