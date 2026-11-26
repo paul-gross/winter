@@ -1,7 +1,9 @@
 //! The git operations over the program port, what they answer on failure, and the commit id a git call returns.
 
 use std::ffi::{OsStr, OsString};
-use std::path::Path;
+use std::iter;
+use std::os::unix::ffi::OsStringExt;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 mod remote;
@@ -31,6 +33,7 @@ const CHECKOUT_SPAN: &str = "git checkout";
 const FETCH_SPAN: &str = "git fetch";
 const STASH_PUSH_SPAN: &str = "git stash push";
 const STASH_POP_SPAN: &str = "git stash pop";
+const CONFIG_SPAN: &str = "git config";
 
 /// The one attribute of a span: the name of the repository the operation works on.
 pub(crate) const REPO_ATTRIBUTE: &str = "winter.repo";
@@ -284,20 +287,127 @@ pub fn stash_pop(
     .map(drop)
 }
 
+/// The git directory of the repository that holds `path`, absolute, as git names it.
+pub(crate) fn absolute_git_dir(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+) -> Result<PathBuf, GitFailure> {
+    exclude_directory(programs, tracer, repo, path, "--absolute-git-dir")
+}
+
+/// The common directory of the repository that holds `path`, as git names it: absolute, or relative to
+/// `path`.
+pub(crate) fn common_dir(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+) -> Result<PathBuf, GitFailure> {
+    exclude_directory(programs, tracer, repo, path, "--git-common-dir")
+}
+
+/// One directory `git rev-parse <flag>` names, for the lookup of an exclude file.
+fn exclude_directory(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+    flag: &str,
+) -> Result<PathBuf, GitFailure> {
+    let mut span = tracer.operation(REV_PARSE_SPAN, &[(REPO_ATTRIBUTE, repo)]);
+    let args = ["rev-parse", flag];
+    let finished = succeeded(
+        programs,
+        repo,
+        path,
+        GitOperation::ExcludeLocate,
+        &args,
+        &mut *span,
+    )?;
+    Ok(line(finished.stdout).into())
+}
+
+/// What `git config <args>`, a `--get`, reads in `path`: `None` on exit 1, which is how git says the key is
+/// unset. Any other non-zero exit is an error.
+pub(crate) fn config_get<A: AsRef<OsStr>>(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+    args: &[A],
+) -> Result<Option<OsString>, GitFailure> {
+    let mut span = tracer.operation(CONFIG_SPAN, &[(REPO_ATTRIBUTE, repo)]);
+    let args = config_arguments(args);
+    let finished = run(programs, path, &args)?;
+    if finished.exit == Exit::Code(1) {
+        return Ok(None);
+    }
+    let finished = ended(
+        finished,
+        repo,
+        path,
+        GitOperation::Config,
+        &args,
+        &mut *span,
+    )?;
+    Ok(Some(line(finished.stdout)))
+}
+
+/// Runs `git config <args>`, a write of git configuration, in `path`.
+pub(crate) fn config_write<A: AsRef<OsStr>>(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+    args: &[A],
+) -> Result<(), GitFailure> {
+    let mut span = tracer.operation(CONFIG_SPAN, &[(REPO_ATTRIBUTE, repo)]);
+    let args = config_arguments(args);
+    succeeded(
+        programs,
+        repo,
+        path,
+        GitOperation::Config,
+        &args,
+        &mut *span,
+    )
+    .map(drop)
+}
+
+fn config_arguments<A: AsRef<OsStr>>(args: &[A]) -> Vec<&OsStr> {
+    iter::once(OsStr::new("config"))
+        .chain(args.iter().map(AsRef::as_ref))
+        .collect()
+}
+
+/// The one line git wrote, without its line end, with every other byte kept.
+fn line(mut stdout: Vec<u8>) -> OsString {
+    if stdout.last() == Some(&b'\n') {
+        stdout.pop();
+    }
+    OsString::from_vec(stdout)
+}
+
 /// Runs git with `args` in `cwd`. A git that cannot be started is an internal failure.
-fn run(programs: &dyn RunPrograms, cwd: &Path, args: &[&str]) -> Result<Finished, GitFailure> {
+fn run<A: AsRef<OsStr>>(
+    programs: &dyn RunPrograms,
+    cwd: &Path,
+    args: &[A],
+) -> Result<Finished, GitFailure> {
     run_for(programs, cwd, args, None, &[])
 }
 
 /// [`run`], killed when it outlives `timeout`.
-fn run_for(
+fn run_for<A: AsRef<OsStr>>(
     programs: &dyn RunPrograms,
     cwd: &Path,
-    args: &[&str],
+    args: &[A],
     timeout: Option<Duration>,
     env: &[(&OsStr, &OsStr)],
 ) -> Result<Finished, GitFailure> {
-    let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
+    let args: Vec<&OsStr> = args.iter().map(AsRef::as_ref).collect();
     programs
         .run(&Call {
             program: Program::Git,
@@ -311,12 +421,12 @@ fn run_for(
 
 /// Runs git with `args` in `cwd` for `operation` on the repository `repo`; a non-zero exit is the repo error
 /// of the call, which marks `span` failed.
-fn succeeded(
+fn succeeded<A: AsRef<OsStr>>(
     programs: &dyn RunPrograms,
     repo: &str,
     cwd: &Path,
     operation: GitOperation,
-    args: &[&str],
+    args: &[A],
     span: &mut dyn OperationSpan,
 ) -> Result<Finished, GitFailure> {
     let finished = run(programs, cwd, args)?;
@@ -325,12 +435,12 @@ fn succeeded(
 
 /// What a finished call answers for `operation`: itself on a zero exit, else the repo error of the call, which
 /// marks `span` failed.
-fn ended(
+fn ended<A: AsRef<OsStr>>(
     finished: Finished,
     repo: &str,
     cwd: &Path,
     operation: GitOperation,
-    args: &[&str],
+    args: &[A],
     span: &mut dyn OperationSpan,
 ) -> Result<Finished, GitFailure> {
     if finished.exit == Exit::Code(0) {
@@ -339,14 +449,17 @@ fn ended(
     span.failed(REPO_ERROR_TYPE);
     let stderr = String::from_utf8_lossy(&finished.stderr);
     let stderr = stderr.trim();
+    let mut args = args
+        .iter()
+        .map(|arg| arg.as_ref().to_string_lossy().into_owned());
     Err(GitFailure::Repo(Box::new(RepoError {
         message: RepoMessage::GitFailure {
             operation,
             repo: repo.to_owned(),
         },
         program: Some(Program::Git.name().to_owned()),
-        subcommand: args.first().map(|subcommand| (*subcommand).to_owned()),
-        args: args.iter().skip(1).map(|arg| (*arg).to_owned()).collect(),
+        subcommand: args.next(),
+        args: args.collect(),
         cwd: Some(cwd.to_path_buf()),
         exit: Some(finished.exit.number()),
         stderr: (!stderr.is_empty()).then(|| stderr.to_owned()),
