@@ -291,6 +291,322 @@ after it, cloned from its own local bare repository. Save a copy of `config.toml
 **Success.** The exits and streams are as stated, and the before/after comparisons are kept as evidence. No command in
 this exercise runs against the real workspace.
 
+### `workspace:manual-ws-init`
+
+Exercises bare workspace reconciliation, concurrent invocations, and recovery after interruption. Use it when changing
+bootstrap orchestration, `ws init`, or its served guidance. This is a Linux/Bash exercise using `setsid`, `ps`, and
+`jq` for manual supervision and JSON inspection. No service is needed. Never install the binary, run it in the development workspace, or use
+real remotes. Automated coverage remains in the unit, component, and executable tiers; this method is not new
+recorded-reference parity.
+
+**Setup.** Create a fresh temporary directory outside any real workspace; verify that no ancestor holds
+`.winter/config.toml`. Work only in a new `workspace/` beneath it, with a `.winter/config.toml` made for this run;
+the fixture helper gives each case its own such directory. After the repository bootstrap, run the following from
+the checkout. In a managed feature
+environment, complete its provision step first. Keep this shell for the exercise. Do not enable `set -e`: expected
+failures must have their exit codes captured.
+
+```bash
+cargo build --workspace --locked || exit 1
+binary=$(realpath target/debug/winter-workspace)
+git_bin=$(command -v git)
+base=$(realpath "${BLIZZARD_TMPDIR:?set the lease scratch directory}")
+p=$base
+while :; do
+  if test -e "$p/.git" || test -e "$p/.winter/config.toml" ||
+     { test -f "$p/HEAD" && test -d "$p/objects" && test -d "$p/refs"; }; then
+    printf 'Unsafe scratch ancestor: %s\n' "$p" >&2; exit 1
+  fi
+  test "$p" = / && break
+  p=$(dirname "$p")
+done
+tree=$(mktemp -d "$base/manual-ws-init.XXXXXX")
+mkdir -p "$tree"/{bin,home/.config,cache,tmp,git-template,remotes,evidence}
+evidence=$tree/evidence
+printf '[url "%s/remotes/"]\n\tinsteadOf = https://fixture.invalid/\n' "$tree" >"$tree/gitconfig"
+pin=(env -i
+  "PATH=$tree/bin:$(dirname "$git_bin"):/usr/bin:/bin"
+  "HOME=$tree/home" "XDG_CONFIG_HOME=$tree/home/.config" "XDG_CACHE_HOME=$tree/cache"
+  "TMPDIR=$tree/tmp" "GIT_CONFIG_GLOBAL=$tree/gitconfig" GIT_CONFIG_NOSYSTEM=1
+  "GIT_TEMPLATE_DIR=$tree/git-template" "GIT_CEILING_DIRECTORIES=$base" GIT_TERMINAL_PROMPT=0
+  "GIT_AUTHOR_NAME=Fixture Author" GIT_AUTHOR_EMAIL=author@fixture.invalid
+  "GIT_COMMITTER_NAME=Fixture Committer" GIT_COMMITTER_EMAIL=committer@fixture.invalid
+  GIT_AUTHOR_DATE=2001-01-01T00:00:00+0000 GIT_COMMITTER_DATE=2001-01-01T00:00:00+0000
+  TZ=UTC LC_ALL=C.UTF-8 LANG=C.UTF-8 NO_COLOR=1 TERM=dumb COLUMNS=80 LINES=24 OTEL_SDK_DISABLED=true)
+g() { "${pin[@]}" "$git_bin" "$@"; }
+for name in api healthy tools; do
+  g init -b main "$tree/seed-$name"
+  printf 'fixture\n' >"$tree/seed-$name/README"
+  test "$name" != healthy || printf '# fixture extension\n' >"$tree/seed-$name/winter-ext.toml"
+  g -C "$tree/seed-$name" add .
+  g -C "$tree/seed-$name" commit -m seed
+  g -C "$tree/seed-$name" tag v1
+  g clone --bare "$tree/seed-$name" "$tree/remotes/$name.git"
+  g -C "$tree/remotes/$name.git" show-ref >"$evidence/remote-$name.before"
+done
+fixture() {
+  ws=$tree/$1/workspace
+  mkdir -p "$ws/.winter"
+  cat >"$ws/.winter/config.toml" <<'TOML'
+prefix = "probe"
+[[project_repository]]
+name = "api"
+url = "https://fixture.invalid/api.git"
+cmd = ["printf 'api-ready\\n'"]
+[[standalone_repository]]
+name = "tools"
+url = "https://fixture.invalid/tools.git"
+path = "tools"
+TOML
+  if test "${2:-git}" = git; then
+    g init -b main "$ws"
+    mkdir -p "$ws/.git/info"
+    g -C "$ws" add .winter/config.toml
+    g -C "$ws" commit -m fixture
+  fi
+}
+run() {
+  local label=$1; shift
+  (cd "$ws" && "${pin[@]}" "$binary" "$@") \
+    >"$evidence/$label.stdout" 2>"$evidence/$label.stderr"
+  printf '%s\n' "$?" >"$evidence/$label.exit"
+}
+snapshot() {
+  (cd "$ws" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum)
+}
+```
+
+The `pin` array reproduces `crates/test-support/src/env.rs`'s whole environment, not additions to the caller's
+environment. All Git and binary invocations below use it. Fixture URLs are rewritten to the seeded local bare remotes;
+do not substitute network URLs. Check every setup command succeeded before proceeding.
+
+**First run and repeat.**
+
+```bash
+fixture first
+run first-json ws init --json
+cp "$ws/.git/info/exclude" "$evidence/exclude.before"
+stat -c '%i %s %y %z' "$ws/.git/info/exclude" >"$evidence/exclude.stat.before"
+run repeat-text ws init
+cmp "$evidence/exclude.before" "$ws/.git/info/exclude"
+stat -c '%i %s %y %z' "$ws/.git/info/exclude" >"$evidence/exclude.stat.after"
+cmp "$evidence/exclude.stat.before" "$evidence/exclude.stat.after"
+g -C "$ws/projects/api" rev-parse HEAD >"$evidence/api.head"
+g -C "$ws/tools" rev-parse HEAD >"$evidence/tools.head"
+g -C "$ws" status --porcelain=v1 --untracked-files=all >"$evidence/first.status"
+```
+
+Both runs exit 0; status is empty. Compare the HEADs to the corresponding seeded `v1` commits. The first run clones
+both repositories. The repeat clones nothing, reruns `api-ready`, and neither replaces nor writes the exclude file.
+Inspect its exact block markers (`# >>> NAME (managed by winter)` / `# <<< NAME`): one each for
+`winter-dir/projects` (`/projects/`), `winter-workspace/artifacts` (`/.winter/logs/`), `winter-config`
+(`.winter/config/**/*.local.*`), `tools` (`/tools/`), and `winter-workspace/workspace-skills`. The last holds
+six paths: under each of `.claude` and `.codex`, the `skills` directory holds patterns `probe-*` and `probe`;
+under `.opencode`, the `skill` directory holds the same two patterns. It has no success event.
+
+Parse JSON stdout one line at a time (not as one document):
+
+```bash
+while IFS= read -r line; do
+  printf '%s\n' "$line" | jq -e '
+    {target_started: ["target"], target_completed: ["target","success"],
+     repo_action: ["repo","location","action","detail"], repo_error: ["repo","error"],
+     cmd_started: ["repo","command"], cmd_output_line: ["repo","line"],
+     cmd_completed: ["repo","command","returncode"]} as $fields |
+    (keys | sort) == (($fields[.type] + ["type"]) | sort)' || exit 1
+done <"$evidence/first-json.stdout"
+jq -s -e '
+  ([.[] | select(.type == "target_started") | .target] == ["projects/","standalone/"]) and
+  all(.[] | select(.type == "target_completed"); .success)
+' "$evidence/first-json.stdout"
+```
+
+Projects complete before standalones start; repository-local order is clone/exists, excludes if changed, commands,
+then pin if applicable. Cross-repository interleaving is permitted. JSON has no human rows and no stderr on success.
+Human stdout has target/action/command/output rows; successful command completion adds no row.
+
+**Failure, ownership, and modes.** Use `fixture NAME` for each independent case below, so faults do not contaminate
+later cases. Edit only that scratch fixture. Capture each invocation with `run NAME ws init --json`, then repeat
+failures without `--json` to check stderr routing. Save changed files before and after with `cp`, `snapshot`, and
+`stat` as above.
+
+| Case and exact fixture change | Required observation |
+| --- | --- |
+| Failure continuation: replace `printf 'api-ready\\n'` in the config with `exit 7`; append a `[[project_repository]]` named `healthy`, URL `https://fixture.invalid/healthy.git`, and `cmd = ["printf 'healthy-ready\\n'"]`. Write `AGENTS.md` containing `<!-- >>> winter-workspace/safety (managed by winter) -->`, `old`, `<!-- <<< winter-workspace/safety -->`, and `user tail`, each on its own line. | Exit 1; `api` reports command returncode 7 and failed/unattempted step accounting; projects completes false. Healthy and tools still clone, healthy prints its marker, finalization writes the eligible blocks, safety refresh reports `agents_md_updated`, and `user tail` remains. Human error, failed-target, and nonzero command-completion rows are on stderr. Restore api's successful command and expect exit 0. |
+| Retraction: after a successful baseline, remove the entire `[[standalone_repository]]` block and rerun. | Tools' checkout and HEAD remain; only its eligible block disappears, unrelated managed blocks remain. `winter-extensions` reports `cleared`; standalone target is skipped, but finalization runs. With the healthy project extension declared as above, instead expect its `healthy` block containing `/projects/healthy/` to remain and the detail to report remaining names. |
+| Unowned safety: write `user rules` to `AGENTS.md`; also try a fresh fixture with no `AGENTS.md`. | Exit 0; bytes remain identical, or file remains absent; no safety action and no `CLAUDE.md` creation. |
+| Safety conflict: write only the safety begin marker and `old` with no end marker. | Exit 1 after both targets; error names workspace and `AGENTS.md`; bytes unchanged. |
+| Projects only: remove the standalone block before the first run. | Exit 0; `winter-config` exists; no standalone target and no `winter-extensions` action. |
+| Adoption disabled: insert `adopt_extensions = "none"` before the first table header. | Exit 0; tools still clones, `winter-config` exists, but no tools block and no `winter-extensions` action. Add a stale simple-name block manually and rerun: it is preserved. |
+| Non-Git root: use `fixture nongit nongit`. | Both HEADs exist after exit 0; no `.git`, exclude file, or workspace-exclude action is created at the root. |
+| Initial configuration failure: replace config with `prefix = [`; separately run from an empty directory below `$tree` with no workspace ancestor. | Exit 1 before any target event or writes; compare snapshots. |
+| Finalization failure alone: add `cmd = ["mv ../.git/info/exclude ../.git/info/exclude.saved; mkdir ../.git/info/exclude"]` to tools' block. | Projects completes successfully; finalization fails with `winter-extensions`, exit 1, yet the outdated owned safety block from the first case is refreshed. Remove the fault command and restore exclude by removing the empty directory and moving the saved file back before rerunning. |
+
+For the finalization-failure case, use the explicit `tools` path from `fixture` and add the outdated safety block
+before running. Its command changes only the scratch root's exclude after the projects target finishes. Do not use
+permission-based faults that can silently succeed as root.
+
+**Pinned state and concurrent runs.** Use a separate fresh `fixture concurrent`; add `ref = "v1"` inside the standalone
+block. Lock creation is an intentional tracked artifact, not part of the clean-root assertion above. Replace api's
+`cmd` with the following TOML line, a causal two-party barrier:
+
+```toml
+cmd = ["mkdir -p ../../barrier; if mkdir ../../barrier/one 2>/dev/null; then :; else mkdir ../../barrier/two; fi; printf 'overlap-ready\\n'; i=0; until test -d ../../barrier/two; do i=$((i+1)); test $i -lt 300 || exit 9; sleep 0.1; done"]
+```
+
+Preclone api using `g clone https://fixture.invalid/api.git "$ws/projects/api"` (first `mkdir -p "$ws/projects"`),
+so both invocations reach this command rather than losing the barrier participant to a clone race.
+
+```bash
+run concurrent-a ws init --json & a=$!
+run concurrent-b ws init --json & b=$!
+wait "$a"; wait "$b"
+# Restore api's original successful cmd before the recovery run.
+run concurrent-third ws init --json
+cp "$ws/.winter/config.lock" "$evidence/lock.before"
+run pinned-repeat ws init --json
+cmp "$evidence/lock.before" "$ws/.winter/config.lock"
+```
+
+Both barrier directories and both readiness events must exist; a timeout is a failed exercise, not concurrency
+evidence. Both initial exits are 0, or one is 1 solely for the permitted tools destination/clone race. Unrelated Git
+contention is not allowed. The third and repeat exit 0. Inspect excludes for exactly one of every expected block and
+the lock for exactly one tools record, with tag `v1`'s commit. Every seeded checkout has HEAD. A held pin may report
+`pinned` again but must not rewrite the lock. Retain separate streams and exits for both processes.
+
+**Interrupt/restart.** Use `fixture interrupt`. Replace api's command with
+`cmd = ["printf 'interrupt-ready\\n'; exec sleep 300"]`. The following manual supervisor keeps a session leader
+alive until explicitly released, reserving its process-group ID throughout signalling. Its binary runs in the
+foreground, so it does not inherit the ignored SIGINT of an asynchronous shell command. Do not turn this into a test
+that sends SIGINT; tests forbid that. Run this block in the same setup shell:
+
+```bash
+cat >"$tree/interrupt.sh" <<'SH'
+#!/bin/bash
+binary=$1 ws=$2 evidence=$3
+# setsid starts a new session; this shell stays its leader until the release FIFO is written.
+trap ':' INT
+cd "$ws" || exit 1
+printf '%s\n' "$$" >"$evidence/interrupt.leader"
+"$binary" ws init --json >"$evidence/interrupt.stdout" 2>"$evidence/interrupt.stderr"
+printf '%s\n' "$?" >"$evidence/interrupt.exit"
+IFS= read -r release <"$evidence/interrupt.release"
+SH
+mkfifo "$evidence/interrupt.release"
+# Keep the FIFO open without blocking. Do not pass this descriptor to the supervisor.
+exec {release_fd}<>"$evidence/interrupt.release"
+# Job control resets SIGINT for the launched job. setsid --fork then creates a separate session.
+set -m
+"${pin[@]}" setsid --fork --wait bash "$tree/interrupt.sh" "$binary" "$ws" "$evidence" \
+  {release_fd}>&- &
+launcher=$!
+set +m
+deadline=$((SECONDS+30))
+until test -s "$evidence/interrupt.leader"; do
+  test "$SECONDS" -lt "$deadline" || { echo 'No leader; retain tree'; break; }
+  sleep .05
+done
+group=$(cat "$evidence/interrupt.leader")
+leader_start=$(awk '{print $22}' "/proc/$group/stat")
+owned_group() {
+  test -n "$group" && test "$group" -gt 1 &&
+  test "$(awk '{print $22}' "/proc/$group/stat" 2>/dev/null)" = "$leader_start" &&
+  test "$(ps -o sid= -p "$group" | tr -d ' ')" = "$group" &&
+  test "$(ps -o pgid= -p "$group" | tr -d ' ')" = "$group" &&
+  test "$group" != "$(ps -o pgid= -p "$$" | tr -d ' ')"
+}
+deadline=$((SECONDS+30))
+until jq -e 'select(.type == "cmd_output_line" and .line == "interrupt-ready")' \
+    "$evidence/interrupt.stdout" >/dev/null 2>&1; do
+  test "$SECONDS" -lt "$deadline" || { echo 'No readiness; retain tree'; break; }
+  sleep .05
+done
+# Require readiness again; a timed-out loop must never authorize SIGINT.
+jq -e 'select(.type == "cmd_output_line" and .line == "interrupt-ready")' \
+  "$evidence/interrupt.stdout" >/dev/null &&
+  owned_group && kill -INT -- "-$group"
+deadline=$((SECONDS+10))
+until test -s "$evidence/interrupt.exit"; do
+  test "$SECONDS" -lt "$deadline" || { echo 'No exit; use failure cleanup below'; break; }
+  sleep .05
+done
+cat "$evidence/interrupt.exit"                 # must be 1
+printf 'aborted\n' | cmp - "$evidence/interrupt.stderr"
+# Wait for every member other than the reserved leader to disappear, including zombies.
+deadline=$((SECONDS+10))
+while ps -eo pid=,sid= | awk -v g="$group" '$2 == g && $1 != g {found=1} END {exit !found}'; do
+  test "$SECONDS" -lt "$deadline" || { echo 'Survivor; use failure cleanup below'; break; }
+  sleep .05
+done
+ps -eo pid=,ppid=,pgid=,sid=,stat= >"$evidence/interrupt.processes"
+# Only on success, with no other session member remaining:
+if test "$(cat "$evidence/interrupt.exit")" = 1 &&
+   ! ps -eo pid=,sid= | awk -v g="$group" '$2 == g && $1 != g {found=1} END {exit !found}'; then
+  printf 'release\n' >&"$release_fd"
+  group=                         # never signal this ID after releasing the leader
+  deadline=$((SECONDS+10))
+  while ps -o stat= -p "$launcher" | grep -q '^[[:space:]]*[^Z[:space:]]'; do
+    test "$SECONDS" -lt "$deadline" || { echo 'Launcher survived; retain tree'; break; }
+    sleep .05
+  done
+  if ! ps -o stat= -p "$launcher" | grep -q '^[[:space:]]*[^Z[:space:]]'; then
+    wait "$launcher"
+  fi
+fi
+exec {release_fd}>&-
+```
+
+Do not proceed after any failed observation. If the leader is still held and cleanup is needed, first call
+`owned_group` and only on success send `kill -KILL -- "-$group"` once, then clear `group`. Observe the launcher
+with `ps -o stat= -p "$launcher"` for at most ten seconds; call `wait "$launcher"` only after it is absent or a
+zombie. If it or descendants survive, report failure and retain the tree, rather than waiting forever or sending
+another signal to a possibly reused ID. On success the binary was reaped by its supervisor; orphaned children must
+have disappeared through the host's reaper before the leader is released. The final `wait` reaps the owned launcher.
+The bounded readiness polling is observation, not a sleep-based assumption that the child is ready.
+Replace the slow command with the original successful command, then `run restart ws init --json`. Expect exit 0,
+both checkout HEADs, no duplicate blocks or lock entries, and the successful command marker. Never send a signal to
+`0`, `-1`, an inferred process name, or any other environment's process group.
+
+**Discovery and refusal.** In the recovered fixture:
+
+```bash
+run help ws init --help
+snapshot >"$evidence/refusal.before"
+run target-refused ws init alpha
+run all-refused ws init --all
+snapshot >"$evidence/refusal.after"
+cmp "$evidence/refusal.before" "$evidence/refusal.after"
+run context-ws context ws
+run context-init context ws/init
+```
+
+Help and context exit 0; both unsupported forms exit 2 with usage diagnostics and no reconciliation events or state
+changes. `context ws` points to `ws/init`; that topic describes targets, ordered repository steps, repeat commands,
+failure exits, refresh ownership, and the work bare reconciliation leaves out. It names no unsupported command form
+as implemented and links no absent prune topic. Run `workspace:manual-registration` separately in its own disposable
+scratch checkout; retain that method's evidence too. Broken-output termination and stopped admission/joining are
+checked by the executable and component methods, not by sending more signals here.
+
+**Cold discovery/design probe, before push.** Give a fresh read-only agent the target checkout path and only this
+task cue: “Verify workspace reconciliation after an interrupted bootstrap.” Do not name this method or document.
+Retain its navigation and proposed exercise. Record **reached?** separately from **behaved?**: it must discover
+`AGENTS.md` → `context/index.md` → `context/verification/index.md` → this matrix, find this method, and propose an
+absolute built-binary path, scratch local fixtures, the pinned environment, readiness-based owned-group SIGINT, and
+restart evidence rather than running against the real workspace. Correct context and repeat with a fresh agent if
+either answer is no. This design probe does not substitute for executing the CLI exercise.
+
+**Success.** Every case has the stated exit, streams, and state; interruption ends and reaps the owned children before
+restart, and both cold-probe answers are yes.
+
+**Evidence and cleanup.** Keep exits, both streams, configuration versions, state snapshots, exclude bytes and
+metadata, HEADs, lock records, barrier evidence, and the two cold-probe answers under method id
+`workspace:manual-ws-init`. Record every table case's expected/observed result. Compare each remote's `show-ref`
+with `remote-NAME.before`; no remote ref may change. Wait for both concurrent invocations and the interrupt
+supervisor before cleanup. On an unexpected hang, stop only the known owned processes/groups and record failure;
+never delete their tree while they run. Archive evidence outside `$tree`, then remove only the exact path printed
+by `printf '%s\n' "$tree"` after checking it is the `manual-ws-init.*` directory created above. No installed binary,
+source checkout, real workspace, or service is changed.
+
 ## Tools
 
 | Tool             | Use                                                                                                                |

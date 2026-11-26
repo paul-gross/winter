@@ -32,6 +32,11 @@ block with `--standalone`; `--local` writes the machine-local file, which is cre
 followed, is that of a declared standalone is refused, and the file is left unchanged. Adding edits configuration only:
 nothing is cloned.
 
+`ws init` clones missing source checkouts and standalones, verifies existing ones, and updates managed workspace
+content. It runs configured repository commands on every invocation, including repeats; those commands must be safe to
+rerun. Like the other mutating commands, it must only be exercised in the scratch locations permitted by
+[AGENTS.md](./AGENTS.md). Read `winter-workspace context ws/init` for its ordering, recovery, and scope.
+
 `ws worktrees --status` adds the git counts of each location: the commits ahead of and behind the main branch of
 `origin` and the number of dirty files for a worktree, the same against the upstream of its branch for the workspace
 root, and none for a standalone. It runs the `git` found on `PATH`, searching `/bin` and then `/usr/bin` when `PATH` is

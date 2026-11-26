@@ -253,7 +253,8 @@ fn the_matrix_declares_its_manual_methods_each_with_its_setup_its_success_and_wh
             "workspace:manual-repo-add",
             "workspace:manual-repo-remove",
             "workspace:manual-ws-fingerprint",
-            "workspace:manual-ws-update"
+            "workspace:manual-ws-update",
+            "workspace:manual-ws-init"
         ]
     );
     for (id, text) in &methods {

@@ -39,4 +39,4 @@ index, and from there to one document.
 | [context/architecture/index.md](./context/architecture/index.md) | You add a command, a module, an error kind, or a dependency, or ask what may depend on what.                 |
 | [context/standards/index.md](./context/standards/index.md)       | You write or review Rust, or write a test.                                                                   |
 | [context/tooling/index.md](./context/tooling/index.md)           | You set up a checkout, run a gate, or read a gate failure.                                                   |
-| [context/verification/index.md](./context/verification/index.md) | You state how a change is verified, check that its verification is complete, or work on a recorded scenario. |
+| [context/index.md](./context/index.md) | You verify a feature or recovery behavior, state how a change is verified, or work on a recorded scenario; follow its verification route. |
