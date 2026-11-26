@@ -50,6 +50,11 @@ Choose the lowest tier that can make the claim:
   `WINTER_TEST_FIXTURE`, as in [Tests that must fail](#tests-that-must-fail). Only that fixture may authorize inheritance;
   the test process never passes the developer's stdin to a child. This exception permits no arbitrary process
   spawning and changes none of the signal restrictions below.
+  A streaming-timeout test may likewise run in a guarded, ignored child fixture through `invoke`, so the runner's
+  process-group cleanup contains survivors if the adapter fails to terminate a descendant. An isolated-tree FIFO
+  witnesses the direct child's lifetime: readiness precedes judging EOF, and EOF must arrive within a bounded
+  deadline after streaming expires. The child waits for adapter termination, not a fixed sleep; the test reads no
+  process table, probes no PID, and sends no cleanup signal.
 - An executable test starts the binary Cargo built, at `env!("CARGO_BIN_EXE_winter-workspace")`, through `invoke`. It is
   for a claim about the process and not about the library. `invoke_with_stdout` starts it with a stdout that cannot be
   written, one of the three faults of `StdoutFault`: `ClosedPipe`, a pipe whose reader is gone; `Full`, a device with no

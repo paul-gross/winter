@@ -1,6 +1,7 @@
 //! The program port's wait and its deadline, against stub programs in an isolated tree.
 
 use std::ffi::OsStr;
+use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
@@ -61,6 +62,85 @@ fn streaming_reports_a_self_signal_and_deadlines_even_after_eof() {
         );
         assert!(started.elapsed() < Duration::from_secs(3), "{script}");
     }
+}
+
+#[test]
+fn streaming_timeout_terminates_a_direct_child() {
+    let tree = TempTree::new().expect("tree");
+    let mut invocation = tree.invocation(&std::env::current_exe().expect("test executable"));
+    invocation.args = ["--ignored", "--exact", "streaming_timeout_fixture"]
+        .map(Into::into)
+        .to_vec();
+    invocation
+        .env
+        .set("WINTER_TEST_FIXTURE", "streaming_timeout_fixture");
+    invocation.env.set(
+        "WINTER_TEST_TMPDIR",
+        tree.root().join("tmp").to_str().expect("tree path"),
+    );
+    let observed = winter_workspace_test_support::invoke(invocation).expect("fixture");
+    assert_eq!(
+        observed.exit,
+        winter_workspace_test_support::Exit::Code(0),
+        "{observed:?}"
+    );
+}
+
+#[test]
+#[ignore]
+fn streaming_timeout_fixture() {
+    if std::env::var("WINTER_TEST_FIXTURE").as_deref() != Ok("streaming_timeout_fixture") {
+        return;
+    }
+    let (tree, programs) = with_stub_git("exit 99");
+    let setup = [OsStr::new("mkfifo witness hold")];
+    assert_eq!(
+        programs.run(&shell(&tree, &setup)).expect("fifos").exit,
+        Exit::Code(0)
+    );
+    let witness = tree.root().join("witness");
+    let (sent, received) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut witness = std::fs::File::open(witness).expect("open witness");
+        let mut byte = [0];
+        sent.send(witness.read(&mut byte)).expect("readiness");
+        sent.send(witness.read(&mut byte)).expect("end of witness");
+    });
+    // Only the direct child owns the writer. Its read has no producer and cannot
+    // finish naturally; the adapter must terminate it to close the witness.
+    let args = [OsStr::new(
+        "/bin/sh -c 'exec 3>witness; exec 4<>hold; printf r >&3; printf \"ready\\n\"; \
+         read -r held <&4' & wait",
+    )];
+    let call = shell(&tree, &args);
+    let mut ready = false;
+    assert_eq!(
+        programs
+            .stream(&call, &mut |line| {
+                assert_eq!(line, b"ready");
+                assert_eq!(
+                    received
+                        .recv_timeout(Duration::from_secs(2))
+                        .expect("direct child announced readiness")
+                        .expect("read readiness"),
+                    1,
+                    "witness must be ready before judging EOF"
+                );
+                ready = true;
+            })
+            .expect("stream"),
+        Exit::Signal(9)
+    );
+    assert!(ready, "direct child must announce readiness before timeout");
+    assert_eq!(
+        received
+            .recv_timeout(Duration::from_secs(2))
+            .expect("streaming timeout must close the direct child's lifetime witness")
+            .expect("read witness EOF"),
+        0,
+        "direct child's witness must reach EOF"
+    );
+    reader.join().expect("witness reader");
 }
 
 #[test]
