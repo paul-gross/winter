@@ -73,11 +73,14 @@ struct Fixture {
 fn fixture() -> Fixture {
     let tree = TempTree::new().expect("an isolated tree");
     let programs = Recording {
-        programs: OsPrograms::new(&ProcessEnv::from_vars(
-            tree.env()
-                .variables()
-                .map(|(name, value)| (name.to_owned(), value.to_owned())),
-        )),
+        programs: OsPrograms::new(
+            &ProcessEnv::from_vars(
+                tree.env()
+                    .variables()
+                    .map(|(name, value)| (name.to_owned(), value.to_owned())),
+            ),
+            false,
+        ),
         calls: Mutex::default(),
         refused: None,
     };
@@ -642,7 +645,7 @@ fn each_git_call_has_an_operation_span_of_the_repository_winter() {
     locate_for_write(&f.programs, &spans, &OsFiles, &linked).expect("located");
 
     let calls = f.programs.taken();
-    let spans = spans.0.into_inner();
+    let spans = spans.0.into_inner().expect("span mutex is not poisoned");
     let expected: Vec<_> = calls
         .iter()
         .map(|args| {
