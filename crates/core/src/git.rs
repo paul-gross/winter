@@ -287,29 +287,29 @@ pub fn stash_pop(
     .map(drop)
 }
 
-/// The git directory of the repository that holds `path`, absolute, as git names it.
-pub(crate) fn absolute_git_dir(
+/// The git directory whose `info/exclude` the checkout at `path` reads, absolute, as git names it.
+pub(crate) fn exclude_git_directory(
     programs: &dyn RunPrograms,
     tracer: &dyn CommandTracer,
     repo: &str,
     path: &Path,
 ) -> Result<PathBuf, GitFailure> {
-    exclude_directory(programs, tracer, repo, path, "--absolute-git-dir")
+    exclude_lookup(programs, tracer, repo, path, "--absolute-git-dir")
 }
 
-/// The common directory of the repository that holds `path`, as git names it: absolute, or relative to
-/// `path`.
-pub(crate) fn common_dir(
+/// The common directory behind the exclude file of the checkout at `path`, as git names it: absolute, or
+/// relative to `path`.
+pub(crate) fn exclude_common_directory(
     programs: &dyn RunPrograms,
     tracer: &dyn CommandTracer,
     repo: &str,
     path: &Path,
 ) -> Result<PathBuf, GitFailure> {
-    exclude_directory(programs, tracer, repo, path, "--git-common-dir")
+    exclude_lookup(programs, tracer, repo, path, "--git-common-dir")
 }
 
-/// One directory `git rev-parse <flag>` names, for the lookup of an exclude file.
-fn exclude_directory(
+/// One `git rev-parse <flag>` of the lookup of an exclude file, which is the operation a failure names.
+fn exclude_lookup(
     programs: &dyn RunPrograms,
     tracer: &dyn CommandTracer,
     repo: &str,
@@ -329,14 +329,124 @@ fn exclude_directory(
     Ok(line(finished.stdout).into())
 }
 
-/// What `git config <args>`, a `--get`, reads in `path`: `None` on exit 1, which is how git says the key is
-/// unset. Any other non-zero exit is an error.
-pub(crate) fn config_get<A: AsRef<OsStr>>(
+const WORKTREE_CONFIG: &str = "extensions.worktreeConfig";
+const EXCLUDES_FILE: &str = "core.excludesFile";
+
+/// Whether the repository of the checkout at `path` has `extensions.worktreeConfig` on in its own
+/// configuration.
+pub(crate) fn worktree_config_enabled(
     programs: &dyn RunPrograms,
     tracer: &dyn CommandTracer,
     repo: &str,
     path: &Path,
-    args: &[A],
+) -> Result<bool, GitFailure> {
+    let args = ["--local", "--type=bool", "--get", WORKTREE_CONFIG].map(OsStr::new);
+    let value = config_get(programs, tracer, repo, path, &args)?;
+    Ok(value.is_some_and(|value| value == "true"))
+}
+
+/// Turns `extensions.worktreeConfig` on for the repository of the checkout at `path`.
+pub(crate) fn enable_worktree_config(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+) -> Result<(), GitFailure> {
+    let args = [WORKTREE_CONFIG, "true"].map(OsStr::new);
+    config_write(programs, tracer, repo, path, &args)
+}
+
+/// The value of `key` in the configuration file `file`, `None` when it is unset there.
+pub(crate) fn file_setting(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+    file: &Path,
+    key: &str,
+) -> Result<Option<OsString>, GitFailure> {
+    let args = [
+        OsStr::new("--file"),
+        file.as_os_str(),
+        OsStr::new("--get"),
+        OsStr::new(key),
+    ];
+    config_get(programs, tracer, repo, path, &args)
+}
+
+/// Sets `key` to `value` in the configuration file `file`.
+pub(crate) fn set_file_setting(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+    file: &Path,
+    key: &str,
+    value: &OsStr,
+) -> Result<(), GitFailure> {
+    let args = [
+        OsStr::new("--file"),
+        file.as_os_str(),
+        OsStr::new(key),
+        value,
+    ];
+    config_write(programs, tracer, repo, path, &args)
+}
+
+/// Removes `key` from the configuration file `file`, which must hold it once.
+pub(crate) fn unset_file_setting(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+    file: &Path,
+    key: &str,
+) -> Result<(), GitFailure> {
+    let args = [
+        OsStr::new("--file"),
+        file.as_os_str(),
+        OsStr::new("--unset"),
+        OsStr::new(key),
+    ];
+    config_write(programs, tracer, repo, path, &args)
+}
+
+/// The `core.excludesFile` the worktree at `path` has of its own, `None` when it has none.
+pub(crate) fn worktree_excludes_file(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+) -> Result<Option<PathBuf>, GitFailure> {
+    let args = ["--worktree", "--get", EXCLUDES_FILE].map(OsStr::new);
+    let value = config_get(programs, tracer, repo, path, &args)?;
+    Ok(value.map(PathBuf::from))
+}
+
+/// Sets the `core.excludesFile` of the worktree at `path` alone to `file`.
+pub(crate) fn set_worktree_excludes_file(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+    file: &Path,
+) -> Result<(), GitFailure> {
+    let args = [
+        OsStr::new("--worktree"),
+        OsStr::new(EXCLUDES_FILE),
+        file.as_os_str(),
+    ];
+    config_write(programs, tracer, repo, path, &args)
+}
+
+/// What `git config <args>`, a `--get`, reads in `path`: `None` on exit 1, which is how git says the key is
+/// unset. Any other non-zero exit is an error.
+fn config_get(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+    args: &[&OsStr],
 ) -> Result<Option<OsString>, GitFailure> {
     let mut span = tracer.operation(CONFIG_SPAN, &[(REPO_ATTRIBUTE, repo)]);
     let args = config_arguments(args);
@@ -356,12 +466,12 @@ pub(crate) fn config_get<A: AsRef<OsStr>>(
 }
 
 /// Runs `git config <args>`, a write of git configuration, in `path`.
-pub(crate) fn config_write<A: AsRef<OsStr>>(
+fn config_write(
     programs: &dyn RunPrograms,
     tracer: &dyn CommandTracer,
     repo: &str,
     path: &Path,
-    args: &[A],
+    args: &[&OsStr],
 ) -> Result<(), GitFailure> {
     let mut span = tracer.operation(CONFIG_SPAN, &[(REPO_ATTRIBUTE, repo)]);
     let args = config_arguments(args);
@@ -376,9 +486,9 @@ pub(crate) fn config_write<A: AsRef<OsStr>>(
     .map(drop)
 }
 
-fn config_arguments<A: AsRef<OsStr>>(args: &[A]) -> Vec<&OsStr> {
+fn config_arguments<'a>(args: &[&'a OsStr]) -> Vec<&'a OsStr> {
     iter::once(OsStr::new("config"))
-        .chain(args.iter().map(AsRef::as_ref))
+        .chain(args.iter().copied())
         .collect()
 }
 

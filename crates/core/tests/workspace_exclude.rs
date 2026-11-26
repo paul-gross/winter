@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use winter_workspace_core::{
-    AdoptExtensions, Call, Eligible, Finalized, Finished, GitFailure, GitOperation, Located,
+    AdoptExtensions, Call, Eligible, Exit, Finalized, Finished, GitFailure, GitOperation, Located,
     NoTrace, OsFiles, OsPrograms, PinPorts, ProcessEnv, ReadFiles, RepoMessage, RunPrograms,
     finalize, locate, locate_for_write, write_block,
 };
@@ -25,16 +25,28 @@ const CONFIG_BLOCK: &str =
 struct Recording {
     programs: OsPrograms,
     calls: Mutex<Vec<Vec<String>>>,
+    /// The key whose `git config --get` fails in place of running.
+    refused: Option<&'static str>,
 }
 
 impl RunPrograms for Recording {
     fn run(&self, call: &Call<'_>) -> io::Result<Finished> {
-        let args = call
+        let args: Vec<String> = call
             .args
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
+        let refused = self.refused.is_some_and(|key| {
+            args.iter().any(|arg| arg == "--get") && args.last().is_some_and(|last| last == key)
+        });
         self.calls.lock().expect("the record").push(args);
+        if refused {
+            return Ok(Finished {
+                exit: Exit::Code(128),
+                stdout: Vec::new(),
+                stderr: b"refused\n".to_vec(),
+            });
+        }
         self.programs.run(call)
     }
 }
@@ -67,6 +79,7 @@ fn fixture() -> Fixture {
                 .map(|(name, value)| (name.to_owned(), value.to_owned())),
         )),
         calls: Mutex::default(),
+        refused: None,
     };
     Fixture { tree, programs }
 }
@@ -365,6 +378,87 @@ fn a_configured_worktree_is_written_no_configuration_again_and_locate_writes_non
 }
 
 #[test]
+fn each_linked_worktree_of_one_repository_is_given_an_exclude_file_of_its_own() {
+    let f = fixture();
+    let main = f.plain();
+    let first = f.worktree(&main, "first");
+    let second = f.worktree(&main, "second");
+    f.locate_for_write(&first).expect("located");
+    f.programs.taken();
+
+    f.locate_for_write(&second).expect("located");
+
+    let own = f.exclude_of(&second);
+    let own = own.to_str().expect("a UTF-8 path");
+    let write = ["config", "--worktree", "core.excludesFile", own].map(str::to_owned);
+    assert_eq!(config_writes(&f.programs.taken()), [&write.to_vec()]);
+    f.write_block(&first, "one", &["/one/"]);
+    f.write_block(&second, "two", &["/two/"]);
+    for root in [&first, &second] {
+        for name in ["one", "two"] {
+            std::fs::create_dir(root.join(name)).expect("a directory");
+            std::fs::write(root.join(name).join("file"), "x").expect("a file");
+        }
+    }
+    assert_eq!(f.out(&first, &["status", "--porcelain"]), "?? two/");
+    assert_eq!(f.out(&second, &["status", "--porcelain"]), "?? one/");
+}
+
+#[test]
+fn a_worktree_whose_excludes_file_names_another_file_is_given_its_own_again() {
+    let f = fixture();
+    let main = f.plain();
+    let linked = f.worktree(&main, "linked");
+    f.locate_for_write(&linked).expect("located");
+    f.out(
+        &linked,
+        &["config", "--worktree", "core.excludesFile", "/elsewhere"],
+    );
+
+    f.locate_for_write(&linked).expect("located");
+
+    let file = f.exclude_of(&linked);
+    assert_eq!(
+        f.out(
+            &linked,
+            &["config", "--worktree", "--get", "core.excludesFile"]
+        ),
+        file.to_str().expect("a UTF-8 path")
+    );
+}
+
+#[test]
+fn finalize_replaces_the_block_of_an_eligible_extension_that_changed_where_it_stands() {
+    let f = fixture();
+    let root = f.plain();
+    let file = f.exclude_of(&root);
+    let beta = eligible("beta", &[]);
+    f.finalize(
+        &root,
+        AdoptExtensions::All,
+        &[eligible("alpha", &["/old"]), beta.clone()],
+        &[],
+    );
+    let mut alpha = eligible("alpha", &["/new"]);
+
+    for relative in [".winter/ext/alpha", "elsewhere/alpha"] {
+        alpha.relative = relative.to_owned();
+
+        let answer = f.finalize(
+            &root,
+            AdoptExtensions::All,
+            &[alpha.clone(), beta.clone()],
+            &[],
+        );
+
+        assert_eq!(answer, updated(&file, &["alpha", "beta"]), "{relative}");
+        let alpha = block("alpha", &[&format!("/{relative}/"), "/new"]);
+        let beta = standalone("beta");
+        assert_eq!(read(&file), format!("{CONFIG_BLOCK}\n{alpha}\n{beta}"));
+    }
+}
+
+#[test]
 fn finalize_strips_the_block_of_an_extension_that_is_no_longer_eligible() {
     let f = fixture();
     let root = f.plain();
@@ -509,6 +603,32 @@ fn a_refused_configuration_write_is_a_config_failure() {
 }
 
 #[test]
+fn a_configuration_read_that_fails_is_a_config_failure_and_not_an_unset_key() {
+    for key in [
+        "extensions.worktreeConfig",
+        "core.bare",
+        "core.worktree",
+        "core.excludesFile",
+    ] {
+        let mut f = fixture();
+        let main = f.plain();
+        let linked = f.worktree(&main, "linked");
+        f.programs.refused = Some(key);
+
+        let answer = f.locate_for_write(&linked);
+
+        assert_eq!(
+            repo_failure(answer),
+            (GitOperation::Config, "winter".to_owned()),
+            "{key}"
+        );
+        let calls = f.programs.taken();
+        let last = calls.last().expect("a call");
+        assert_eq!(last.last().map(String::as_str), Some(key), "{calls:?}");
+    }
+}
+
+#[test]
 fn each_git_call_has_an_operation_span_of_the_repository_winter() {
     let f = fixture();
     let main = f.plain();
@@ -550,7 +670,7 @@ fn a_file_that_is_not_utf8_is_refused_and_keeps_its_bytes() {
             panic!("an internal failure: {failure:?}");
         };
         let message = error.to_string();
-        let expected = format!("{} is not UTF-8", file.display());
+        let expected = format!("the exclude file {} is not UTF-8", file.display());
         assert!(message.contains(&expected), "{message}");
     }
     assert_eq!(std::fs::read(&file).expect("the file"), bytes);
