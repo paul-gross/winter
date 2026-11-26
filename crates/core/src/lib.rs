@@ -66,6 +66,7 @@ pub use git::{
     stash_push, tree, verify,
 };
 pub use logging::{Level, Log};
+pub use managed_block::{Markers, Position, Shape, blocks, replace_or_insert, shape, strip};
 pub use pins::advance::{Advanced, IntegrateCheckout, Integration, PullMode, advance};
 pub use pins::materialize::materialize;
 pub use pins::outcome::{PinOutcome, PinResult, rendered};
