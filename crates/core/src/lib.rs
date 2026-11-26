@@ -88,3 +88,6 @@ pub use trace::{
     CommandTracer, NoTrace, OperationSpan, TraceConfig, TraceLog, TraceSettings, settings,
     span_name,
 };
+pub use workspace_exclude::{
+    Eligible, Finalized, Located, finalize, locate, locate_for_write, write_block,
+};
