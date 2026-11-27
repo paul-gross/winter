@@ -15,6 +15,11 @@ cargo build
 
 The binary is written to `target/debug/winter-workspace`.
 
+`init` creates a workspace in the directory it is started in: `.winter/config.toml`, `AGENTS.md`, and `CLAUDE.md`. A
+directory that already holds `.winter/config.toml` is refused. Like the other mutating commands, it must only be
+exercised in the scratch locations permitted by [AGENTS.md](./AGENTS.md). Read `winter-workspace context init` for what
+it does with agent files that are already there.
+
 `repo add` and `repo remove` edit the workspace configuration it finds at or above the working directory, and
 `ws update` fetches, resets branches, stashes, and writes the lock of the workspace it finds there, and, with `--freeze`, its configuration.
 [AGENTS.md](./AGENTS.md) states where the binary may run. It is on no `PATH`: from a directory that rule permits, it is
