@@ -1,5 +1,6 @@
 //! The git operations over the program port, what they answer on failure, and the commit id a git call returns.
 
+use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::iter;
@@ -37,6 +38,7 @@ const STASH_POP_SPAN: &str = "git stash pop";
 const CONFIG_SPAN: &str = "git config";
 const CLONE_SPAN: &str = "git clone";
 const REV_LIST_SPAN: &str = "git rev-list";
+const LS_FILES_SPAN: &str = "git ls-files";
 
 /// The one attribute of a span: the name of the repository the operation works on.
 pub(crate) const REPO_ATTRIBUTE: &str = "winter.repo";
@@ -141,7 +143,8 @@ impl RunPrograms for OwnRepository<'_> {
 
 /// Whether the checkout at `path` has no change: no modified tracked file and no untracked file, in it or in
 /// a submodule of it. Neither `status.showUntrackedFiles` nor a setting that ignores submodules hides one, and
-/// the index of the checkout is not written.
+/// the index of the checkout is not written. A submodule of a submodule is not looked into past what the
+/// settings of that submodule show; [`submodules`] names the paths for a caller that must.
 ///
 /// Any failure of git reads as dirty. Only a git that cannot be started is an error.
 pub fn clean(
@@ -163,6 +166,29 @@ pub fn clean(
     let env = [(OsStr::new("GIT_OPTIONAL_LOCKS"), OsStr::new("0"))];
     let finished = run_for(programs, path, &args, None, &env)?;
     Ok(finished.exit == Exit::Code(0) && finished.stdout.is_empty())
+}
+
+/// The paths, from the top of the checkout at `path`, at which its index records a submodule; `None` when git
+/// answers a non-zero exit.
+pub(crate) fn submodules(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+) -> Result<Option<BTreeSet<PathBuf>>, GitFailure> {
+    let _span = tracer.operation(LS_FILES_SPAN, &[(REPO_ATTRIBUTE, repo)]);
+    let finished = run(programs, path, &["ls-files", "--stage", "-z"])?;
+    if finished.exit != Exit::Code(0) {
+        return Ok(None);
+    }
+    // One entry is `<mode> <object> <stage>\t<path>`, and a submodule is the mode of a commit.
+    let recorded = finished
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|entry| entry.starts_with(b"160000 "))
+        .filter_map(|entry| entry.splitn(2, |byte| *byte == b'\t').nth(1))
+        .map(|name| PathBuf::from(OsString::from_vec(name.to_vec())));
+    Ok(Some(recorded.collect()))
 }
 
 /// Whether the checkout at `path`, the checkout of the repository `repo`, holds a commit that no
