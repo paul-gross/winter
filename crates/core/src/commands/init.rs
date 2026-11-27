@@ -77,7 +77,7 @@ fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
         output::text(
             cx.out,
             &format!(
-                "created {}/.winter/config.toml\nAGENTS.md: {agents_text}\nCLAUDE.md: {claude_text}\nnext, declare repositories with `winter-workspace repo add` and run `winter-workspace ws init`\n",
+                "created {}/.winter/config.toml\nAGENTS.md: {agents_text}\nCLAUDE.md: {claude_text}\nnext, read `winter-workspace context setup`, or declare repositories with `winter-workspace repo add` and run `winter-workspace ws init`\n",
                 created.root.display()
             ),
         )
