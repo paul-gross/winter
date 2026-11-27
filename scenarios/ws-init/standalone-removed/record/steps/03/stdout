@@ -1,0 +1,6 @@
+{"type": "target_started", "target": "projects/"}
+{"type": "target_completed", "target": "projects/", "success": true}
+{"type": "target_started", "target": "standalone/"}
+{"type": "repo_action", "repo": "tools", "location": "<ROOT>/ws/tools", "action": "exists", "detail": ""}
+{"type": "repo_action", "repo": "winter-extensions", "location": "<ROOT>/ws/.git/info/exclude", "action": "workspace_excludes_updated", "detail": "tools"}
+{"type": "target_completed", "target": "standalone/", "success": true}

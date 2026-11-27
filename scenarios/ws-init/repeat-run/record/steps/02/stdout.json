@@ -1,0 +1,8 @@
+{"target":"projects/","type":"target_started"}
+{"action":"exists","detail":"","location":"<ROOT>/ws/projects/api","repo":"api","type":"repo_action"}
+{"action":"exists","detail":"","location":"<ROOT>/ws/projects/web","repo":"web","type":"repo_action"}
+{"success":true,"target":"projects/","type":"target_completed"}
+{"target":"standalone/","type":"target_started"}
+{"action":"exists","detail":"","location":"<ROOT>/ws/tools","repo":"tools","type":"repo_action"}
+{"action":"pinned","detail":"tag 78f276ae","location":"<ROOT>/ws/tools","repo":"tools","type":"repo_action"}
+{"success":true,"target":"standalone/","type":"target_completed"}

@@ -1,0 +1,1 @@
+{"dry_run":false,"excludes_updated":false,"orphans":[{"action":"skipped","kind":"project_clone","notes":"has commits no remote-tracking branch holds","path":"<ROOT>/ws/projects/old","safe_to_remove":false}]}

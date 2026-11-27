@@ -1,0 +1,13 @@
+{
+  "dry_run": false,
+  "orphans": [
+    {
+      "kind": "project_clone",
+      "path": "<ROOT>/ws/projects/old",
+      "safe_to_remove": true,
+      "notes": "",
+      "action": "removed"
+    }
+  ],
+  "excludes_updated": true
+}

@@ -1,0 +1,5 @@
+{"target":"projects/","type":"target_started"}
+{"action":"workspace_excludes_updated","detail":"/projects/","location":"<ROOT>/ws/.git/info/exclude","repo":"winter","type":"repo_action"}
+{"action":"workspace_excludes_updated","detail":"/.winter/logs/","location":"<ROOT>/ws/.git/info/exclude","repo":"winter","type":"repo_action"}
+{"error":"cannot reconcile api: <ROOT>/ws/projects/api was declared with url https://fixture.invalid/api.git, but its remote.origin.url is https://fixture.invalid/other.git\n  $ git config --get remote.origin.url\n  cwd: <ROOT>/ws/projects/api\n  exit 0 (failed at location; not attempted: identity, excludes, cmd)","repo":"api","type":"repo_error"}
+{"success":false,"target":"projects/","type":"target_completed"}

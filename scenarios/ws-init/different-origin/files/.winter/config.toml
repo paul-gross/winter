@@ -1,0 +1,6 @@
+git_excludes = ["*.log"]
+
+[[project_repository]]
+name = "api"
+url = "https://fixture.invalid/api.git"
+cmd = ["echo ran"]

@@ -1,0 +1,41 @@
+summary = "A workspace that is a linked worktree writes its exclude blocks into its own git directory and points its core.excludesFile there."
+
+[[fixture.remote]]
+name = "root"
+
+[[fixture.remote.commit]]
+message = "Initial workspace"
+files = { ".winter/config.toml" = "[[project_repository]]\nname = \"api\"\nurl = \"https://fixture.invalid/api.git\"\n\n[[standalone_repository]]\nname = \"tools\"\nurl = \"https://fixture.invalid/tools.git\"\nextension = false\n" }
+
+[[fixture.remote]]
+name = "api"
+
+[[fixture.remote.commit]]
+message = "Initial api"
+files = { "README.md" = "api fixture\n" }
+
+[[fixture.remote]]
+name = "tools"
+
+[[fixture.remote.commit]]
+message = "Initial tools"
+files = { "README.md" = "tools fixture\n" }
+
+[[fixture.checkout]]
+remote = "root"
+path = "main"
+
+[[fixture.worktree]]
+checkout = "main"
+path = "linked"
+branch = "feature"
+start = "main"
+
+[[compare.fan_out]]
+types = ["repo_action", "repo_error", "cmd_started", "cmd_output_line", "cmd_completed"]
+key = "/repo"
+
+[[step]]
+args = ["ws", "init", "--json"]
+cwd = "linked"
+stdout = "json-lines"

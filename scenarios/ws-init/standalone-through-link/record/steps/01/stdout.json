@@ -1,0 +1,8 @@
+{"target":"projects/","type":"target_started"}
+{"action":"workspace_excludes_updated","detail":"/projects/","location":"<ROOT>/ws/.git/info/exclude","repo":"winter","type":"repo_action"}
+{"action":"workspace_excludes_updated","detail":"/.winter/logs/","location":"<ROOT>/ws/.git/info/exclude","repo":"winter","type":"repo_action"}
+{"success":true,"target":"projects/","type":"target_completed"}
+{"target":"standalone/","type":"target_started"}
+{"action":"cloned","detail":"","location":"<ROOT>/ws/link/lib","repo":"lib","type":"repo_action"}
+{"action":"workspace_excludes_updated","detail":"lib","location":"<ROOT>/ws/.git/info/exclude","repo":"winter-extensions","type":"repo_action"}
+{"success":true,"target":"standalone/","type":"target_completed"}

@@ -1,0 +1,109 @@
+repository
+    remotes/web.git
+    kind: bare
+head
+    1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677
+    refs/heads/main
+refs
+    refs/heads/main 1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677  
+worktrees
+    worktree <ROOT>/remotes/web.git
+    bare
+    
+config
+    core.bare=true
+    core.filemode=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial web
+
+repository
+    ws
+    kind: main
+dot-git
+    directory
+head
+    cf218143ca560313cf3b9b4ff5aad4e24e6f714f
+    refs/heads/main
+refs
+    refs/heads/main cf218143ca560313cf3b9b4ff5aad4e24e6f714f  
+worktrees
+    worktree <ROOT>/ws
+    HEAD cf218143ca560313cf3b9b4ff5aad4e24e6f714f
+    branch refs/heads/main
+    
+status
+    # branch.oid cf218143ca560313cf3b9b4ff5aad4e24e6f714f
+    # branch.head main
+stash
+config
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+    # >>> winter-dir/projects (managed by winter)
+    /projects/
+    # <<< winter-dir/projects
+    
+    # >>> winter-workspace/artifacts (managed by winter)
+    /.winter/logs/
+    # <<< winter-workspace/artifacts
+    
+    # >>> winter-workspace/workspace-skills (managed by winter)
+    .claude/skills/ws-*
+    .claude/skills/ws
+    .codex/skills/ws-*
+    .codex/skills/ws
+    .opencode/skill/ws-*
+    .opencode/skill/ws
+    # <<< winter-workspace/workspace-skills
+    
+    # >>> winter-config (managed by winter)
+    .winter/config/**/*.local.*
+    # <<< winter-config
+log
+    refs/heads/main
+    cf218143ca560313cf3b9b4ff5aad4e24e6f714f  Fixture Author author@fixture.invalid 946684860 Fixture Committer committer@fixture.invalid 946684860 Workspace root
+
+repository
+    ws/projects/web
+    kind: main
+dot-git
+    directory
+head
+    1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677
+    refs/heads/main
+refs
+    refs/heads/main 1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677 refs/remotes/origin/main 
+    refs/remotes/origin/HEAD 1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677  refs/remotes/origin/main
+    refs/remotes/origin/main 1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677  
+worktrees
+    worktree <ROOT>/ws/projects/web
+    HEAD 1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677
+    branch refs/heads/main
+    
+status
+    # branch.oid 1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677
+    # branch.head main
+    # branch.upstream origin/main
+    # branch.ab +0 -0
+stash
+config
+    branch.main.merge=refs/heads/main
+    branch.main.remote=origin
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+    remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+    remote.origin.url=https://fixture.invalid/web.git
+in-progress
+exclude
+log
+    refs/heads/main
+    1f035a9d7c9d64f27bf5e1e5741cf79b2cc77677  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial web

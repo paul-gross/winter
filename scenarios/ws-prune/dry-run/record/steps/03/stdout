@@ -1,0 +1,26 @@
+{
+  "dry_run": true,
+  "orphans": [
+    {
+      "kind": "project_clone",
+      "path": "<ROOT>/ws/projects/busy",
+      "safe_to_remove": false,
+      "notes": "uncommitted or untracked changes",
+      "action": "skipped"
+    },
+    {
+      "kind": "project_clone",
+      "path": "<ROOT>/ws/projects/old",
+      "safe_to_remove": true,
+      "notes": "",
+      "action": "would_remove"
+    },
+    {
+      "kind": "standalone_clone",
+      "path": "<ROOT>/ws/lib",
+      "safe_to_remove": true,
+      "notes": "",
+      "action": "would_remove"
+    }
+  ]
+}

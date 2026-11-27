@@ -1,0 +1,9 @@
+[[standalone_repository]]
+name = "lib"
+url = "https://fixture.invalid/lib.git"
+extension = false
+
+[[standalone_repository]]
+name = "tools"
+url = "https://fixture.invalid/tools.git"
+extension = false

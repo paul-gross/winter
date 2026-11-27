@@ -1,0 +1,30 @@
+summary = "Workspace and repository git_excludes are appended to a clone's exclude file once."
+
+[fixture]
+workspace_git = true
+
+[[fixture.remote]]
+name = "api"
+
+[[fixture.remote.commit]]
+message = "Initial api"
+files = { "README.md" = "api fixture\n" }
+
+[[fixture.remote]]
+name = "tools"
+
+[[fixture.remote.commit]]
+message = "Initial tools"
+files = { "README.md" = "tools fixture\n" }
+
+[[compare.fan_out]]
+types = ["repo_action", "repo_error", "cmd_started", "cmd_output_line", "cmd_completed"]
+key = "/repo"
+
+[[step]]
+args = ["ws", "init", "--json"]
+stdout = "json-lines"
+
+[[step]]
+args = ["ws", "init", "--json"]
+stdout = "json-lines"

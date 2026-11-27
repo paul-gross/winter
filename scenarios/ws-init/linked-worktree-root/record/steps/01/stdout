@@ -1,0 +1,9 @@
+{"type": "target_started", "target": "projects/"}
+{"type": "repo_action", "repo": "winter", "location": "<ROOT>/ws/main/.git/worktrees/linked/info/exclude", "action": "workspace_excludes_updated", "detail": "/projects/"}
+{"type": "repo_action", "repo": "winter", "location": "<ROOT>/ws/main/.git/worktrees/linked/info/exclude", "action": "workspace_excludes_updated", "detail": "/.winter/logs/"}
+{"type": "repo_action", "repo": "api", "location": "<ROOT>/ws/linked/projects/api", "action": "cloned", "detail": ""}
+{"type": "target_completed", "target": "projects/", "success": true}
+{"type": "target_started", "target": "standalone/"}
+{"type": "repo_action", "repo": "tools", "location": "<ROOT>/ws/linked/tools", "action": "cloned", "detail": ""}
+{"type": "repo_action", "repo": "winter-extensions", "location": "<ROOT>/ws/main/.git/worktrees/linked/info/exclude", "action": "workspace_excludes_updated", "detail": "tools"}
+{"type": "target_completed", "target": "standalone/", "success": true}

@@ -1,0 +1,13 @@
+{
+  "dry_run": false,
+  "orphans": [
+    {
+      "kind": "project_clone",
+      "path": "<ROOT>/ws/projects/busy",
+      "safe_to_remove": false,
+      "notes": "uncommitted or untracked changes",
+      "action": "skipped"
+    }
+  ],
+  "excludes_updated": false
+}

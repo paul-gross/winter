@@ -1,0 +1,34 @@
+summary = "--force removes the clone of a standalone removed from the configuration and strips its exclude block."
+
+[fixture]
+workspace_git = true
+
+[[fixture.remote]]
+name = "lib"
+
+[[fixture.remote.commit]]
+message = "Initial lib"
+files = { "README.md" = "lib fixture\n" }
+
+[[fixture.remote]]
+name = "tools"
+
+[[fixture.remote.commit]]
+message = "Initial tools"
+files = { "README.md" = "tools fixture\n" }
+
+[[compare.fan_out]]
+types = ["repo_action", "repo_error", "cmd_started", "cmd_output_line", "cmd_completed"]
+key = "/repo"
+
+[[step]]
+args = ["ws", "init", "--json"]
+stdout = "json-lines"
+
+[[step]]
+args = ["repo", "remove", "standalone/lib", "--json"]
+stdout = "json"
+
+[[step]]
+args = ["ws", "prune", "--force"]
+stdout = "text"

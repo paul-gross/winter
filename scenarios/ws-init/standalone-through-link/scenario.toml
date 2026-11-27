@@ -1,0 +1,18 @@
+summary = "A standalone path that leads through a link out of the workspace root is refused and nothing is cloned."
+
+[fixture]
+workspace_git = true
+
+[[fixture.remote]]
+name = "lib"
+
+[[fixture.remote.commit]]
+message = "Initial lib"
+files = { "README.md" = "lib fixture\n" }
+
+[[step]]
+args = ["ws", "init", "--json"]
+stdout = "json-lines"
+
+[deviation]
+decision = "decision:parallel-workspaces/workspace-bootstrap/clone-confinement"

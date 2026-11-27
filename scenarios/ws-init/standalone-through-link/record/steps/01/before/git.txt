@@ -1,0 +1,51 @@
+repository
+    remotes/lib.git
+    kind: bare
+head
+    b85a7e5fa3a3140155a73e22a2795bc41d5f3cec
+    refs/heads/main
+refs
+    refs/heads/main b85a7e5fa3a3140155a73e22a2795bc41d5f3cec  
+worktrees
+    worktree <ROOT>/remotes/lib.git
+    bare
+    
+config
+    core.bare=true
+    core.filemode=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    b85a7e5fa3a3140155a73e22a2795bc41d5f3cec  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial lib
+
+repository
+    ws
+    kind: main
+dot-git
+    directory
+head
+    0c8fd517a90a79819d24a457e4484467315ebce6
+    refs/heads/main
+refs
+    refs/heads/main 0c8fd517a90a79819d24a457e4484467315ebce6  
+worktrees
+    worktree <ROOT>/ws
+    HEAD 0c8fd517a90a79819d24a457e4484467315ebce6
+    branch refs/heads/main
+    
+status
+    # branch.oid 0c8fd517a90a79819d24a457e4484467315ebce6
+    # branch.head main
+stash
+config
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    0c8fd517a90a79819d24a457e4484467315ebce6  Fixture Author author@fixture.invalid 946684860 Fixture Committer committer@fixture.invalid 946684860 Workspace root

@@ -1,0 +1,12 @@
+git_excludes = ["*.log"]
+
+[[project_repository]]
+name = "api"
+url = "https://fixture.invalid/api.git"
+git_excludes = ["local/", "*.log", " ", "*.tmp"]
+
+[[standalone_repository]]
+name = "tools"
+url = "https://fixture.invalid/tools.git"
+extension = false
+git_excludes = ["cache/"]

@@ -1,0 +1,23 @@
+summary = "--json without --force or --dry-run is refused and removes nothing."
+
+[fixture]
+workspace_git = true
+gitignore = "projects/\n"
+
+[[fixture.remote]]
+name = "old"
+
+[[fixture.remote.commit]]
+message = "Initial old"
+files = { "README.md" = "old fixture\n" }
+
+[[fixture.checkout]]
+remote = "old"
+path = "projects/old"
+
+[[step]]
+args = ["ws", "prune", "--json"]
+stdout = "json"
+
+[deviation]
+decision = "decision:parallel-workspaces/workspace-bootstrap/prune-retention"

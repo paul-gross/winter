@@ -1,0 +1,89 @@
+repository
+    remotes/old.git
+    kind: bare
+head
+    ea919b740b34437db8cb122f421ed9723e791f20
+    refs/heads/main
+refs
+    refs/heads/main ea919b740b34437db8cb122f421ed9723e791f20  
+worktrees
+    worktree <ROOT>/remotes/old.git
+    bare
+    
+config
+    core.bare=true
+    core.filemode=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    ea919b740b34437db8cb122f421ed9723e791f20  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial old
+
+repository
+    ws
+    kind: main
+dot-git
+    directory
+head
+    a6bbccdd186a1772d1131510988edef2105bcf81
+    refs/heads/main
+refs
+    refs/heads/main a6bbccdd186a1772d1131510988edef2105bcf81  
+worktrees
+    worktree <ROOT>/ws
+    HEAD a6bbccdd186a1772d1131510988edef2105bcf81
+    branch refs/heads/main
+    
+status
+    # branch.oid a6bbccdd186a1772d1131510988edef2105bcf81
+    # branch.head main
+stash
+config
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    a6bbccdd186a1772d1131510988edef2105bcf81  Fixture Author author@fixture.invalid 946684860 Fixture Committer committer@fixture.invalid 946684860 Workspace root
+
+repository
+    ws/projects/old
+    kind: main
+dot-git
+    directory
+head
+    ea919b740b34437db8cb122f421ed9723e791f20
+    refs/heads/main
+refs
+    refs/heads/main ea919b740b34437db8cb122f421ed9723e791f20 refs/remotes/origin/main 
+    refs/remotes/origin/HEAD ea919b740b34437db8cb122f421ed9723e791f20  refs/remotes/origin/main
+    refs/remotes/origin/main ea919b740b34437db8cb122f421ed9723e791f20  
+worktrees
+    worktree <ROOT>/ws/projects/old
+    HEAD ea919b740b34437db8cb122f421ed9723e791f20
+    branch refs/heads/main
+    
+status
+    # branch.oid ea919b740b34437db8cb122f421ed9723e791f20
+    # branch.head main
+    # branch.upstream origin/main
+    # branch.ab +0 -0
+stash
+config
+    branch.main.merge=refs/heads/main
+    branch.main.remote=origin
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+    remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+    remote.origin.url=https://fixture.invalid/old.git
+in-progress
+exclude
+log
+    refs/heads/main
+    ea919b740b34437db8cb122f421ed9723e791f20  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial old

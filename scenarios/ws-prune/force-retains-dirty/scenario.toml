@@ -1,0 +1,20 @@
+summary = "--force retains an undeclared clone that has uncommitted changes."
+
+[fixture]
+workspace_git = true
+gitignore = "projects/\n"
+
+[[fixture.remote]]
+name = "busy"
+
+[[fixture.remote.commit]]
+message = "Initial busy"
+files = { "README.md" = "busy fixture\n" }
+
+[[fixture.checkout]]
+remote = "busy"
+path = "projects/busy"
+
+[[step]]
+args = ["ws", "prune", "--force", "--json"]
+stdout = "json"

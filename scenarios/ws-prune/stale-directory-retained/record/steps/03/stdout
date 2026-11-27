@@ -1,0 +1,12 @@
+{
+  "dry_run": true,
+  "orphans": [
+    {
+      "kind": "standalone_clone",
+      "path": "<ROOT>/ws/lib",
+      "safe_to_remove": true,
+      "notes": "",
+      "action": "would_remove"
+    }
+  ]
+}

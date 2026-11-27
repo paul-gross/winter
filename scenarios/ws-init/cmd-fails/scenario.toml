@@ -1,0 +1,29 @@
+summary = "A project whose cmd fails runs no later cmd, fails the run, and does not stop another project."
+
+[fixture]
+workspace_git = true
+
+[[fixture.remote]]
+name = "api"
+
+[[fixture.remote.commit]]
+message = "Initial api"
+files = { "README.md" = "api fixture\n" }
+
+[[fixture.remote]]
+name = "web"
+
+[[fixture.remote.commit]]
+message = "Initial web"
+files = { "README.md" = "web fixture\n" }
+
+[compare]
+message_text = ["/error"]
+
+[[compare.fan_out]]
+types = ["repo_action", "repo_error", "cmd_started", "cmd_output_line", "cmd_completed"]
+key = "/repo"
+
+[[step]]
+args = ["ws", "init", "--json"]
+stdout = "json-lines"

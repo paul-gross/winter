@@ -1,0 +1,1 @@
+{"dry_run":true,"orphans":[{"action":"skipped","kind":"standalone_clone","notes":"not a git clone (delete by hand if intentional)","path":"<ROOT>/ws/lib","safe_to_remove":false}]}

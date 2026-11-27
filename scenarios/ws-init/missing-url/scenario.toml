@@ -1,0 +1,22 @@
+summary = "A project with no url and no checkout fails alone, and the run exits 1."
+
+[fixture]
+workspace_git = true
+
+[[fixture.remote]]
+name = "web"
+
+[[fixture.remote.commit]]
+message = "Initial web"
+files = { "README.md" = "web fixture\n" }
+
+[compare]
+message_text = ["/error"]
+
+[[compare.fan_out]]
+types = ["repo_action", "repo_error", "cmd_started", "cmd_output_line", "cmd_completed"]
+key = "/repo"
+
+[[step]]
+args = ["ws", "init", "--json"]
+stdout = "json-lines"
