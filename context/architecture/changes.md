@@ -186,7 +186,8 @@ more to stdout.
 
 `Termination::from_write_error` in `crates/core/src/termination.rs` is the one classifier of a failed write or flush of
 stdout. `output.rs` calls it for a write of a result and for the flush after an event, and the binary calls it for its
-final flush, where it replaces the ending only when that ending's exit code is 0. No other code inspects such an error:
+final flush, where it replaces the ending only when that ending's exit code is 0. `confirm::confirm` calls it for the
+write and the flush of its question, the one write to stdout outside `output.rs`. No other code inspects such an error:
 
 | The write                                   | Ending                                                                              |
 | ------------------------------------------- | ----------------------------------------------------------------------------------- |

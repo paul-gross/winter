@@ -22,11 +22,9 @@ workspace.
 - The built binary, however it is started outside the tests and the gates, `cargo run` included, runs only with its
   working directory inside an isolated tree, a scratch workspace under a temporary directory, or a scratch copy of the
   checkout under a temporary directory, and only where no directory at or above the working directory holds a
-  `.winter/config.toml` other than one made for the run; never in the checkout and never in a real workspace, because it
-  resolves the workspace upward from its working directory, `init` writes a configuration and the agent files into that
-  directory, `repo add` and `repo remove` write to the configuration they find there, and `ws update` fetches, resets branches, stashes, and writes the lock, and, with `--freeze`, the
-  configuration, of the workspace it finds there, and `ws prune` removes directories, links, and files of the workspace it finds there and rewrites its
-  exclude file. It is never installed, and never put on `PATH` under the name of the installed `winter`. The isolated tree is the one
+  `.winter/config.toml` other than one made for the run; never in the checkout and never in a real workspace, because `init` writes into that directory, and other commands
+  resolve the workspace upward from it and may change what they find: rewrite its configuration, reset its branches, or
+  remove its directories. It is never installed, and never put on `PATH` under the name of the installed `winter`. The isolated tree is the one
   [testing.md](./context/standards/testing.md#the-isolated-tree) describes; a scratch workspace is a directory made for
   the run that holds a `.winter/config.toml` of its own.
 

@@ -641,7 +641,8 @@ git_bin=$(command -v git)
 base=$(realpath "${BLIZZARD_TMPDIR:?set the lease scratch directory}")
 p=$base
 while :; do
-  if test -e "$p/.git" || test -e "$p/.winter/config.toml"; then
+  if test -e "$p/.git" || test -e "$p/.winter/config.toml" ||
+     { test -f "$p/HEAD" && test -d "$p/objects" && test -d "$p/refs"; }; then
     printf 'Unsafe scratch ancestor: %s\n' "$p" >&2; exit 1
   fi
   test "$p" = / && break
@@ -681,8 +682,8 @@ run() {
   printf '%s\n' "$?" >"$evidence/$label.exit"
 }
 snapshot() {
-  (cd "$ws" && find . ! -name index -printf '%y %p %l\n' | sort &&
-    find . -type f ! -name index -print0 | sort -z | xargs -0 -r sha256sum)
+  (cd "$ws" && find . -printf '%y %p %l\n' | sort &&
+    find . -type f -print0 | sort -z | xargs -0 -r sha256sum)
 }
 g -C "$ws" config --list >"$evidence/config.before"
 snapshot >"$evidence/before"
