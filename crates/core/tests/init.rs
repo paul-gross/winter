@@ -112,7 +112,7 @@ fn the_text_result_names_each_file_and_the_next_commands() {
     assert_eq!(
         ended.stdout,
         format!(
-            "created {}/.winter/config.toml\nAGENTS.md: placed the workspace safety rules\nCLAUDE.md: created\nnext, declare repositories with `winter-workspace repo add` and run `winter-workspace ws init`\n",
+            "created {}/.winter/config.toml\nAGENTS.md: placed the workspace safety rules\nCLAUDE.md: created\nnext, read `winter-workspace context setup`, or declare repositories with `winter-workspace repo add` and run `winter-workspace ws init`\n",
             root.display()
         )
     );

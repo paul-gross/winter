@@ -8,5 +8,6 @@ does. Read `winter-workspace context topics` for every topic this version holds.
 
 - Read `winter-workspace context context` for how this command prints a topic and how other documents cite one.
 - Read `winter-workspace context init` to create a workspace in the current directory.
+- Read `winter-workspace context setup` to set up a workspace and write its project documents.
 - Read `winter-workspace context ws` for the commands on feature environments and the workspace they are cut from.
 - Read `winter-workspace context repo` for the commands on the repositories a workspace declares.

@@ -9,4 +9,5 @@ Existing user content is preserved; conflicting agent files are reported as warn
 refused without changes. The command clones nothing and does not run git.
 
 Declare repositories with `winter-workspace repo add https://example.com/repo.git`, then reconcile them with
-`winter-workspace ws init`.
+`winter-workspace ws init`. Read `winter-workspace context setup` for the setup topics, or
+`winter-workspace context setup/walkthrough` to be led through setup step by step.

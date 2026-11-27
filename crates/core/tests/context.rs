@@ -148,3 +148,32 @@ fn a_workspace_whose_configuration_does_not_parse_changes_nothing_and_prints_the
     assert_eq!(ended.stderr, "");
     assert_eq!(snapshot(&root), before);
 }
+
+#[test]
+fn the_setup_topic_lists_exactly_its_three_leaves() {
+    let document = InProcess::new(&["context", "setup", "--json"])
+        .run()
+        .document("setup");
+
+    assert_eq!(
+        document["next"],
+        serde_json::json!([
+            "setup/walkthrough",
+            "setup/contributing",
+            "setup/project-setup"
+        ])
+    );
+}
+
+#[test]
+fn the_setup_walkthrough_names_init_then_repo_add_then_ws_init() {
+    let stdout = printed(&["setup/walkthrough"]);
+
+    let at = |command: &str| {
+        stdout
+            .find(&format!("`winter-workspace {command}"))
+            .unwrap_or_else(|| panic!("no {command}"))
+    };
+    let (init, add, reconcile) = (at("init`"), at("repo add "), at("ws init`"));
+    assert!(init < add && add < reconcile, "{init} {add} {reconcile}");
+}
