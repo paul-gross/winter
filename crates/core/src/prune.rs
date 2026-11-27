@@ -11,7 +11,7 @@ use crate::bootstrap::{self, BootstrapError, InitEvent};
 use crate::config_load;
 use crate::config_model::Workspace;
 use crate::diagnostics::{self, Diagnostics};
-use crate::git::{self, GitFailure};
+use crate::git::{self, GitFailure, OwnRepository};
 use crate::managed_block::blocks;
 use crate::ports::Ports;
 use crate::termination::{ConfigError, Termination};
@@ -290,7 +290,15 @@ fn run(
 }
 
 /// The candidates of `workspace`, each with why it stays. Reads only.
+///
+/// Like [`remove`] and [`reaggregate`], it runs git without the variables that would have it answer for a
+/// repository other than the one it is asked about.
 pub fn scan(ports: &Ports<'_>, diagnostics: &mut Diagnostics<'_>, workspace: &Workspace) -> Scan {
+    let programs = OwnRepository(ports.programs);
+    let ports = &Ports {
+        programs: &programs,
+        ..*ports
+    };
     let root = &workspace.root;
     let mut found = Found {
         ports,
@@ -548,6 +556,11 @@ fn retained(ports: &Ports<'_>, workspace: &Workspace, path: &Path) -> Option<Ret
 /// Removes `orphan`, unless it was retained, its place is no longer what the scan saw, or, for a clone, a
 /// retention reason holds now.
 pub fn remove(ports: &Ports<'_>, workspace: &Workspace, orphan: &Orphan) -> Removal {
+    let programs = OwnRepository(ports.programs);
+    let ports = &Ports {
+        programs: &programs,
+        ..*ports
+    };
     if let Some(reason) = orphan.retained {
         return Removal::Skipped(Skipped::Retained(reason));
     }
@@ -591,6 +604,11 @@ pub fn reaggregate(
     workspace: &Workspace,
     retained_blocks: &[String],
 ) -> Result<Finalized, GitFailure> {
+    let programs = OwnRepository(ports.programs);
+    let ports = &Ports {
+        programs: &programs,
+        ..*ports
+    };
     workspace_exclude::finalize(
         ports,
         &workspace.root,

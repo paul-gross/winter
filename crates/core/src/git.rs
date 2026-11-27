@@ -1,6 +1,7 @@
 //! The git operations over the program port, what they answer on failure, and the commit id a git call returns.
 
 use std::ffi::{OsStr, OsString};
+use std::io;
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
@@ -83,6 +84,43 @@ pub fn fetch(
         diagnostics,
     )?;
     ended(finished, repo, path, GitOperation::Fetch, &args, &mut *span).map(drop)
+}
+
+/// The variables by which an environment points git at a repository, or at a part of one, other than the one
+/// it finds from its working directory. Git exports several of them to its hooks and aliases.
+const LOCATING_VARIABLES: [&str; 12] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_GRAFT_FILE",
+    "GIT_SHALLOW_FILE",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+];
+
+/// A program port whose every call runs without [`LOCATING_VARIABLES`], so that git answers for the
+/// repository of the working directory of the call. A caller whose answer decides a removal runs git
+/// through it.
+pub(crate) struct OwnRepository<'a>(pub(crate) &'a dyn RunPrograms);
+
+impl RunPrograms for OwnRepository<'_> {
+    fn run(&self, call: &Call<'_>) -> io::Result<Finished> {
+        let remove: Vec<&OsStr> = call
+            .remove
+            .iter()
+            .copied()
+            .chain(LOCATING_VARIABLES.iter().map(OsStr::new))
+            .collect();
+        self.0.run(&Call {
+            remove: &remove,
+            ..*call
+        })
+    }
 }
 
 /// Whether the checkout at `path` has no change: no modified tracked file and no untracked file. An untracked

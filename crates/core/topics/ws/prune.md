@@ -31,7 +31,8 @@ A clone is retained, marked `!` with the reason under it, when the first of thes
 6. it has commits no remote-tracking branch holds, or its history cannot be read;
 7. it has stashes, or its stash list cannot be read.
 
-Links and agent copies are never retained. Ignored files do not count as changes and go with a removed clone. Every
+Each of these is asked of the clone's own repository: an inherited `GIT_DIR`, or another variable that points git at a
+repository, is not passed on. Links and agent copies are never retained. Ignored files do not count as changes and go with a removed clone. Every
 candidate is checked again just before its removal, and one that changed since the scan is skipped. Retained material
 is never removed by this command, under any option: delete it by hand once you are sure nothing in it is wanted.
 
