@@ -44,12 +44,13 @@ rerun. Like the other mutating commands, it must only be exercised in the scratc
 [AGENTS.md](./AGENTS.md). Read `winter-workspace context ws/init` for its ordering, recovery, and scope.
 
 `ws prune` removes material the workspace once managed and no configuration declares now: undeclared clones under
-`projects/`, clones and agent copies that a leftover workspace exclude block names, and dangling links in the vendor
-skill and agent directories. A clone that could hold work is retained, among them one with uncommitted or untracked
-changes, commits no remote-tracking branch holds, stashes, or linked worktrees, and one with no `.git`; retained
-material is never removed and is deleted by hand. It lists what it found and asks first: `--dry-run` only lists,
-`--force` does not ask, and `--json` needs one of the two. Ignored files go with a removed clone. Read `winter-workspace
-context ws/prune`.
+`projects/`; clones and agent copies that a leftover workspace exclude block names; and dangling links in
+`.claude/skills`, `.claude/agents`, and `.codex/skills`. It retains a clone that could hold work, for example one with
+uncommitted or untracked changes, with commits no remote-tracking branch holds, with stashes or linked worktrees, or
+with no `.git`. This command never removes retained material: delete it by hand. It lists what it found and asks first:
+`--dry-run` only lists, `--force` does not ask, and `--json` needs one of the two. Once the removals ran it exits 0,
+even when one of them failed, so read its lines. Ignored files go with a removed clone. Read `winter-workspace context
+ws/prune`.
 
 `ws worktrees --status` adds the git counts of each location: the commits ahead of and behind the main branch of
 `origin` and the number of dirty files for a worktree, the same against the upstream of its branch for the workspace
