@@ -106,6 +106,12 @@ completions are stderr rows; the sink writes them through `diagnostics::notice`,
 line on stderr of such a run is still written by the entry.
 An `Err` from the sink is the ending of the invocation, which the entry hands back for the command file to return.
 
+A command that asks before it changes something calls `confirm::confirm` with `cx.out`, `cx.stdin`, and the question,
+before any mutation, returns its `Err` as the ending, and writes the prompt nowhere else. Such a command calls one
+domain entry before the question, which only reads, and one after it, which changes: `ws prune` calls `prune::survey`
+and then `prune::prune`. Its sink writes a refresh of the exclude blocks as `ws init` does, through `bootstrap::text`,
+or through `bootstrap::document` under `--json`.
+
 A command file does not spell its own command path as a string literal. The path follows from where the file is, and
 reaches `run` as `cx.invoked`, with the usage of the node.
 
@@ -217,6 +223,10 @@ gave.
 to `Termination::Config` or `Termination::Internal`. Otherwise it returns `RunEnd`: a successful completion maps to
 `Termination::Success`, a completion with reported failures to `Termination::Reported`, and a stopped run to the
 original sink ending. Its orchestration and worker boundaries are owned by [structure.md](./structure.md#modules).
+
+`prune::survey` fails with `SurveyError`: `Config` becomes `Termination::Config`, and `Refused`, a `BootstrapError`,
+becomes `Termination::Command`. `prune::prune` answers a `PruneEnd`: a completed run becomes `Termination::Success`
+whatever each removal reported, and a stopped run the ending the sink gave.
 
 An entry that reports a condition on stderr takes a `&mut Diagnostics`, the borrow of the stderr handle and the log its
 command file built, and writes through `crates/core/src/diagnostics.rs`: `repository_catalog::list` writes the drift

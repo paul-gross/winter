@@ -25,7 +25,8 @@ workspace.
   `.winter/config.toml` other than one made for the run; never in the checkout and never in a real workspace, because it
   resolves the workspace upward from its working directory, `init` writes a configuration and the agent files into that
   directory, `repo add` and `repo remove` write to the configuration they find there, and `ws update` fetches, resets branches, stashes, and writes the lock, and, with `--freeze`, the
-  configuration, of the workspace it finds there. It is never installed, and never put on `PATH` under the name of the installed `winter`. The isolated tree is the one
+  configuration, of the workspace it finds there, and `ws prune` removes directories, links, and files of the workspace it finds there and rewrites its
+  exclude file. It is never installed, and never put on `PATH` under the name of the installed `winter`. The isolated tree is the one
   [testing.md](./context/standards/testing.md#the-isolated-tree) describes; a scratch workspace is a directory made for
   the run that holds a `.winter/config.toml` of its own.
 
