@@ -71,6 +71,19 @@ such as `assert!(false)`, would fail the `clippy` step too and is not used.
 The last fault needs no edit to the scenario target, which fails on a scenario directory it cannot replay; an empty one
 is such a directory.
 
+### `workspace:manual-init`
+
+Exercises workspace creation through the built binary.
+
+**Setup.** Build with `cargo build --workspace --locked`. Use a fresh temporary directory outside any real workspace
+under `$BLIZZARD_TMPDIR`; verify that no ancestor holds `.winter/config.toml`. Create an empty `workspace` directory. From it run the absolute
+path to `target/debug/winter-workspace init --json` with `OTEL_SDK_DISABLED=true`: expect exit 0, the created statuses,
+and only `.winter/config.toml`, `AGENTS.md`, and `CLAUDE.md`. Read the config and the agent files; the config pins the
+binary's version, the agent file contains the safety block, and the shim imports it. Run init again: expect exit 1,
+no stdout, an already-initialized diagnostic, and all three files unchanged. Run `context init` and check its guidance.
+
+**Success.** Both exits, streams, files, and the guidance match these observations.
+
 ### `workspace:manual-registration`
 
 Exercises command discovery: that the build picks up a new command file, and that the build script itself stops the

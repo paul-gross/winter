@@ -248,6 +248,7 @@ fn the_matrix_declares_its_manual_methods_each_with_its_setup_its_success_and_wh
         ids,
         [
             "workspace:manual-gates",
+            "workspace:manual-init",
             "workspace:manual-registration",
             "workspace:manual-interrupt",
             "workspace:manual-repo-add",
@@ -262,17 +263,22 @@ fn the_matrix_declares_its_manual_methods_each_with_its_setup_its_success_and_wh
         for stated in ["**Setup.**", "**Success.**"] {
             assert!(text.contains(stated), "{id} does not state {stated}");
         }
-        let location: &[&str] =
-            if id.starts_with("workspace:manual-repo-") || id.starts_with("workspace:manual-ws-") {
-                &[
-                    "fresh temporary directory outside any real workspace",
-                    "verify that no ancestor holds `.winter/config.toml`",
-                    "Work only in a new `workspace/` beneath it",
-                    "with a `.winter/config.toml` made for this run",
-                ]
-            } else {
-                &["scratch copy of the checkout"]
-            };
+        let location: &[&str] = if id == "workspace:manual-init" {
+            &[
+                "fresh temporary directory outside any real workspace",
+                "verify that no ancestor holds `.winter/config.toml`",
+            ]
+        } else if id.starts_with("workspace:manual-repo-") || id.starts_with("workspace:manual-ws-")
+        {
+            &[
+                "fresh temporary directory outside any real workspace",
+                "verify that no ancestor holds `.winter/config.toml`",
+                "Work only in a new `workspace/` beneath it",
+                "with a `.winter/config.toml` made for this run",
+            ]
+        } else {
+            &["scratch copy of the checkout"]
+        };
         for stated in location {
             assert!(text.contains(stated), "{id} does not state {stated}");
         }

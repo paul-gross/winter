@@ -18,6 +18,7 @@ use crate::workspace_files::{PROJECTS_DIR, standalone_location};
 
 pub(crate) mod checkout;
 pub(crate) mod create;
+pub(crate) use create::{CreateError, create};
 
 /// What reconciliation reports as it happens.
 #[derive(Debug, Clone, PartialEq, Eq)]
