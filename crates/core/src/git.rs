@@ -35,6 +35,7 @@ const STASH_PUSH_SPAN: &str = "git stash push";
 const STASH_POP_SPAN: &str = "git stash pop";
 const CONFIG_SPAN: &str = "git config";
 const CLONE_SPAN: &str = "git clone";
+const REV_LIST_SPAN: &str = "git rev-list";
 
 /// The one attribute of a span: the name of the repository the operation works on.
 pub(crate) const REPO_ATTRIBUTE: &str = "winter.repo";
@@ -84,7 +85,8 @@ pub fn fetch(
     ended(finished, repo, path, GitOperation::Fetch, &args, &mut *span).map(drop)
 }
 
-/// Whether the checkout at `path` has no change: no modified tracked file and no untracked file.
+/// Whether the checkout at `path` has no change: no modified tracked file and no untracked file. An untracked
+/// file counts whatever `status.showUntrackedFiles` is set to.
 ///
 /// Any failure of git reads as dirty. Only a git that cannot be started is an error.
 pub fn clean(
@@ -94,8 +96,53 @@ pub fn clean(
     path: &Path,
 ) -> Result<bool, GitFailure> {
     let _span = tracer.operation(STATUS_SPAN, &[(REPO_ATTRIBUTE, repo)]);
-    let finished = run(programs, path, &["status", "--porcelain"])?;
+    let args = ["status", "--porcelain", "--untracked-files=normal"];
+    let finished = run(programs, path, &args)?;
     Ok(finished.exit == Exit::Code(0) && finished.stdout.is_empty())
+}
+
+/// Whether the checkout at `path`, the checkout of the repository `repo`, holds a commit that no
+/// remote-tracking branch holds: one reachable from `HEAD`, a local branch, or a tag.
+///
+/// A history that cannot be read is an error, a `HEAD` that names no commit among them.
+pub fn local_only(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+) -> Result<bool, GitFailure> {
+    let mut span = tracer.operation(REV_LIST_SPAN, &[(REPO_ATTRIBUTE, repo)]);
+    let args = [
+        "rev-list",
+        "--max-count=1",
+        "HEAD",
+        "--branches",
+        "--tags",
+        "--not",
+        "--remotes",
+    ];
+    let operation = GitOperation::LocalOnly;
+    let finished = succeeded(programs, repo, path, operation, &args, &mut *span)?;
+    Ok(!finished.stdout.is_empty())
+}
+
+/// Whether the repository of the checkout at `path`, the checkout of the repository `repo`, holds a stash.
+///
+/// Exit 1 is how git says there is none. Any other non-zero exit is an error.
+pub fn stashed(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+) -> Result<bool, GitFailure> {
+    let mut span = tracer.operation(REV_PARSE_SPAN, &[(REPO_ATTRIBUTE, repo)]);
+    let args = ["rev-parse", "--verify", "--quiet", "refs/stash"];
+    let finished = run(programs, path, &args)?;
+    if finished.exit == Exit::Code(1) {
+        return Ok(false);
+    }
+    let operation = GitOperation::StashList;
+    ended(finished, repo, path, operation, &args, &mut *span).map(|_| true)
 }
 
 /// The tree of the tracked content of the checkout at `path`, the checkout of the repository `repo`: what

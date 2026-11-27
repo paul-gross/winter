@@ -43,7 +43,7 @@ fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
     let mut results = output::Results::new(&mut *cx.out);
     let mut sink = |event: &InitEvent, diagnostics: &mut Diagnostics<'_>| {
         if json {
-            return results.event(&document(event));
+            return results.event(&bootstrap::document(event));
         }
         match bootstrap::text(event) {
             Some((TextStream::Stdout, line)) => results.line(&line)?,
@@ -61,50 +61,9 @@ fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
     }
 }
 
-/// One shape-C event, without an invocation-level envelope.
-fn document(event: &InitEvent) -> serde_json::Value {
-    match event {
-        InitEvent::TargetStarted { target } => {
-            serde_json::json!({"type": "target_started", "target": target})
-        }
-        InitEvent::TargetCompleted { target, success } => {
-            serde_json::json!({"type": "target_completed", "target": target, "success": success})
-        }
-        InitEvent::RepoAction {
-            repo,
-            location,
-            action,
-            detail,
-        } => {
-            let action = action.wire_name();
-            serde_json::json!({
-                "type": "repo_action", "repo": repo, "location": location,
-                "action": action, "detail": detail,
-            })
-        }
-        InitEvent::RepoError { repo, error } => {
-            serde_json::json!({"type": "repo_error", "repo": repo, "error": error})
-        }
-        InitEvent::CmdStarted { repo, command } => {
-            serde_json::json!({"type": "cmd_started", "repo": repo, "command": command})
-        }
-        InitEvent::CmdOutputLine { repo, line } => {
-            serde_json::json!({"type": "cmd_output_line", "repo": repo, "line": line})
-        }
-        InitEvent::CmdCompleted {
-            repo,
-            command,
-            returncode,
-        } => serde_json::json!({
-            "type": "cmd_completed", "repo": repo, "command": command, "returncode": returncode,
-        }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootstrap::Action;
 
     fn parsed(arguments: &[&str]) -> Result<ArgMatches, clap::Error> {
         args(clap::Command::new("init").no_binary_name(true)).try_get_matches_from(arguments)
@@ -119,81 +78,6 @@ mod tests {
             assert_eq!(
                 parsed(arguments).expect_err("unsupported form").kind(),
                 clap::error::ErrorKind::UnknownArgument
-            );
-        }
-    }
-
-    #[test]
-    fn actions_keep_all_fields_and_their_wire_names() {
-        for action in [
-            Action::Cloned,
-            Action::Exists,
-            Action::ExcludesUpdated,
-            Action::Pinned,
-            Action::WorkspaceExcludesUpdated,
-            Action::AgentsMdUpdated,
-        ] {
-            assert_eq!(
-                document(&InitEvent::RepoAction {
-                    repo: "api".into(),
-                    location: "/w/projects/api".into(),
-                    action,
-                    detail: "".into(),
-                }),
-                serde_json::json!({
-                    "type": "repo_action", "repo": "api", "location": "/w/projects/api",
-                    "action": action.wire_name(), "detail": "",
-                })
-            );
-        }
-    }
-
-    #[test]
-    fn target_and_command_events_keep_their_fields() {
-        assert_eq!(
-            document(&InitEvent::TargetStarted {
-                target: "projects/".into()
-            }),
-            serde_json::json!({"type": "target_started", "target": "projects/"})
-        );
-        for success in [true, false] {
-            assert_eq!(
-                document(&InitEvent::TargetCompleted {
-                    target: "projects/".into(),
-                    success
-                }),
-                serde_json::json!({"type": "target_completed", "target": "projects/", "success": success})
-            );
-        }
-        assert_eq!(
-            document(&InitEvent::RepoError {
-                repo: "api".into(),
-                error: "failed\nstep".into()
-            }),
-            serde_json::json!({"type": "repo_error", "repo": "api", "error": "failed\nstep"})
-        );
-        assert_eq!(
-            document(&InitEvent::CmdStarted {
-                repo: "api".into(),
-                command: "make setup".into()
-            }),
-            serde_json::json!({"type": "cmd_started", "repo": "api", "command": "make setup"})
-        );
-        assert_eq!(
-            document(&InitEvent::CmdOutputLine {
-                repo: "api".into(),
-                line: "".into()
-            }),
-            serde_json::json!({"type": "cmd_output_line", "repo": "api", "line": ""})
-        );
-        for returncode in [0, 7, -15] {
-            assert_eq!(
-                document(&InitEvent::CmdCompleted {
-                    repo: "api".into(),
-                    command: "make setup".into(),
-                    returncode
-                }),
-                serde_json::json!({"type": "cmd_completed", "repo": "api", "command": "make setup", "returncode": returncode})
             );
         }
     }

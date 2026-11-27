@@ -157,6 +157,46 @@ pub fn text(event: &InitEvent) -> Option<(TextStream, String)> {
     })
 }
 
+/// One shape-C event, without an invocation-level envelope.
+pub(crate) fn document(event: &InitEvent) -> serde_json::Value {
+    match event {
+        InitEvent::TargetStarted { target } => {
+            serde_json::json!({"type": "target_started", "target": target})
+        }
+        InitEvent::TargetCompleted { target, success } => {
+            serde_json::json!({"type": "target_completed", "target": target, "success": success})
+        }
+        InitEvent::RepoAction {
+            repo,
+            location,
+            action,
+            detail,
+        } => {
+            let action = action.wire_name();
+            serde_json::json!({
+                "type": "repo_action", "repo": repo, "location": location,
+                "action": action, "detail": detail,
+            })
+        }
+        InitEvent::RepoError { repo, error } => {
+            serde_json::json!({"type": "repo_error", "repo": repo, "error": error})
+        }
+        InitEvent::CmdStarted { repo, command } => {
+            serde_json::json!({"type": "cmd_started", "repo": repo, "command": command})
+        }
+        InitEvent::CmdOutputLine { repo, line } => {
+            serde_json::json!({"type": "cmd_output_line", "repo": repo, "line": line})
+        }
+        InitEvent::CmdCompleted {
+            repo,
+            command,
+            returncode,
+        } => serde_json::json!({
+            "type": "cmd_completed", "repo": repo, "command": command, "returncode": returncode,
+        }),
+    }
+}
+
 /// Reconciles declared checkouts and refreshes only content owned by the workspace.
 pub fn reconcile(
     ports: &Ports<'_>,
@@ -198,7 +238,8 @@ fn action(
     })
 }
 
-fn git_text(error: GitFailure) -> String {
+/// The text of a git failure in an event or a warning.
+pub(crate) fn git_text(error: GitFailure) -> String {
     match error {
         GitFailure::Repo(error) => rendered(&error),
         GitFailure::Internal(error) => error.to_string(),
@@ -235,7 +276,8 @@ fn block(
     Ok(true)
 }
 
-fn extension(ports: &Ports<'_>, root: &Path, project: &ProjectRepository) -> bool {
+/// Whether `project` is an extension: it does not opt out, and its checkout holds `winter-ext.toml`.
+pub(crate) fn extension(ports: &Ports<'_>, root: &Path, project: &ProjectRepository) -> bool {
     project.common.extension
         && ports.files.is_file(
             &root
@@ -254,7 +296,9 @@ fn projects_only(config: &WorkspaceConfig) -> impl Iterator<Item = &ProjectRepos
     })
 }
 
-fn eligible(ports: &Ports<'_>, workspace: &Workspace) -> Vec<Eligible> {
+/// The extensions that get an exclude block of their own: each standalone whose location exists, then each
+/// project that is an extension, in merged order. A location outside the root is left out.
+pub(crate) fn eligible(ports: &Ports<'_>, workspace: &Workspace) -> Vec<Eligible> {
     let root = &workspace.root;
     let config = &workspace.config;
     let standalone = config
@@ -293,6 +337,29 @@ fn eligible(ports: &Ports<'_>, workspace: &Workspace) -> Vec<Eligible> {
             })
         })
         .collect()
+}
+
+/// The event of a finalization of the extension blocks: the update, the failure, or none for a file that
+/// stays as it is.
+pub(crate) fn finalized_event(finalized: Result<Finalized, GitFailure>) -> Option<InitEvent> {
+    const REPO: &str = "winter-extensions";
+    match finalized {
+        Ok(Finalized::Updated { file, names }) => Some(InitEvent::RepoAction {
+            repo: REPO.to_owned(),
+            location: file.display().to_string(),
+            action: Action::WorkspaceExcludesUpdated,
+            detail: if names.is_empty() {
+                "cleared".to_owned()
+            } else {
+                names.join(", ")
+            },
+        }),
+        Ok(_) => None,
+        Err(cause) => Some(InitEvent::RepoError {
+            repo: REPO.to_owned(),
+            error: git_text(cause),
+        }),
+    }
 }
 
 fn reconcile_loaded(
@@ -395,23 +462,11 @@ fn reconcile_loaded(
     } else {
         Vec::new()
     };
-    match workspace_exclude::finalize(ports, root, config.adopt_extensions, &eligible, &[]) {
-        Ok(Finalized::Updated { file, names }) => action(
-            emit,
-            "winter-extensions",
-            &file,
-            Action::WorkspaceExcludesUpdated,
-            if names.is_empty() {
-                "cleared".to_owned()
-            } else {
-                names.join(", ")
-            },
-        )?,
-        Ok(_) => {}
-        Err(cause) => {
-            error(emit, "winter-extensions", git_text(cause))?;
-            standalone_ok = false;
-        }
+    let finalized =
+        workspace_exclude::finalize(ports, root, config.adopt_extensions, &eligible, &[]);
+    standalone_ok &= finalized.is_ok();
+    if let Some(event) = finalized_event(finalized) {
+        emit(event)?;
     }
     if active {
         emit(InitEvent::TargetCompleted {
@@ -559,6 +614,81 @@ mod tests {
             (Action::AgentsMdUpdated, "agents_md_updated"),
         ] {
             assert_eq!(action.wire_name(), name);
+        }
+    }
+
+    #[test]
+    fn actions_keep_all_fields_and_their_wire_names() {
+        for action in [
+            Action::Cloned,
+            Action::Exists,
+            Action::ExcludesUpdated,
+            Action::Pinned,
+            Action::WorkspaceExcludesUpdated,
+            Action::AgentsMdUpdated,
+        ] {
+            assert_eq!(
+                document(&InitEvent::RepoAction {
+                    repo: "api".into(),
+                    location: "/w/projects/api".into(),
+                    action,
+                    detail: "".into(),
+                }),
+                serde_json::json!({
+                    "type": "repo_action", "repo": "api", "location": "/w/projects/api",
+                    "action": action.wire_name(), "detail": "",
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn target_and_command_events_keep_their_fields() {
+        assert_eq!(
+            document(&InitEvent::TargetStarted {
+                target: "projects/".into()
+            }),
+            serde_json::json!({"type": "target_started", "target": "projects/"})
+        );
+        for success in [true, false] {
+            assert_eq!(
+                document(&InitEvent::TargetCompleted {
+                    target: "projects/".into(),
+                    success
+                }),
+                serde_json::json!({"type": "target_completed", "target": "projects/", "success": success})
+            );
+        }
+        assert_eq!(
+            document(&InitEvent::RepoError {
+                repo: "api".into(),
+                error: "failed\nstep".into()
+            }),
+            serde_json::json!({"type": "repo_error", "repo": "api", "error": "failed\nstep"})
+        );
+        assert_eq!(
+            document(&InitEvent::CmdStarted {
+                repo: "api".into(),
+                command: "make setup".into()
+            }),
+            serde_json::json!({"type": "cmd_started", "repo": "api", "command": "make setup"})
+        );
+        assert_eq!(
+            document(&InitEvent::CmdOutputLine {
+                repo: "api".into(),
+                line: "".into()
+            }),
+            serde_json::json!({"type": "cmd_output_line", "repo": "api", "line": ""})
+        );
+        for returncode in [0, 7, -15] {
+            assert_eq!(
+                document(&InitEvent::CmdCompleted {
+                    repo: "api".into(),
+                    command: "make setup".into(),
+                    returncode
+                }),
+                serde_json::json!({"type": "cmd_completed", "repo": "api", "command": "make setup", "returncode": returncode})
+            );
         }
     }
 
