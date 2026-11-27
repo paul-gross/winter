@@ -12,7 +12,7 @@ mod remote;
 use crate::diagnostics::Diagnostics;
 use crate::files::{ReadFiles, ScratchFiles};
 use crate::process::ProcessEnv;
-use crate::programs::{Call, Exit, Finished, Program, RunPrograms};
+use crate::programs::{Call, Exit, Finished, Pacing, Program, RunPrograms};
 use crate::termination::{GitOperation, InternalError, RepoError, RepoMessage};
 use crate::trace::{CommandTracer, OperationSpan};
 
@@ -108,23 +108,40 @@ const LOCATING_VARIABLES: [&str; 12] = [
 /// through it.
 pub(crate) struct OwnRepository<'a>(pub(crate) &'a dyn RunPrograms);
 
+/// The names a call of [`OwnRepository`] removes: those of `call`, then [`LOCATING_VARIABLES`].
+fn without_locating<'a>(call: &Call<'a>) -> Vec<&'a OsStr> {
+    let locating = LOCATING_VARIABLES.iter().map(|name| OsStr::new(*name));
+    call.remove.iter().copied().chain(locating).collect()
+}
+
 impl RunPrograms for OwnRepository<'_> {
+    fn pacing(&self) -> Pacing {
+        self.0.pacing()
+    }
+
     fn run(&self, call: &Call<'_>) -> io::Result<Finished> {
-        let remove: Vec<&OsStr> = call
-            .remove
-            .iter()
-            .copied()
-            .chain(LOCATING_VARIABLES.iter().map(OsStr::new))
-            .collect();
+        let remove = without_locating(call);
         self.0.run(&Call {
             remove: &remove,
             ..*call
         })
     }
+
+    fn stream(&self, call: &Call<'_>, line: &mut dyn FnMut(&[u8])) -> io::Result<Exit> {
+        let remove = without_locating(call);
+        self.0.stream(
+            &Call {
+                remove: &remove,
+                ..*call
+            },
+            line,
+        )
+    }
 }
 
-/// Whether the checkout at `path` has no change: no modified tracked file and no untracked file. An untracked
-/// file counts whatever `status.showUntrackedFiles` is set to.
+/// Whether the checkout at `path` has no change: no modified tracked file and no untracked file, in it or in
+/// a submodule of it. Neither `status.showUntrackedFiles` nor a setting that ignores submodules hides one, and
+/// the index of the checkout is not written.
 ///
 /// Any failure of git reads as dirty. Only a git that cannot be started is an error.
 pub fn clean(
@@ -134,8 +151,17 @@ pub fn clean(
     path: &Path,
 ) -> Result<bool, GitFailure> {
     let _span = tracer.operation(STATUS_SPAN, &[(REPO_ATTRIBUTE, repo)]);
-    let args = ["status", "--porcelain", "--untracked-files=normal"];
-    let finished = run(programs, path, &args)?;
+    // The setting, unlike the option, also reaches the status git asks of each submodule.
+    let args = [
+        "-c",
+        "status.showUntrackedFiles=normal",
+        "status",
+        "--porcelain",
+        "--untracked-files=normal",
+        "--ignore-submodules=none",
+    ];
+    let env = [(OsStr::new("GIT_OPTIONAL_LOCKS"), OsStr::new("0"))];
+    let finished = run_for(programs, path, &args, None, &env)?;
     Ok(finished.exit == Exit::Code(0) && finished.stdout.is_empty())
 }
 
@@ -777,6 +803,78 @@ fn call_error<A: AsRef<OsStr>>(
 
 #[cfg(test)]
 mod tests {
+    /// What a call was given to remove, by each way of starting a program.
+    #[derive(Default)]
+    struct Removed(std::sync::Mutex<Vec<Vec<String>>>);
+
+    impl Removed {
+        fn note(&self, call: &Call<'_>) {
+            let names = call.remove.iter().map(|name| name.to_string_lossy());
+            let names = names.map(|name| name.into_owned()).collect();
+            self.0.lock().expect("the record").push(names);
+        }
+    }
+
+    impl RunPrograms for Removed {
+        fn pacing(&self) -> Pacing {
+            Pacing {
+                draw: || 0.25,
+                ..Pacing::real()
+            }
+        }
+
+        fn run(&self, call: &Call<'_>) -> io::Result<Finished> {
+            self.note(call);
+            Ok(Finished {
+                exit: Exit::Code(0),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        }
+
+        fn stream(&self, call: &Call<'_>, _: &mut dyn FnMut(&[u8])) -> io::Result<Exit> {
+            self.note(call);
+            Ok(Exit::Code(7))
+        }
+    }
+
+    #[test]
+    fn a_program_of_its_own_repository_is_given_none_of_the_variables_that_locate_one() {
+        let inner = Removed::default();
+        let own = OwnRepository(&inner);
+        let call = Call {
+            program: Program::Git,
+            args: &[],
+            cwd: std::path::Path::new("/ws"),
+            timeout: None,
+            env: &[],
+            remove: &[OsStr::new("KEPT")],
+            stdin: crate::programs::Stdin::Null,
+        };
+
+        own.run(&call).expect("a run");
+        let streamed = own.stream(&call, &mut |_| {}).expect("a stream");
+        let drawn = (own.pacing().draw)();
+
+        let expected = [
+            "KEPT",
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_IMPLICIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_NAMESPACE",
+            "GIT_GRAFT_FILE",
+            "GIT_SHALLOW_FILE",
+            "GIT_REPLACE_REF_BASE",
+            "GIT_PREFIX",
+        ];
+        assert_eq!((streamed, drawn), (Exit::Code(7), 0.25));
+        assert_eq!(*inner.0.lock().expect("the record"), [expected, expected]);
+    }
+
     use std::io;
 
     use super::*;

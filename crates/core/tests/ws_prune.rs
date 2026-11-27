@@ -1,7 +1,6 @@
 //! `ws prune` through its command, against the host's git in fixture workspaces: what it removes, what it
 //! retains and why, what it asks, and what it leaves of the exclude file.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -9,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use winter_workspace_core::{BootstrapError, CommandError, Termination};
-use winter_workspace_test_support::{CommitSpec, Found, Git, TempTree, WorkspaceBuilder, snapshot};
+use winter_workspace_test_support::{CommitSpec, Git, TempTree, WorkspaceBuilder, snapshot};
 
 #[path = "support/in_process.rs"]
 mod in_process;
@@ -95,14 +94,6 @@ fn exclude(tree: &TempTree) -> String {
     fs::read_to_string(root(tree).join(".git/info/exclude")).expect("the exclude file")
 }
 
-/// The workspace as a test compares it before and after: every entry but the index of a repository, which
-/// git may rewrite when it is asked for a status.
-fn held(tree: &TempTree) -> BTreeMap<PathBuf, Found> {
-    let mut found = snapshot(&root(tree));
-    found.retain(|path, _| path.file_name().is_none_or(|name| name != "index"));
-    found
-}
-
 fn assert_success(ended: &Ended, subject: &str) {
     assert!(
         matches!(ended.termination, Termination::Success),
@@ -160,7 +151,7 @@ fn an_undeclared_clean_clone_is_removed_after_a_yes() {
 fn a_declined_or_unanswered_prompt_exits_1_and_removes_nothing() {
     for answer in ["n\n", "\n", "", "what\nno\n"] {
         let tree = fixture(&["old"], true);
-        let before = held(&tree);
+        let before = snapshot(&root(&tree));
 
         let ended = prune(&tree, &[], answer);
 
@@ -179,7 +170,7 @@ fn a_declined_or_unanswered_prompt_exits_1_and_removes_nothing() {
             ended.stdout
         );
         assert!(!ended.stdout.contains("remove projects"), "{answer:?}");
-        assert_eq!(held(&tree), before, "{answer:?}");
+        assert_eq!(snapshot(&root(&tree)), before, "{answer:?}");
         assert!(root(&tree).join("projects/old/README").is_file());
     }
 }
@@ -232,7 +223,7 @@ fn retained_fixture() -> (TempTree, Vec<(&'static str, &'static str)>) {
 #[test]
 fn a_clone_that_could_hold_work_is_retained_with_its_note_and_nothing_is_asked() {
     let (tree, notes) = retained_fixture();
-    let before = held(&tree);
+    let before = snapshot(&root(&tree));
     let mut preview = String::new();
     for (name, note) in &notes {
         let relative = format!("projects/{name}");
@@ -255,13 +246,13 @@ fn a_clone_that_could_hold_work_is_retained_with_its_note_and_nothing_is_asked()
             "{preview}Nothing to remove (all orphans are blocked). Resolve the notes above and re-run.\n"
         )
     );
-    assert_eq!(held(&tree), before);
+    assert_eq!(snapshot(&root(&tree)), before);
 }
 
 #[test]
 fn a_clone_that_could_hold_work_is_retained_under_force_too() {
     let (tree, notes) = retained_fixture();
-    let before = held(&tree);
+    let before = snapshot(&root(&tree));
 
     let ended = prune(&tree, &["--force"], "");
 
@@ -277,7 +268,7 @@ fn a_clone_that_could_hold_work_is_retained_under_force_too() {
     }
     assert!(!ended.stdout.contains("[y/N]"), "{}", ended.stdout);
     assert!(!ended.stdout.contains("  remove "), "{}", ended.stdout);
-    assert_eq!(held(&tree), before);
+    assert_eq!(snapshot(&root(&tree)), before);
 
     let document = prune(&tree, &["--json", "--force"], "").document("forced JSON");
     assert_eq!(document["excludes_updated"], false);
@@ -292,7 +283,7 @@ fn a_clone_that_could_hold_work_is_retained_under_force_too() {
             })
         );
     }
-    assert_eq!(held(&tree), before);
+    assert_eq!(snapshot(&root(&tree)), before);
 }
 
 #[test]
@@ -452,6 +443,176 @@ fn inherited_variables_that_locate_a_repository_answer_for_no_candidate() {
     assert!(!exclude(&tree).contains("gone"), "{}", exclude(&tree));
 }
 
+/// A safe clone `projects/old` that ignores `held/`, with a clone there that a stale block names.
+fn nested() -> (TempTree, PathBuf) {
+    let tree = fixture(&["old"], true);
+    let held = clone_at(&tree, "held", "projects/old/held");
+    let info = root(&tree).join("projects/old/.git/info");
+    fs::create_dir_all(&info).expect("info/");
+    fs::write(info.join("exclude"), "held/\n").expect("an exclude");
+    write_blocks(&tree, &[("held", &["/projects/old/held/"])]);
+    (tree, held)
+}
+
+#[test]
+fn a_clone_that_holds_a_retained_candidate_stays_with_it() {
+    let (tree, held) = nested();
+    fs::write(held.join("notes"), "work\n").expect("a file");
+
+    let ended = prune(&tree, &["--force"], "");
+
+    assert_success(&ended, "a forced run");
+    for line in [
+        "  skip   projects/old (holds retained material)\n",
+        "  skip   projects/old/held (uncommitted or untracked changes)\n",
+    ] {
+        assert!(ended.stdout.contains(line), "{line:?}: {}", ended.stdout);
+    }
+    assert!(held.join("notes").is_file());
+}
+
+#[test]
+fn a_safe_candidate_inside_a_removed_clone_is_reported_removed() {
+    let (tree, _) = nested();
+
+    let ended = prune(&tree, &["--force"], "");
+
+    assert_success(&ended, "a forced run");
+    for line in ["  remove projects/old\n", "  remove projects/old/held\n"] {
+        assert!(ended.stdout.contains(line), "{line:?}: {}", ended.stdout);
+    }
+    assert!(!root(&tree).join("projects/old").exists());
+    assert!(!exclude(&tree).contains("held"), "{}", exclude(&tree));
+}
+
+#[test]
+fn a_candidate_that_gains_work_after_the_scan_keeps_the_clone_that_holds_it() {
+    let (tree, held) = nested();
+    // The prompt is written after the scan and before any removal.
+    struct Gains(PathBuf);
+    impl Write for Gains {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if bytes.ends_with(b"[y/N]: ") {
+                fs::write(self.0.join("notes"), "work\n")?;
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let ended = InProcess::new(&["ws", "prune"])
+        .cwd(&root(&tree))
+        .pinned(&tree.env())
+        .stdin(b"y\n")
+        .run_with_stdout(&mut Gains(held.clone()));
+
+    assert_success(&ended, "a confirmed run");
+    assert!(held.join("notes").is_file());
+    assert!(root(&tree).join("projects/old/.git").is_dir());
+}
+
+#[test]
+fn a_removal_that_fails_keeps_its_block_and_the_run_goes_on() {
+    let tree = fixture(&[], true);
+    let stuck = clone_at(&tree, "stuck", "locked/stuck");
+    let other = clone_at(&tree, "other", "other");
+    write_blocks(
+        &tree,
+        &[("stuck", &["/locked/stuck/"]), ("other", &["/other/"])],
+    );
+    let locked = root(&tree).join("locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).expect("read-only");
+
+    let ended = prune(&tree, &["--json", "--force"], "");
+
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).expect("writable");
+    assert_success(&ended, "a forced run");
+    let last = ended.stdout.lines().last().expect("the document");
+    let document: Value = serde_json::from_str(last).expect("JSON");
+    assert_eq!(document["orphans"][0]["action"], "error", "{document}");
+    assert!(document["orphans"][0]["error"].is_string(), "{document}");
+    assert_eq!(document["orphans"][1]["action"], "removed", "{document}");
+    assert!(stuck.exists());
+    assert!(!other.exists());
+    let exclude = exclude(&tree);
+    assert!(exclude.contains("/locked/stuck/"), "{exclude}");
+    assert!(!exclude.contains("/other/"), "{exclude}");
+}
+
+#[test]
+fn a_link_whose_target_cannot_be_looked_at_is_not_dangling() {
+    let tree = fixture(&[], true);
+    let closed = tree.root().join("closed");
+    fs::create_dir(&closed).expect("a directory");
+    fs::write(closed.join("skill"), "x\n").expect("a file");
+    let skills = root(&tree).join(".claude/skills");
+    fs::create_dir_all(&skills).expect("skills/");
+    std::os::unix::fs::symlink(closed.join("skill"), skills.join("kept")).expect("a link");
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).expect("closed");
+
+    let ended = prune(&tree, &["--force"], "");
+
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o755)).expect("open");
+    assert_success(&ended, "a forced run");
+    assert_eq!(ended.stdout, "Nothing to prune. Workspace is clean.\n");
+    assert!(skills.join("kept").exists());
+}
+
+#[test]
+fn a_vendor_directory_that_leads_outside_the_root_holds_no_candidate() {
+    let tree = fixture(&[], true);
+    let outside = tree.root().join("shared");
+    fs::create_dir(&outside).expect("a directory");
+    std::os::unix::fs::symlink(tree.root().join("nowhere"), outside.join("dangling"))
+        .expect("a link");
+    fs::write(outside.join("ext-a.md"), "x\n").expect("a copy");
+    fs::create_dir_all(root(&tree).join(".claude")).expect(".claude/");
+    for directory in [".claude/skills", ".claude/agents"] {
+        std::os::unix::fs::symlink(&outside, root(&tree).join(directory)).expect("a link");
+    }
+    write_blocks(&tree, &[("ext", &[".claude/agents/ext-*"])]);
+    let before = snapshot(&outside);
+
+    let ended = prune(&tree, &["--dry-run"], "");
+
+    assert_success(&ended, "a dry run");
+    assert_eq!(ended.stdout, "Nothing to prune. Workspace is clean.\n");
+    assert_eq!(snapshot(&outside), before);
+}
+
+#[test]
+fn a_block_without_its_end_marker_names_no_candidate_and_is_left_as_it_is() {
+    let tree = fixture(&["old"], true);
+    let mine = clone_at(&tree, "mine", "mine");
+    write_blocks(&tree, &[]);
+    let path = root(&tree).join(".git/info/exclude");
+    let broken = "# >>> gone (managed by winter)\n/gone/\n/mine/\nkeep-me\n";
+    fs::write(&path, format!("user-line\n{broken}")).expect("the exclude file");
+
+    let ended = prune(&tree, &["--force"], "");
+
+    assert!(
+        matches!(ended.termination, Termination::Success),
+        "{:?}",
+        ended.termination
+    );
+    assert!(
+        ended.stdout.contains("  remove projects/old\n"),
+        "{}",
+        ended.stdout
+    );
+    assert!(!ended.stdout.contains("mine"), "{}", ended.stdout);
+    assert!(
+        ended.stderr.contains("the block gone") && ended.stderr.contains("malformed"),
+        "{}",
+        ended.stderr
+    );
+    assert!(mine.join(".git").is_dir());
+    assert!(exclude(&tree).contains(broken), "{}", exclude(&tree));
+}
+
 #[test]
 fn a_block_line_that_resolves_outside_the_root_is_retained() {
     let tree = fixture(&[], true);
@@ -507,7 +668,7 @@ fn removing_a_project_clone_alone_from_a_git_root_reports_the_excludes_updated()
 #[test]
 fn json_alone_is_refused_and_removes_nothing() {
     let tree = fixture(&["old"], true);
-    let before = held(&tree);
+    let before = snapshot(&root(&tree));
 
     let termination = prune(&tree, &["--json"], "y\n").wrote_nothing(1, "--json alone");
 
@@ -521,14 +682,14 @@ fn json_alone_is_refused_and_removes_nothing() {
         ),
         "{error:?}"
     );
-    assert_eq!(held(&tree), before);
+    assert_eq!(snapshot(&root(&tree)), before);
 }
 
 #[test]
 fn a_json_dry_run_gives_each_orphan_the_action_it_would_get_and_removes_nothing() {
     let tree = fixture(&["dirty", "old"], true);
     fs::write(root(&tree).join("projects/dirty/untracked.txt"), "work\n").expect("a file");
-    let before = held(&tree);
+    let before = snapshot(&root(&tree));
 
     for options in [
         &["--json", "--dry-run"][..],
@@ -546,7 +707,7 @@ fn a_json_dry_run_gives_each_orphan_the_action_it_would_get_and_removes_nothing(
                  "safe_to_remove": true, "notes": "", "action": "would_remove"},
             ]})
         );
-        assert_eq!(held(&tree), before);
+        assert_eq!(snapshot(&root(&tree)), before);
     }
 
     let clean = fixture(&[], true);
@@ -635,12 +796,7 @@ fn a_dry_run_in_a_linked_worktree_root_writes_no_git_configuration_and_removes_n
     )
     .expect("the stand-in");
     fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).expect("a mode");
-    let workspace = |tree: &TempTree| {
-        let mut found = snapshot(&root(tree));
-        found.retain(|path, _| path.file_name().is_none_or(|name| name != "index"));
-        found
-    };
-    let before = workspace(&tree);
+    let before = snapshot(&root(&tree));
 
     let ended = InProcess::new(&["ws", "prune", "--dry-run"])
         .cwd(&linked)
@@ -660,7 +816,9 @@ fn a_dry_run_in_a_linked_worktree_root_writes_no_git_configuration_and_removes_n
     );
     let recorded = fs::read_to_string(&calls).expect("the recorded calls");
     assert!(
-        recorded.lines().any(|call| call.starts_with("status ")),
+        recorded
+            .lines()
+            .any(|call| call.contains(" status --porcelain")),
         "the stand-in must see the scan's calls: {recorded}"
     );
     let writes: Vec<&str> = recorded
@@ -668,7 +826,7 @@ fn a_dry_run_in_a_linked_worktree_root_writes_no_git_configuration_and_removes_n
         .filter(|call| call.starts_with("config") && !call.contains("--get"))
         .collect();
     assert_eq!(writes, Vec::<&str>::new(), "{recorded}");
-    assert_eq!(workspace(&tree), before);
+    assert_eq!(snapshot(&root(&tree)), before);
 
     // The removal that follows is what gives the worktree an exclude file of its own.
     let forced = InProcess::new(&["ws", "prune", "--force"])

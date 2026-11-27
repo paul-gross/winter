@@ -155,6 +155,53 @@ fn clean_is_false_for_an_untracked_file_in_a_repository_that_hides_untracked_fil
     assert!(!answer);
 }
 
+#[test]
+fn clean_is_false_for_a_change_in_a_submodule_whatever_hides_submodules_and_untracked_files() {
+    let f = fixture();
+    let source = f.clone.to_str().expect("UTF-8").to_owned();
+    let allow = "protocol.file.allow=always";
+    f.out(&["-c", allow, "submodule", "add", &source, "module"]);
+    f.out(&["commit", "-m", "add a submodule"]);
+    f.out(&["config", "diff.ignoreSubmodules", "all"]);
+    f.out(&["config", "submodule.module.ignore", "all"]);
+    f.out(&["config", "status.showUntrackedFiles", "no"]);
+    let answer = |f: &Fixture| clean(&f.programs, &Spans::default(), "api", &f.clone);
+    assert!(answer(&f).expect("an answer"), "nothing changed yet");
+
+    f.write("module/new.txt", "x\n");
+    assert_eq!(f.out(&["status", "--porcelain"]), "", "git hides the file");
+    assert!(
+        !answer(&f).expect("an answer"),
+        "untracked in the submodule"
+    );
+
+    std::fs::remove_file(f.clone.join("module/new.txt")).expect("removed");
+    f.write("module/README", "changed\n");
+    f.write("module/seed", "changed\n");
+    assert!(!answer(&f).expect("an answer"), "modified in the submodule");
+}
+
+#[test]
+fn clean_leaves_the_index_as_it_is() {
+    let f = fixture();
+    f.write("kept.txt", "x\n");
+    f.out(&["add", "kept.txt"]);
+    f.out(&["commit", "-m", "a file"]);
+    // A new modification time with the same content makes a status that may write refresh the index.
+    let file = std::fs::File::options()
+        .write(true)
+        .open(f.clone.join("kept.txt"))
+        .expect("the file");
+    file.set_modified(std::time::SystemTime::UNIX_EPOCH)
+        .expect("a time");
+    let index = f.clone.join(".git/index");
+    let before = std::fs::read(&index).expect("the index");
+
+    assert!(clean(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer"));
+
+    assert!(std::fs::read(&index).expect("the index") == before);
+}
+
 /// What `answer` failed with: the operation of its repo error.
 fn failed_operation(answer: Result<bool, GitFailure>) -> GitOperation {
     match answer {
