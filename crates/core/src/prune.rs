@@ -652,7 +652,7 @@ fn retained(ports: &Ports<'_>, workspace: &Workspace, path: &Path) -> Option<Ret
         Ok(_) => return Some(Retained::NotAClone),
         Err(_) => return Some(Retained::Dirty),
     }
-    if !git::clean(programs, tracer, &name, path).unwrap_or(false) {
+    if uncommitted(ports, &name, path) {
         return Some(Retained::Dirty);
     }
     if git::local_only(programs, tracer, &name, path).unwrap_or(true) {
@@ -662,6 +662,28 @@ fn retained(ports: &Ports<'_>, workspace: &Workspace, path: &Path) -> Option<Ret
         return Some(Retained::Stashes);
     }
     None
+}
+
+/// Whether the checkout at `path` holds an uncommitted or untracked change, at any depth of submodules, or
+/// cannot be told to hold none. Each submodule is asked by itself, so that no setting of the repository above
+/// it hides what it holds.
+fn uncommitted(ports: &Ports<'_>, name: &str, path: &Path) -> bool {
+    let (files, programs, tracer) = (ports.files, ports.programs, ports.tracer);
+    if !git::clean(programs, tracer, name, path).unwrap_or(false) {
+        return true;
+    }
+    let Ok(Some(recorded)) = git::submodules(programs, tracer, name, path) else {
+        return true;
+    };
+    recorded.into_iter().any(|submodule| {
+        let at = path.join(submodule);
+        if !files.exists(&at.join(".git")) {
+            // Git reports nothing of the files of a submodule that is not checked out.
+            return !files.missing(&at) && files.entries(&at).map_or(true, |held| !held.is_empty());
+        }
+        let own = git::toplevel(programs, tracer, name, &at);
+        !matches!(own, Ok(Some(top)) if top == files.resolve(&at)) || uncommitted(ports, name, &at)
+    })
 }
 
 /// Removes `orphan`, unless it was retained, its place is no longer what the scan saw, or, for a clone, a
@@ -928,11 +950,12 @@ mod tests {
     /// What a stand-in git answers one probe: an exit code and stdout, or `None` for a git that cannot start.
     type Answer = Option<(i32, &'static str)>;
 
-    /// A git that answers the four probes of retention: the top of the work tree, the status, the commits no
-    /// remote holds, and the stash.
+    /// A git that answers the probes of retention: the top of the work tree, the status, the submodules, the
+    /// commits no remote holds, and the stash.
     struct Probes {
         top: Answer,
         status: Answer,
+        submodules: Answer,
         history: Answer,
         stash: Answer,
     }
@@ -941,6 +964,7 @@ mod tests {
     const SAFE: Probes = Probes {
         top: Some((0, "/ws/projects/old\n")),
         status: Some((0, "")),
+        submodules: Some((0, "")),
         history: Some((0, "")),
         stash: Some((1, "")),
     };
@@ -952,6 +976,8 @@ mod tests {
                 self.top
             } else if given("status") {
                 self.status
+            } else if given("ls-files") {
+                self.submodules
             } else if given("rev-list") {
                 self.history
             } else {
@@ -1039,6 +1065,20 @@ mod tests {
                     ..SAFE
                 },
                 Retained::Stashes,
+            ),
+            (
+                Probes {
+                    submodules: None,
+                    ..SAFE
+                },
+                Retained::Dirty,
+            ),
+            (
+                Probes {
+                    submodules: Some((128, "")),
+                    ..SAFE
+                },
+                Retained::Dirty,
             ),
         ] {
             assert_eq!(reason(&files, &programs), Some(expected));

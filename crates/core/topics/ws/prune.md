@@ -29,7 +29,7 @@ A clone is retained, marked `!` with the reason under it, when the first of thes
 2. it is not a git clone: it holds no `.git`, or one that git does not take as the repository of that directory;
 3. it is a linked worktree: its `.git` is a file;
 4. it has linked worktrees;
-5. it has uncommitted or untracked changes, those in its submodules included, or its status cannot be read;
+5. it has uncommitted or untracked changes, in it or in a submodule at any depth, or its status cannot be read;
 6. it has commits no remote-tracking branch holds, or its history cannot be read;
 7. it has stashes, or its stash list cannot be read;
 8. it holds another candidate that is retained, which its removal would take.

@@ -613,6 +613,111 @@ fn a_block_without_its_end_marker_names_no_candidate_and_is_left_as_it_is() {
     assert!(exclude(&tree).contains(broken), "{}", exclude(&tree));
 }
 
+/// The arguments of a `git config` call that sets something, when a case has one.
+type Setting = Option<&'static [&'static str]>;
+
+/// A pushed, clean `projects/old` with the submodule `mid`, which has the submodule `leaf`. `committed` holds
+/// `git config` arguments for a file `mid` commits along with its submodule.
+fn two_level_submodules(committed: Setting) -> (TempTree, PathBuf) {
+    let tree = fixture(&[], true);
+    let helper = Git::new(&tree).expect("git");
+    for name in ["leaf", "mid", "top"] {
+        helper.bare_remote(name, "main", &seed()).expect("a remote");
+    }
+    let allow = ["-c", "protocol.file.allow=always"];
+    for (outer, inner) in [("mid", "leaf"), ("top", "mid")] {
+        let work = tree.root().join(format!("build-{outer}"));
+        helper.clone_remote(outer, &work).expect("a clone");
+        let url = format!("https://fixture.invalid/{inner}.git");
+        git(
+            &tree,
+            &work,
+            &[&allow[..], &["submodule", "add", &url, inner]].concat(),
+        );
+        if let Some(setting) = committed.filter(|_| outer == "mid") {
+            git(&tree, &work, setting);
+            git(&tree, &work, &["add", ".gitmodules"]);
+        }
+        git(&tree, &work, &["commit", "-m", "add a submodule"]);
+        git(&tree, &work, &["push", "origin", "HEAD"]);
+    }
+    let old = root(&tree).join("projects/old");
+    helper.clone_remote("top", &old).expect("a clone");
+    let update = ["submodule", "update", "--init", "--recursive"];
+    git(&tree, &old, &[&allow[..], &update].concat());
+    (tree, old)
+}
+
+#[test]
+fn work_in_a_submodule_of_a_submodule_keeps_the_clone_whatever_hides_it() {
+    let ignored: &'static [&'static str] = &[
+        "config",
+        "-f",
+        ".gitmodules",
+        "submodule.leaf.ignore",
+        "all",
+    ];
+    // In the user's configuration, in the file `mid` commits, and in the configuration of `mid`.
+    let cases: [(Setting, Setting); 4] = [
+        (
+            None,
+            Some(&["config", "--global", "diff.ignoreSubmodules", "all"]),
+        ),
+        (
+            None,
+            Some(&["config", "--global", "diff.ignoreSubmodules", "untracked"]),
+        ),
+        (Some(ignored), None),
+        (None, Some(&["config", "submodule.leaf.ignore", "all"])),
+    ];
+    for (committed, setting) in cases {
+        let (tree, old) = two_level_submodules(committed);
+        if let Some(setting) = setting {
+            git(&tree, &old.join("mid"), setting);
+        }
+        let new = old.join("mid/leaf/new");
+        fs::write(&new, "work\n").expect("a file");
+
+        let ended = prune(&tree, &["--force"], "");
+
+        assert_success(&ended, "a forced run");
+        assert!(
+            ended
+                .stdout
+                .contains("  skip   projects/old (uncommitted or untracked changes)\n"),
+            "{committed:?} {setting:?}: {}",
+            ended.stdout
+        );
+        assert!(new.is_file(), "{committed:?} {setting:?}");
+    }
+}
+
+#[test]
+fn a_clone_whose_submodules_hold_no_change_is_removed() {
+    let (tree, old) = two_level_submodules(None);
+
+    let ended = prune(&tree, &["--force"], "");
+
+    assert_success(&ended, "a forced run");
+    assert!(!old.exists(), "{}", ended.stdout);
+}
+
+#[test]
+fn files_in_a_submodule_that_is_not_checked_out_keep_the_clone() {
+    let (tree, old) = two_level_submodules(None);
+    git(
+        &tree,
+        &old.join("mid"),
+        &["submodule", "deinit", "--force", "leaf"],
+    );
+    fs::write(old.join("mid/leaf/notes"), "work\n").expect("a file");
+
+    let ended = prune(&tree, &["--force"], "");
+
+    assert_success(&ended, "a forced run");
+    assert!(old.join("mid/leaf/notes").is_file(), "{}", ended.stdout);
+}
+
 #[test]
 fn a_block_line_that_resolves_outside_the_root_is_retained() {
     let tree = fixture(&[], true);
