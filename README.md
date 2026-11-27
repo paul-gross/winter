@@ -22,6 +22,7 @@ it does with agent files that are already there.
 
 `repo add` and `repo remove` edit the workspace configuration it finds at or above the working directory, and
 `ws update` fetches, resets branches, stashes, and writes the lock of the workspace it finds there, and, with `--freeze`, its configuration.
+`ws prune` removes directories, links, and files of the workspace it finds there and rewrites its exclude file.
 [AGENTS.md](./AGENTS.md) states where the binary may run. It is on no `PATH`: from a directory that rule permits, it is
 started by its path, as in `<checkout>/target/debug/winter-workspace --help`, where `<checkout>` is the path of the
 repository root.
@@ -41,6 +42,14 @@ nothing is cloned.
 content. It runs configured repository commands on every invocation, including repeats; those commands must be safe to
 rerun. Like the other mutating commands, it must only be exercised in the scratch locations permitted by
 [AGENTS.md](./AGENTS.md). Read `winter-workspace context ws/init` for its ordering, recovery, and scope.
+
+`ws prune` removes material the workspace once managed and no configuration declares now: undeclared clones under
+`projects/`, clones and agent copies that a leftover workspace exclude block names, and dangling links in the vendor
+skill and agent directories. A clone that could hold work is retained, among them one with uncommitted or untracked
+changes, commits no remote-tracking branch holds, stashes, or linked worktrees, and one with no `.git`; retained
+material is never removed and is deleted by hand. It lists what it found and asks first: `--dry-run` only lists,
+`--force` does not ask, and `--json` needs one of the two. Ignored files go with a removed clone. Read `winter-workspace
+context ws/prune`.
 
 `ws worktrees --status` adds the git counts of each location: the commits ahead of and behind the main branch of
 `origin` and the number of dirty files for a worktree, the same against the upstream of its branch for the workspace
@@ -120,11 +129,11 @@ and it is off unless the environment switches it on.
 
 ### Exit codes
 
-| Code | Meaning     | When                                                                                                                            |
-| ---- | ----------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | Success     | A command completed; `--help`; `--version`.                                                                                     |
-| `1`  | Failure     | A command failed; a configuration error; a failed git call; a stdout that cannot be written; an internal failure; an interrupt. |
-| `2`  | Usage error | An unknown command or option, a missing or unexpected argument, or no command: the bare root or a bare group.                   |
+| Code | Meaning     | When                                                                                                                                                     |
+| ---- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | Success     | A command completed; `--help`; `--version`.                                                                                                              |
+| `1`  | Failure     | A command failed; a configuration error; a failed git call; a stdout that cannot be written; an internal failure; a declined confirmation; an interrupt. |
+| `2`  | Usage error | An unknown command or option, a missing or unexpected argument, or no command: the bare root or a bare group.                                            |
 
 An interrupt, Ctrl-C, ends the invocation at once with the notice `aborted` on stderr and exit code 1, not 130. A
 process that was started with the interrupt signal ignored leaves it ignored, and an interrupt does nothing to it.

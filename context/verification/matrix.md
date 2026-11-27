@@ -598,7 +598,7 @@ run context-init context ws/init
 Help and context exit 0; both unsupported forms exit 2 with usage diagnostics and no reconciliation events or state
 changes. `context ws` points to `ws/init`; that topic describes targets, ordered repository steps, repeat commands,
 failure exits, refresh ownership, and the work bare reconciliation leaves out. It names no unsupported command form
-as implemented and links no absent prune topic. Run `workspace:manual-registration` separately in its own disposable
+as implemented. Run `workspace:manual-registration` separately in its own disposable
 scratch checkout; retain that method's evidence too. Broken-output termination and stopped admission/joining are
 checked by the executable and component methods, not by sending more signals here.
 
@@ -621,6 +621,96 @@ supervisor before cleanup. On an unexpected hang, stop only the known owned proc
 never delete their tree while they run. Archive evidence outside `$tree`, then remove only the exact path printed
 by `printf '%s\n' "$tree"` after checking it is the `manual-ws-init.*` directory created above. No installed binary,
 source checkout, real workspace, or service is changed.
+
+### `workspace:manual-ws-prune`
+
+Exercises `ws prune` through the built binary: its preview, prompt, removals, retentions, and JSON. Use it when changing
+the scan, the retention checks, the removal, the confirmation, or the command wiring. Component and executable tests
+cover the same contract automatically; this exercise checks the built binary against disposable repositories. It needs
+`jq`.
+
+**Setup.** Create a fresh temporary directory outside any real workspace; verify that no ancestor holds
+`.winter/config.toml`. Work only in a new `workspace/` beneath it, with a `.winter/config.toml` made for this run. The
+block below does so when run from the repository root, in one Bash shell without `set -e`. The remote is a local bare
+repository, and the binary is started by its path, only inside that workspace.
+
+```bash
+cargo build --workspace --locked || exit 1
+binary=$(realpath target/debug/winter-workspace)
+git_bin=$(command -v git)
+base=$(realpath "${BLIZZARD_TMPDIR:?set the lease scratch directory}")
+p=$base
+while :; do
+  if test -e "$p/.git" || test -e "$p/.winter/config.toml"; then
+    printf 'Unsafe scratch ancestor: %s\n' "$p" >&2; exit 1
+  fi
+  test "$p" = / && break
+  p=$(dirname "$p")
+done
+tree=$(mktemp -d "$base/manual-ws-prune.XXXXXX")
+mkdir -p "$tree"/{home/.config,cache,tmp,git-template,evidence}
+evidence=$tree/evidence ws=$tree/workspace
+pin=(env -i "PATH=$(dirname "$git_bin"):/usr/bin:/bin"
+  "HOME=$tree/home" "XDG_CONFIG_HOME=$tree/home/.config" "XDG_CACHE_HOME=$tree/cache" "TMPDIR=$tree/tmp"
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 "GIT_TEMPLATE_DIR=$tree/git-template"
+  "GIT_CEILING_DIRECTORIES=$base" GIT_TERMINAL_PROMPT=0
+  "GIT_AUTHOR_NAME=Fixture Author" GIT_AUTHOR_EMAIL=author@fixture.invalid
+  "GIT_COMMITTER_NAME=Fixture Committer" GIT_COMMITTER_EMAIL=committer@fixture.invalid
+  LC_ALL=C.UTF-8 NO_COLOR=1 OTEL_SDK_DISABLED=true)
+g() { "${pin[@]}" "$git_bin" "$@"; }
+g init -q -b main "$tree/seed"
+printf 'fixture\n' >"$tree/seed/README"
+g -C "$tree/seed" add . && g -C "$tree/seed" commit -qm seed
+g clone -q --bare "$tree/seed" "$tree/remote.git"
+links=$ws/.claude/skills
+mkdir -p "$ws/.winter" "$links"
+printf '[[project_repository]]\nname = "api"\nurl = "%s"\n' "$tree/remote.git" >"$ws/.winter/config.toml"
+g init -q -b main "$ws"
+for name in api clean dirty stash; do g clone -q "$tree/remote.git" "$ws/projects/$name"; done
+printf 'work\n' >"$ws/projects/dirty/untracked"
+printf 'work\n' >>"$ws/projects/stash/README"
+g -C "$ws/projects/stash" stash push -q
+mkdir -p "$ws/projects/plain" "$ws/gone"
+printf 'work\n' >"$ws/gone/notes"
+mkdir -p "$ws/.git/info"
+printf '# >>> gone (managed by winter)\n/gone/\n# <<< gone\n' >"$ws/.git/info/exclude"
+ln -s "$tree/nowhere" "$links/dangling"
+run() {
+  local label=$1; shift
+  (cd "$ws" && "${pin[@]}" "$binary" "$@") >"$evidence/$label.stdout" 2>"$evidence/$label.stderr"
+  printf '%s\n' "$?" >"$evidence/$label.exit"
+}
+snapshot() {
+  (cd "$ws" && find . ! -name index -printf '%y %p %l\n' | sort &&
+    find . -type f ! -name index -print0 | sort -z | xargs -0 -r sha256sum)
+}
+g -C "$ws" config --list >"$evidence/config.before"
+snapshot >"$evidence/before"
+```
+
+1. **Dry run.** `run dry ws prune --dry-run </dev/null`. Expect exit 0 and empty stderr. The preview names
+   `projects/clean` safe with `[projects/]`; `dirty`, `stash`, and `plain` marked `!` with
+   `uncommitted or untracked changes`, `has stashes`, and `not a git clone (delete by hand if intentional)`; `gone` marked
+   `!` with `[block gone]` and the last of those notes; and the link safe with `[dangling link]`. `projects/api` is absent.
+   `snapshot >"$evidence/dry.after"` equals `before` by `cmp`, and so does `g -C "$ws" config --list` against
+   `config.before`.
+2. **Declined.** `run declined ws prune < <(printf 'n\n')`. Expect exit 1, `aborted` on stderr, stdout ending in
+   `Remove 2 orphan(s)? [y/N]: `, and a `snapshot` equal to `before`.
+3. **Confirmed.** `run confirmed ws prune < <(printf 'y\n')`. Expect exit 0, a `remove` line for `projects/clean` and
+   for the dangling link, a `skip` line with its note for each retained orphan, and no
+   `workspace excludes updated` line, since no extension block changed. `projects/clean` and the link are gone; `projects/api`, `projects/dirty/untracked`, `projects/plain`, `gone/notes`, and the stash
+   (`g -C "$ws/projects/stash" stash list`) are intact; the exclude file still holds the `gone` block.
+4. **JSON alone.** `run refused ws prune --json </dev/null`. Expect exit 1, zero stdout bytes, and a stderr that names
+   `--force`.
+5. **JSON.** Restore a safe orphan with `g clone -q "$tree/remote.git" "$ws/projects/clean"`. Run
+   `run json-dry ws prune --json --dry-run </dev/null` and `jq -e . "$evidence/json-dry.stdout"`: `dry_run` is true,
+   `projects/clean` has `would_remove`, the retained orphans `skipped` with their notes, there is no `excludes_updated`,
+   and the directory is still there. Then `run json-force ws prune --json --force </dev/null`. Expect exit 0, every line
+   parsing with `jq -c .`, any `type` events before the last line, and that line's document giving `dry_run` false,
+   `removed` for `projects/clean`, `skipped` for the retained, and `excludes_updated` true.
+
+**Success.** Every step has the stated exit, streams, and state, and `git show-ref` of `$tree/remote.git` is the same
+after step 5 as after the setup. Keep the evidence under `$BLIZZARD_TMPDIR`; nothing outside `$tree` is touched.
 
 ## Tools
 
