@@ -71,7 +71,7 @@ fn run(matches: &ArgMatches, cx: &mut Context<'_>) -> Termination {
     if matches.get_flag("json") {
         output::document(
             cx.out,
-            &serde_json::json!({"root": created.root, "config": "created", "agents_md": agents, "claude_md": claude}),
+            &serde_json::json!({"root": created.root.to_string_lossy(), "config": "created", "agents_md": agents, "claude_md": claude}),
         )
     } else {
         output::text(
