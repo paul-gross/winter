@@ -70,7 +70,8 @@ pub use diagnostics::Diagnostics;
 pub use files::{OsFiles, ReadFiles, ScratchFile, ScratchFiles, WriteFiles};
 pub use git::{
     GitFailure, Sha, checkout_branch, checkout_detached, clean, clone, dirty, fetch, head,
-    local_only, origin_url, set_config, stash_pop, stash_push, stashed, toplevel, tree, verify,
+    local_only, origin_url, pristine, set_config, stash_pop, stash_push, stashed, toplevel, tree,
+    verify,
 };
 pub use logging::{Level, Log};
 pub use managed_block::{Markers, Position, Shape, blocks, replace_or_insert, shape, strip};

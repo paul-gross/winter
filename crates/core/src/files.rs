@@ -22,9 +22,7 @@ pub trait ReadFiles: Sync {
 
     /// Whether it is known that there is nothing at `path`, with symbolic links followed. Unlike a false
     /// [`exists`](Self::exists), a true answer is never that of a path that could not be looked at.
-    fn missing(&self, path: &Path) -> bool {
-        !self.exists(path)
-    }
+    fn missing(&self, path: &Path) -> bool;
 
     /// Whether `path` is a directory, with symbolic links followed.
     fn is_dir(&self, path: &Path) -> bool;
@@ -525,6 +523,12 @@ impl ReadFiles for MemoryFiles {
 
     fn exists(&self, path: &Path) -> bool {
         self.entry(path).is_some()
+    }
+
+    fn missing(&self, path: &Path) -> bool {
+        // A loop of links is not followed to an end, so nothing is known of what is there.
+        self.followed(path)
+            .is_some_and(|at| !self.0.contains_key(&at))
     }
 
     fn is_dir(&self, path: &Path) -> bool {

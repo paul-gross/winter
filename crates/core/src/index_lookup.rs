@@ -77,6 +77,10 @@ mod tests {
             self.files.entries(path)
         }
 
+        fn missing(&self, _: &std::path::Path) -> bool {
+            unreachable!()
+        }
+
         fn read_link(&self, path: &Path) -> std::io::Result<Option<std::path::PathBuf>> {
             self.files.read_link(path)
         }
