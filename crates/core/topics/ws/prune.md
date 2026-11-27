@@ -16,7 +16,8 @@ asks, and removes what cannot hold work. Lock and state records are not changed.
 
 The checkout of a declared repository, and a directory that holds one, is never a candidate, whatever a block names. Nor
 is a link or an agent copy of a vendor directory that itself links outside the workspace. A block with no end marker, or
-with two begin markers, names no candidate and is left as it is, with a warning.
+with two begin markers, names no candidate. While the file holds one, a removal does not refresh the file, so that no
+line of yours is rewritten; a warning names the block.
 
 Each line of the preview names the kind, the path, and the evidence that the workspace managed it: `projects/`, the
 exclude block, or a dangling link.

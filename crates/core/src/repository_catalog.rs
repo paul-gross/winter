@@ -874,6 +874,10 @@ name = \"web\"
             Err(std::io::ErrorKind::NotADirectory.into())
         }
 
+        fn missing(&self, _: &std::path::Path) -> bool {
+            unreachable!()
+        }
+
         fn read_link(&self, _path: &Path) -> std::io::Result<Option<std::path::PathBuf>> {
             Ok(None)
         }

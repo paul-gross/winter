@@ -486,6 +486,60 @@ fn a_safe_candidate_inside_a_removed_clone_is_reported_removed() {
 }
 
 #[test]
+fn a_dangling_link_that_points_into_a_removed_clone_is_removed_itself() {
+    let tree = fixture(&["old"], true);
+    let skills = root(&tree).join(".claude/skills");
+    fs::create_dir_all(&skills).expect("skills/");
+    let link = skills.join("x");
+    std::os::unix::fs::symlink("../../projects/old/gone", &link).expect("a link");
+
+    let ended = prune(&tree, &["--force"], "");
+
+    assert_success(&ended, "a forced run");
+    assert!(
+        ended.stdout.contains("  remove .claude/skills/x\n"),
+        "{}",
+        ended.stdout
+    );
+    assert!(
+        fs::symlink_metadata(&link).is_err(),
+        "the link is still there"
+    );
+    assert!(!root(&tree).join("projects/old").exists());
+}
+
+#[test]
+fn a_declared_extensions_block_without_its_end_marker_keeps_the_lines_after_it() {
+    let tree = fixture(&["old"], true);
+    fs::write(
+        root(&tree).join(".winter/config.toml"),
+        format!(
+            "{CONFIG}\n[[standalone_repository]]\nname = 'lib'\nurl = 'https://fixture.invalid/lib.git'\n"
+        ),
+    )
+    .expect("the configuration");
+    clone_at(&tree, "lib", "lib");
+    write_blocks(&tree, &[]);
+    let path = root(&tree).join(".git/info/exclude");
+    let written = "user-line\n# >>> lib (managed by winter)\n/lib/\nsecret-notes/\n";
+    fs::write(&path, written).expect("the exclude file");
+
+    let ended = prune(&tree, &["--json", "--force"], "");
+
+    assert!(
+        matches!(ended.termination, Termination::Success),
+        "{:?}",
+        ended.termination
+    );
+    assert!(ended.stderr.contains("the block lib"), "{}", ended.stderr);
+    let document: Value =
+        serde_json::from_str(ended.stdout.trim_end()).expect("the document alone");
+    assert_eq!(document["orphans"][0]["action"], "removed", "{document}");
+    assert_eq!(document["excludes_updated"], false, "{document}");
+    assert_eq!(exclude(&tree), written);
+}
+
+#[test]
 fn a_candidate_that_gains_work_after_the_scan_keeps_the_clone_that_holds_it() {
     let (tree, held) = nested();
     // The prompt is written after the scan and before any removal.

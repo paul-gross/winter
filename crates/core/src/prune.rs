@@ -4,6 +4,7 @@
 //! A scan only reads: the exclude file is located without a write of git configuration, and nothing is
 //! removed. A removal checks its candidate again first, because the tree may have changed since the scan.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -280,7 +281,18 @@ fn run(
     }
     let mut excludes_updated = false;
     if survey.scan.evidence == Evidence::Read && removals.contains(&Removal::Removed) {
-        let finalized = reaggregate(ports, workspace, &retained_blocks);
+        // A refresh would write into a malformed block, whose lines may be the user's.
+        let refreshed = match holds_malformed_block(ports, &workspace.root) {
+            Ok(true) => None,
+            Ok(false) => Some(reaggregate(ports, workspace, &retained_blocks)),
+            Err(failure) => Some(Err(failure)),
+        };
+        let Some(finalized) = refreshed else {
+            return Ok(Pruned {
+                removals,
+                excludes_updated,
+            });
+        };
         excludes_updated = finalized.is_ok();
         if let Some(event) = bootstrap::finalized_event(finalized) {
             sink(&PruneEvent::Reaggregated(&event), diagnostics)?;
@@ -305,8 +317,8 @@ fn attempt(
     let went = orphans
         .iter()
         .zip(removals)
-        .any(|(outer, removal)| *removal == Removal::Removed && holds(ports, outer, orphan));
-    if went && ports.files.missing(&orphan.path) {
+        .any(|(outer, removal)| *removal == Removal::Removed && lies_in(outer, orphan));
+    if went && entry(ports, &orphan.path).is_none() {
         return Removal::Removed;
     }
     if orphan.retained.is_none() && holds_retained(ports, workspace, orphans, orphan) {
@@ -315,19 +327,32 @@ fn attempt(
     remove(ports, workspace, orphan)
 }
 
-/// Whether removing `outer`, a clone that is a directory of its own, would take `inner` or what it leads to.
-fn holds(ports: &Ports<'_>, outer: &Orphan, inner: &Orphan) -> bool {
-    let place = |orphan: &Orphan| {
-        let name = orphan.path.file_name().unwrap_or_default();
-        orphan.scanned.parent.join(name)
-    };
-    if !outer.kind.is_clone() || outer.scanned.entry != Entry::Directory {
-        return false;
-    }
+/// The entry of `orphan` itself: its name in the directory that held it at the scan.
+fn place(orphan: &Orphan) -> PathBuf {
+    let name = orphan.path.file_name().unwrap_or_default();
+    orphan.scanned.parent.join(name)
+}
+
+/// Whether `outer` is a clone that is a directory of its own and the entry of `inner` is inside it, so that
+/// removing `outer` takes that entry.
+fn lies_in(outer: &Orphan, inner: &Orphan) -> bool {
     let top = place(outer);
-    [place(inner), ports.files.resolve(&inner.path)]
-        .iter()
-        .any(|held| *held != top && held.starts_with(&top))
+    let held = place(inner);
+    outer.kind.is_clone()
+        && outer.scanned.entry == Entry::Directory
+        && held != top
+        && held.starts_with(&top)
+}
+
+/// Whether removing `outer` would take `inner` or what `inner` leads to.
+fn holds(ports: &Ports<'_>, outer: &Orphan, inner: &Orphan) -> bool {
+    let top = place(outer);
+    let target = ports.files.resolve(&inner.path);
+    lies_in(outer, inner)
+        || (outer.kind.is_clone()
+            && outer.scanned.entry == Entry::Directory
+            && target != top
+            && target.starts_with(&top))
 }
 
 /// Whether `outer` holds a candidate that is still there and is retained now or was at the scan.
@@ -560,20 +585,22 @@ fn stale_blocks(
             })
     };
     let mut stale = blocks(&content);
-    stale.retain(|(name, _)| !name.contains('/') && !eligible(name));
-    stale.retain(|(name, _)| {
-        let whole = !malformed(&content, name);
-        if !whole {
-            diagnostics::notice(
-                diagnostics.err,
-                &format!(
-                    "warning: the block {name} of the workspace exclude file is malformed; \
-                     nothing it names is a candidate, and it is left as it is"
-                ),
-            );
-        }
-        whole
-    });
+    let broken: BTreeSet<&str> = stale
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .filter(|name| malformed(&content, name))
+        .collect();
+    for name in &broken {
+        diagnostics::notice(
+            diagnostics.err,
+            &format!(
+                "warning: the block {name} of the workspace exclude file is malformed; \
+                 nothing it names is a candidate, and the file is not refreshed"
+            ),
+        );
+    }
+    let broken: BTreeSet<String> = broken.into_iter().map(str::to_owned).collect();
+    stale.retain(|(name, _)| !broken.contains(name) && !name.contains('/') && !eligible(name));
     (stale, Evidence::Read)
 }
 
@@ -583,17 +610,22 @@ fn malformed(content: &str, name: &str) -> bool {
     shape(content, &Markers::exclude(name)) == Shape::Malformed
 }
 
-/// The names of the malformed blocks of the exclude file; none when it cannot be read.
-fn malformed_blocks(ports: &Ports<'_>, root: &Path) -> Result<Vec<String>, GitFailure> {
-    let Located::File(file) =
-        workspace_exclude::locate(ports.programs, ports.tracer, ports.files, root)?
-    else {
-        return Ok(Vec::new());
-    };
-    let content = ports.files.read(&file).ok().flatten().unwrap_or_default();
-    let content = String::from_utf8_lossy(&content);
-    let names = blocks(&content).into_iter().map(|(name, _)| name);
-    Ok(names.filter(|name| malformed(&content, name)).collect())
+/// Whether the exclude file holds a malformed block. A file that is there and cannot be read is taken to.
+fn holds_malformed_block(ports: &Ports<'_>, root: &Path) -> Result<bool, GitFailure> {
+    in_own_repository(ports, |ports| {
+        let located = workspace_exclude::locate(ports.programs, ports.tracer, ports.files, root)?;
+        let Located::File(file) = located else {
+            return Ok(false);
+        };
+        let Ok(content) = ports.files.read(&file) else {
+            return Ok(true);
+        };
+        let content = content.unwrap_or_default();
+        let content = String::from_utf8_lossy(&content);
+        Ok(blocks(&content)
+            .iter()
+            .any(|(name, _)| malformed(&content, name)))
+    })
 }
 
 /// The path a block line names as a directory of the root: the line, trimmed, is `/<path>` with at most one
@@ -669,7 +701,7 @@ fn retained(ports: &Ports<'_>, workspace: &Workspace, path: &Path) -> Option<Ret
 /// it hides what it holds.
 fn uncommitted(ports: &Ports<'_>, name: &str, path: &Path) -> bool {
     let (files, programs, tracer) = (ports.files, ports.programs, ports.tracer);
-    if !git::clean(programs, tracer, name, path).unwrap_or(false) {
+    if !git::pristine(programs, tracer, name, path).unwrap_or(false) {
         return true;
     }
     let Ok(Some(recorded)) = git::submodules(programs, tracer, name, path) else {
@@ -730,22 +762,20 @@ fn unchanged(ports: &Ports<'_>, workspace: &Workspace, orphan: &Orphan) -> bool 
 }
 
 /// Refreshes the exclude blocks of the extensions for the current configuration, keeping each block of
-/// `retained_blocks` and its lines as they are: a block stays with the material it names. A malformed block is
-/// kept too, since the lines after its begin marker may be the user's.
+/// `retained_blocks` and its lines as they are: a block stays with the material it names. It is not for a file
+/// that holds a malformed block, which a removal run leaves as it is.
 pub fn reaggregate(
     ports: &Ports<'_>,
     workspace: &Workspace,
     retained_blocks: &[String],
 ) -> Result<Finalized, GitFailure> {
     in_own_repository(ports, |ports| {
-        let mut keep = retained_blocks.to_vec();
-        keep.extend(malformed_blocks(ports, &workspace.root)?);
         workspace_exclude::finalize(
             ports,
             &workspace.root,
             workspace.config.adopt_extensions,
             &bootstrap::eligible(ports, workspace),
-            &keep,
+            retained_blocks,
         )
     })
 }

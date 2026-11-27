@@ -141,13 +141,27 @@ impl RunPrograms for OwnRepository<'_> {
     }
 }
 
-/// Whether the checkout at `path` has no change: no modified tracked file and no untracked file, in it or in
-/// a submodule of it. Neither `status.showUntrackedFiles` nor a setting that ignores submodules hides one, and
-/// the index of the checkout is not written. A submodule of a submodule is not looked into past what the
-/// settings of that submodule show; [`submodules`] names the paths for a caller that must.
+/// Whether the checkout at `path` has no change: no modified tracked file and no untracked file.
 ///
 /// Any failure of git reads as dirty. Only a git that cannot be started is an error.
 pub fn clean(
+    programs: &dyn RunPrograms,
+    tracer: &dyn CommandTracer,
+    repo: &str,
+    path: &Path,
+) -> Result<bool, GitFailure> {
+    let _span = tracer.operation(STATUS_SPAN, &[(REPO_ATTRIBUTE, repo)]);
+    let finished = run(programs, path, &["status", "--porcelain"])?;
+    Ok(finished.exit == Exit::Code(0) && finished.stdout.is_empty())
+}
+
+/// [`clean`], for a caller about to remove the checkout: neither `status.showUntrackedFiles` nor a setting
+/// that ignores submodules hides a change, and the index of the checkout is not written. A submodule of a
+/// submodule is still seen only as the settings of that submodule show it; [`submodules`] names the paths for
+/// a caller that must ask each by itself.
+///
+/// Any failure of git reads as dirty. Only a git that cannot be started is an error.
+pub fn pristine(
     programs: &dyn RunPrograms,
     tracer: &dyn CommandTracer,
     repo: &str,

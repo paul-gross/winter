@@ -8,8 +8,8 @@ use std::sync::Mutex;
 use winter_workspace_core::{
     Call, CommandTracer, Diagnostics, Finished, GitFailure, GitOperation, Log, OperationSpan,
     OsFiles, OsPrograms, Pacing, ProcessEnv, RepoMessage, RunPrograms, TraceLog, checkout_branch,
-    checkout_detached, clean, clone, dirty, fetch, head, local_only, origin_url, set_config,
-    stash_pop, stash_push, stashed, toplevel, tree, verify,
+    checkout_detached, clean, clone, dirty, fetch, head, local_only, origin_url, pristine,
+    set_config, stash_pop, stash_push, stashed, toplevel, tree, verify,
 };
 use winter_workspace_test_support::{CommitSpec, Git, TempTree};
 
@@ -143,20 +143,20 @@ fn clean_is_false_for_an_untracked_file_alone() {
 }
 
 #[test]
-fn clean_is_false_for_an_untracked_file_in_a_repository_that_hides_untracked_files() {
+fn pristine_is_false_for_an_untracked_file_in_a_repository_that_hides_untracked_files() {
     let f = fixture();
     f.out(&["config", "status.showUntrackedFiles", "no"]);
-    assert!(clean(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer"));
+    assert!(pristine(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer"));
     f.write("new.txt", "x\n");
     assert_eq!(f.out(&["status", "--porcelain"]), "", "git hides the file");
 
-    let answer = clean(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer");
+    let answer = pristine(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer");
 
     assert!(!answer);
 }
 
 #[test]
-fn clean_is_false_for_a_change_in_a_submodule_whatever_hides_submodules_and_untracked_files() {
+fn pristine_is_false_for_a_change_in_a_submodule_whatever_hides_submodules_and_untracked_files() {
     let f = fixture();
     let source = f.clone.to_str().expect("UTF-8").to_owned();
     let allow = "protocol.file.allow=always";
@@ -165,7 +165,7 @@ fn clean_is_false_for_a_change_in_a_submodule_whatever_hides_submodules_and_untr
     f.out(&["config", "diff.ignoreSubmodules", "all"]);
     f.out(&["config", "submodule.module.ignore", "all"]);
     f.out(&["config", "status.showUntrackedFiles", "no"]);
-    let answer = |f: &Fixture| clean(&f.programs, &Spans::default(), "api", &f.clone);
+    let answer = |f: &Fixture| pristine(&f.programs, &Spans::default(), "api", &f.clone);
     assert!(answer(&f).expect("an answer"), "nothing changed yet");
 
     f.write("module/new.txt", "x\n");
@@ -179,10 +179,12 @@ fn clean_is_false_for_a_change_in_a_submodule_whatever_hides_submodules_and_untr
     f.write("module/README", "changed\n");
     f.write("module/seed", "changed\n");
     assert!(!answer(&f).expect("an answer"), "modified in the submodule");
+    // What a pin asks follows the settings of the repository.
+    assert!(clean(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer"));
 }
 
 #[test]
-fn clean_leaves_the_index_as_it_is() {
+fn pristine_leaves_the_index_as_it_is() {
     let f = fixture();
     f.write("kept.txt", "x\n");
     f.out(&["add", "kept.txt"]);
@@ -197,7 +199,7 @@ fn clean_leaves_the_index_as_it_is() {
     let index = f.clone.join(".git/index");
     let before = std::fs::read(&index).expect("the index");
 
-    assert!(clean(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer"));
+    assert!(pristine(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer"));
 
     assert!(std::fs::read(&index).expect("the index") == before);
 }
