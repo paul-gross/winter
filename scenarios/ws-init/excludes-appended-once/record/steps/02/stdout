@@ -1,0 +1,6 @@
+{"type": "target_started", "target": "projects/"}
+{"type": "repo_action", "repo": "api", "location": "<ROOT>/ws/projects/api", "action": "exists", "detail": ""}
+{"type": "target_completed", "target": "projects/", "success": true}
+{"type": "target_started", "target": "standalone/"}
+{"type": "repo_action", "repo": "tools", "location": "<ROOT>/ws/tools", "action": "exists", "detail": ""}
+{"type": "target_completed", "target": "standalone/", "success": true}

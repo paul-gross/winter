@@ -1,0 +1,9 @@
+[[project_repository]]
+name = "api"
+url = "https://fixture.invalid/api.git"
+cmd = ["echo before", "exit 3", "echo never"]
+
+[[project_repository]]
+name = "web"
+url = "https://fixture.invalid/web.git"
+cmd = ["echo web ready"]

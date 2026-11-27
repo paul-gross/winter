@@ -1,0 +1,15 @@
+f - 89fbd3cff0c0ae16c92e2e63569c5c6f170cdfd2 gitconfig
+d home
+d home/.config
+d remotes
+d remotes/api.git
+d remotes/other.git
+d ws
+d ws/.git
+f - d6eac66e8467a6f183ee71717ba48c82fc81b16f ws/.gitignore
+d ws/.winter
+f - 12061b885bcc68b31113219b17da98436462f240 ws/.winter/config.toml
+d ws/projects
+d ws/projects/api
+d ws/projects/api/.git
+f - b2ede0d4d444b40f7a27313315c0f1d0e89fa29d ws/projects/api/README.md

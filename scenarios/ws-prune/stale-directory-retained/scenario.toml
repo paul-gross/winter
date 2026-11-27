@@ -1,0 +1,30 @@
+summary = "A removed standalone directory that holds no .git is retained, with its exclude block."
+
+[fixture]
+workspace_git = true
+
+[[fixture.remote]]
+name = "lib"
+
+[[fixture.remote.commit]]
+message = "Initial lib"
+files = { "README.md" = "lib fixture\n" }
+
+[[step]]
+args = ["ws", "init", "--json"]
+stdout = "json-lines"
+
+[[step]]
+args = ["repo", "remove", "standalone/lib", "--json"]
+stdout = "json"
+
+[[step]]
+args = ["ws", "prune", "--dry-run", "--json"]
+stdout = "json"
+
+[[step]]
+args = ["ws", "prune", "--force"]
+stdout = "text"
+
+[deviation]
+decision = "decision:parallel-workspaces/workspace-bootstrap/prune-retention"

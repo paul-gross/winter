@@ -1,0 +1,9 @@
+{"type": "target_started", "target": "projects/"}
+{"type": "repo_action", "repo": "winter", "location": "<ROOT>/ws/.git/info/exclude", "action": "workspace_excludes_updated", "detail": "/projects/"}
+{"type": "repo_action", "repo": "winter", "location": "<ROOT>/ws/.git/info/exclude", "action": "workspace_excludes_updated", "detail": "/.winter/logs/"}
+{"type": "repo_action", "repo": "api", "location": "<ROOT>/ws/projects/api", "action": "exists", "detail": ""}
+{"type": "repo_action", "repo": "api", "location": "<ROOT>/ws/projects/api", "action": "excludes_updated", "detail": "*.log"}
+{"type": "cmd_started", "repo": "api", "command": "echo ran"}
+{"type": "cmd_output_line", "repo": "api", "line": "ran"}
+{"type": "cmd_completed", "repo": "api", "command": "echo ran", "returncode": 0}
+{"type": "target_completed", "target": "projects/", "success": true}

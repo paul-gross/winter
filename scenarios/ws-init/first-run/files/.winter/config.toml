@@ -1,0 +1,13 @@
+[[project_repository]]
+name = "api"
+url = "https://fixture.invalid/api.git"
+
+[[project_repository]]
+name = "web"
+url = "https://fixture.invalid/web.git"
+
+[[standalone_repository]]
+name = "tools"
+url = "https://fixture.invalid/tools.git"
+extension = false
+ref = "v1"

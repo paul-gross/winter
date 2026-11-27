@@ -1,0 +1,30 @@
+summary = "An existing project location whose origin differs from the declared url fails, and its later steps are skipped."
+
+[fixture]
+workspace_git = true
+gitignore = "projects/\n"
+
+[[fixture.remote]]
+name = "api"
+
+[[fixture.remote.commit]]
+message = "Initial api"
+files = { "README.md" = "api fixture\n" }
+
+[[fixture.remote]]
+name = "other"
+
+[[fixture.remote.commit]]
+message = "Initial other"
+files = { "README.md" = "other fixture\n" }
+
+[[fixture.checkout]]
+remote = "other"
+path = "projects/api"
+
+[[step]]
+args = ["ws", "init", "--json"]
+stdout = "json-lines"
+
+[deviation]
+decision = "decision:parallel-workspaces/workspace-bootstrap/reconciliation-scope"

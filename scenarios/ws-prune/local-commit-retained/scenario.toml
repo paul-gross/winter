@@ -1,0 +1,27 @@
+summary = "An undeclared clone with a commit no remote-tracking branch holds is retained."
+
+[fixture]
+workspace_git = true
+gitignore = "projects/\n"
+
+[[fixture.remote]]
+name = "old"
+
+[[fixture.remote.commit]]
+message = "Initial old"
+files = { "README.md" = "old fixture\n" }
+
+[[fixture.checkout]]
+remote = "old"
+path = "projects/old"
+
+[[fixture.git]]
+cwd = "projects/old"
+args = ["commit", "--allow-empty", "-m", "Local only"]
+
+[[step]]
+args = ["ws", "prune", "--force", "--json"]
+stdout = "json"
+
+[deviation]
+decision = "decision:parallel-workspaces/workspace-bootstrap/prune-retention"

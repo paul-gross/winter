@@ -1,0 +1,26 @@
+f - 89fbd3cff0c0ae16c92e2e63569c5c6f170cdfd2 gitconfig
+d home
+d home/.config
+d remotes
+d remotes/busy.git
+d remotes/lib.git
+d remotes/old.git
+d remotes/tools.git
+d ws
+d ws/.git
+f - d6eac66e8467a6f183ee71717ba48c82fc81b16f ws/.gitignore
+d ws/.winter
+f - c70e8bb821a14a0f7e821a4477067b6413e25cf9 ws/.winter/config.toml
+d ws/lib
+d ws/lib/.git
+f - 3b782138930ab1c12cb49cd77ba066ebe0fd3ef0 ws/lib/README.md
+d ws/projects
+d ws/projects/busy
+d ws/projects/busy/.git
+f - 2325363b0ca17d69110822059180563b910038b2 ws/projects/busy/README.md
+d ws/projects/old
+d ws/projects/old/.git
+f - f047ca29704cdf5e37809f2a84152c525eb6b088 ws/projects/old/README.md
+d ws/tools
+d ws/tools/.git
+f - 72349df8c5edbc852548455fb21ca186ad290fb7 ws/tools/README.md

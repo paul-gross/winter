@@ -1,0 +1,6 @@
+{"target":"projects/","type":"target_started"}
+{"success":true,"target":"projects/","type":"target_completed"}
+{"target":"standalone/","type":"target_started"}
+{"action":"exists","detail":"","location":"<ROOT>/ws/tools","repo":"tools","type":"repo_action"}
+{"action":"workspace_excludes_updated","detail":"tools","location":"<ROOT>/ws/.git/info/exclude","repo":"winter-extensions","type":"repo_action"}
+{"success":true,"target":"standalone/","type":"target_completed"}

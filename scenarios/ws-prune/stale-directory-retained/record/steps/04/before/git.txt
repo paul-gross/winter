@@ -1,0 +1,76 @@
+repository
+    remotes/lib.git
+    kind: bare
+head
+    b85a7e5fa3a3140155a73e22a2795bc41d5f3cec
+    refs/heads/main
+refs
+    refs/heads/main b85a7e5fa3a3140155a73e22a2795bc41d5f3cec  
+worktrees
+    worktree <ROOT>/remotes/lib.git
+    bare
+    
+config
+    core.bare=true
+    core.filemode=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    b85a7e5fa3a3140155a73e22a2795bc41d5f3cec  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial lib
+
+repository
+    ws
+    kind: main
+dot-git
+    directory
+head
+    37a907fb8e14d8ae6319135ea80aa3f573f7ea84
+    refs/heads/main
+refs
+    refs/heads/main 37a907fb8e14d8ae6319135ea80aa3f573f7ea84  
+worktrees
+    worktree <ROOT>/ws
+    HEAD 37a907fb8e14d8ae6319135ea80aa3f573f7ea84
+    branch refs/heads/main
+    
+status
+    # branch.oid 37a907fb8e14d8ae6319135ea80aa3f573f7ea84
+    # branch.head main
+    1 .M N... 100644 100644 100644 5170dcdc4f362786f879edbc77201ae259981b84 5170dcdc4f362786f879edbc77201ae259981b84 .winter/config.toml
+stash
+config
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+    # >>> winter-dir/projects (managed by winter)
+    /projects/
+    # <<< winter-dir/projects
+    
+    # >>> winter-workspace/artifacts (managed by winter)
+    /.winter/logs/
+    # <<< winter-workspace/artifacts
+    
+    # >>> winter-workspace/workspace-skills (managed by winter)
+    .claude/skills/ws-*
+    .claude/skills/ws
+    .codex/skills/ws-*
+    .codex/skills/ws
+    .opencode/skill/ws-*
+    .opencode/skill/ws
+    # <<< winter-workspace/workspace-skills
+    
+    # >>> winter-config (managed by winter)
+    .winter/config/**/*.local.*
+    # <<< winter-config
+    
+    # >>> lib (managed by winter)
+    /lib/
+    # <<< lib
+log
+    refs/heads/main
+    37a907fb8e14d8ae6319135ea80aa3f573f7ea84  Fixture Author author@fixture.invalid 946684860 Fixture Committer committer@fixture.invalid 946684860 Workspace root

@@ -1,0 +1,6 @@
+[[project_repository]]
+name = "api"
+
+[[project_repository]]
+name = "web"
+url = "https://fixture.invalid/web.git"

@@ -1,0 +1,57 @@
+summary = "A dry run lists a clean, a dirty, and a standalone orphan with its decision and removes nothing."
+
+[fixture]
+workspace_git = true
+gitignore = "projects/\n"
+
+[[fixture.remote]]
+name = "lib"
+
+[[fixture.remote.commit]]
+message = "Initial lib"
+files = { "README.md" = "lib fixture\n" }
+
+[[fixture.remote]]
+name = "tools"
+
+[[fixture.remote.commit]]
+message = "Initial tools"
+files = { "README.md" = "tools fixture\n" }
+
+[[fixture.remote]]
+name = "old"
+
+[[fixture.remote.commit]]
+message = "Initial old"
+files = { "README.md" = "old fixture\n" }
+
+[[fixture.remote]]
+name = "busy"
+
+[[fixture.remote.commit]]
+message = "Initial busy"
+files = { "README.md" = "busy fixture\n" }
+
+[[fixture.checkout]]
+remote = "old"
+path = "projects/old"
+
+[[fixture.checkout]]
+remote = "busy"
+path = "projects/busy"
+
+[[compare.fan_out]]
+types = ["repo_action", "repo_error", "cmd_started", "cmd_output_line", "cmd_completed"]
+key = "/repo"
+
+[[step]]
+args = ["ws", "init", "--json"]
+stdout = "json-lines"
+
+[[step]]
+args = ["repo", "remove", "standalone/lib", "--json"]
+stdout = "json"
+
+[[step]]
+args = ["ws", "prune", "--dry-run", "--json"]
+stdout = "json"

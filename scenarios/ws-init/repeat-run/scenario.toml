@@ -1,0 +1,42 @@
+summary = "A second run reports each checkout as existing, holds the locked pin, and rewrites no exclude block."
+
+[fixture]
+workspace_git = true
+
+[[fixture.remote]]
+name = "api"
+
+[[fixture.remote.commit]]
+message = "Initial api"
+files = { "README.md" = "api fixture\n" }
+
+[[fixture.remote]]
+name = "web"
+
+[[fixture.remote.commit]]
+message = "Initial web"
+files = { "README.md" = "web fixture\n" }
+
+[[fixture.remote]]
+name = "tools"
+
+[[fixture.remote.commit]]
+message = "Initial tools"
+files = { "README.md" = "tools fixture\n" }
+tag = "v1"
+
+[[fixture.remote.commit]]
+message = "Second tools"
+files = { "notes.txt" = "tools notes\n" }
+
+[[compare.fan_out]]
+types = ["repo_action", "repo_error", "cmd_started", "cmd_output_line", "cmd_completed"]
+key = "/repo"
+
+[[step]]
+args = ["ws", "init", "--json"]
+stdout = "json-lines"
+
+[[step]]
+args = ["ws", "init", "--json"]
+stdout = "json-lines"

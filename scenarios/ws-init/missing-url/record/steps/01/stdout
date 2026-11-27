@@ -1,0 +1,6 @@
+{"type": "target_started", "target": "projects/"}
+{"type": "repo_action", "repo": "winter", "location": "<ROOT>/ws/.git/info/exclude", "action": "workspace_excludes_updated", "detail": "/projects/"}
+{"type": "repo_action", "repo": "winter", "location": "<ROOT>/ws/.git/info/exclude", "action": "workspace_excludes_updated", "detail": "/.winter/logs/"}
+{"type": "repo_error", "repo": "api", "error": "no `url` declared in config; cannot clone"}
+{"type": "repo_action", "repo": "web", "location": "<ROOT>/ws/projects/web", "action": "cloned", "detail": ""}
+{"type": "target_completed", "target": "projects/", "success": false}

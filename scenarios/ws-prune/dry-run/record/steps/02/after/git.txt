@@ -1,0 +1,299 @@
+repository
+    remotes/busy.git
+    kind: bare
+head
+    9bc9e0291910bc513073d1d6ac3eee10bfad684b
+    refs/heads/main
+refs
+    refs/heads/main 9bc9e0291910bc513073d1d6ac3eee10bfad684b  
+worktrees
+    worktree <ROOT>/remotes/busy.git
+    bare
+    
+config
+    core.bare=true
+    core.filemode=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    9bc9e0291910bc513073d1d6ac3eee10bfad684b  Fixture Author author@fixture.invalid 946684980 Fixture Committer committer@fixture.invalid 946684980 Initial busy
+
+repository
+    remotes/lib.git
+    kind: bare
+head
+    b85a7e5fa3a3140155a73e22a2795bc41d5f3cec
+    refs/heads/main
+refs
+    refs/heads/main b85a7e5fa3a3140155a73e22a2795bc41d5f3cec  
+worktrees
+    worktree <ROOT>/remotes/lib.git
+    bare
+    
+config
+    core.bare=true
+    core.filemode=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    b85a7e5fa3a3140155a73e22a2795bc41d5f3cec  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial lib
+
+repository
+    remotes/old.git
+    kind: bare
+head
+    7d7229b4807c8fec630c6bc947e5ec9dfd89c3d0
+    refs/heads/main
+refs
+    refs/heads/main 7d7229b4807c8fec630c6bc947e5ec9dfd89c3d0  
+worktrees
+    worktree <ROOT>/remotes/old.git
+    bare
+    
+config
+    core.bare=true
+    core.filemode=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    7d7229b4807c8fec630c6bc947e5ec9dfd89c3d0  Fixture Author author@fixture.invalid 946684920 Fixture Committer committer@fixture.invalid 946684920 Initial old
+
+repository
+    remotes/tools.git
+    kind: bare
+head
+    63ffa472edd994ad253155970a319e8fba44453f
+    refs/heads/main
+refs
+    refs/heads/main 63ffa472edd994ad253155970a319e8fba44453f  
+worktrees
+    worktree <ROOT>/remotes/tools.git
+    bare
+    
+config
+    core.bare=true
+    core.filemode=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+log
+    refs/heads/main
+    63ffa472edd994ad253155970a319e8fba44453f  Fixture Author author@fixture.invalid 946684860 Fixture Committer committer@fixture.invalid 946684860 Initial tools
+
+repository
+    ws
+    kind: main
+dot-git
+    directory
+head
+    dc03d3844643af1cf8b7959f6b5866668eb946b4
+    refs/heads/main
+refs
+    refs/heads/main dc03d3844643af1cf8b7959f6b5866668eb946b4  
+worktrees
+    worktree <ROOT>/ws
+    HEAD dc03d3844643af1cf8b7959f6b5866668eb946b4
+    branch refs/heads/main
+    
+status
+    # branch.oid dc03d3844643af1cf8b7959f6b5866668eb946b4
+    # branch.head main
+    1 .M N... 100644 100644 100644 2bfabc7a9dca1385728f872c7dbb3093fbd91cce 2bfabc7a9dca1385728f872c7dbb3093fbd91cce .winter/config.toml
+stash
+config
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+in-progress
+exclude
+    # >>> winter-dir/projects (managed by winter)
+    /projects/
+    # <<< winter-dir/projects
+    
+    # >>> winter-workspace/artifacts (managed by winter)
+    /.winter/logs/
+    # <<< winter-workspace/artifacts
+    
+    # >>> winter-workspace/workspace-skills (managed by winter)
+    .claude/skills/ws-*
+    .claude/skills/ws
+    .codex/skills/ws-*
+    .codex/skills/ws
+    .opencode/skill/ws-*
+    .opencode/skill/ws
+    # <<< winter-workspace/workspace-skills
+    
+    # >>> winter-config (managed by winter)
+    .winter/config/**/*.local.*
+    # <<< winter-config
+    
+    # >>> lib (managed by winter)
+    /lib/
+    # <<< lib
+    
+    # >>> tools (managed by winter)
+    /tools/
+    # <<< tools
+log
+    refs/heads/main
+    dc03d3844643af1cf8b7959f6b5866668eb946b4  Fixture Author author@fixture.invalid 946685040 Fixture Committer committer@fixture.invalid 946685040 Workspace root
+
+repository
+    ws/lib
+    kind: main
+dot-git
+    directory
+head
+    b85a7e5fa3a3140155a73e22a2795bc41d5f3cec
+    refs/heads/main
+refs
+    refs/heads/main b85a7e5fa3a3140155a73e22a2795bc41d5f3cec refs/remotes/origin/main 
+    refs/remotes/origin/HEAD b85a7e5fa3a3140155a73e22a2795bc41d5f3cec  refs/remotes/origin/main
+    refs/remotes/origin/main b85a7e5fa3a3140155a73e22a2795bc41d5f3cec  
+worktrees
+    worktree <ROOT>/ws/lib
+    HEAD b85a7e5fa3a3140155a73e22a2795bc41d5f3cec
+    branch refs/heads/main
+    
+status
+    # branch.oid b85a7e5fa3a3140155a73e22a2795bc41d5f3cec
+    # branch.head main
+    # branch.upstream origin/main
+    # branch.ab +0 -0
+stash
+config
+    branch.main.merge=refs/heads/main
+    branch.main.remote=origin
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+    remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+    remote.origin.url=https://fixture.invalid/lib.git
+in-progress
+exclude
+log
+    refs/heads/main
+    b85a7e5fa3a3140155a73e22a2795bc41d5f3cec  Fixture Author author@fixture.invalid 946684800 Fixture Committer committer@fixture.invalid 946684800 Initial lib
+
+repository
+    ws/projects/busy
+    kind: main
+dot-git
+    directory
+head
+    9bc9e0291910bc513073d1d6ac3eee10bfad684b
+    refs/heads/main
+refs
+    refs/heads/main 9bc9e0291910bc513073d1d6ac3eee10bfad684b refs/remotes/origin/main 
+    refs/remotes/origin/HEAD 9bc9e0291910bc513073d1d6ac3eee10bfad684b  refs/remotes/origin/main
+    refs/remotes/origin/main 9bc9e0291910bc513073d1d6ac3eee10bfad684b  
+worktrees
+    worktree <ROOT>/ws/projects/busy
+    HEAD 9bc9e0291910bc513073d1d6ac3eee10bfad684b
+    branch refs/heads/main
+    
+status
+    # branch.oid 9bc9e0291910bc513073d1d6ac3eee10bfad684b
+    # branch.head main
+    # branch.upstream origin/main
+    # branch.ab +0 -0
+    1 .M N... 100644 100644 100644 e482aacafd5b71f995e59120149084dac04407e2 e482aacafd5b71f995e59120149084dac04407e2 README.md
+stash
+config
+    branch.main.merge=refs/heads/main
+    branch.main.remote=origin
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+    remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+    remote.origin.url=https://fixture.invalid/busy.git
+in-progress
+exclude
+log
+    refs/heads/main
+    9bc9e0291910bc513073d1d6ac3eee10bfad684b  Fixture Author author@fixture.invalid 946684980 Fixture Committer committer@fixture.invalid 946684980 Initial busy
+
+repository
+    ws/projects/old
+    kind: main
+dot-git
+    directory
+head
+    7d7229b4807c8fec630c6bc947e5ec9dfd89c3d0
+    refs/heads/main
+refs
+    refs/heads/main 7d7229b4807c8fec630c6bc947e5ec9dfd89c3d0 refs/remotes/origin/main 
+    refs/remotes/origin/HEAD 7d7229b4807c8fec630c6bc947e5ec9dfd89c3d0  refs/remotes/origin/main
+    refs/remotes/origin/main 7d7229b4807c8fec630c6bc947e5ec9dfd89c3d0  
+worktrees
+    worktree <ROOT>/ws/projects/old
+    HEAD 7d7229b4807c8fec630c6bc947e5ec9dfd89c3d0
+    branch refs/heads/main
+    
+status
+    # branch.oid 7d7229b4807c8fec630c6bc947e5ec9dfd89c3d0
+    # branch.head main
+    # branch.upstream origin/main
+    # branch.ab +0 -0
+stash
+config
+    branch.main.merge=refs/heads/main
+    branch.main.remote=origin
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+    remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+    remote.origin.url=https://fixture.invalid/old.git
+in-progress
+exclude
+log
+    refs/heads/main
+    7d7229b4807c8fec630c6bc947e5ec9dfd89c3d0  Fixture Author author@fixture.invalid 946684920 Fixture Committer committer@fixture.invalid 946684920 Initial old
+
+repository
+    ws/tools
+    kind: main
+dot-git
+    directory
+head
+    63ffa472edd994ad253155970a319e8fba44453f
+    refs/heads/main
+refs
+    refs/heads/main 63ffa472edd994ad253155970a319e8fba44453f refs/remotes/origin/main 
+    refs/remotes/origin/HEAD 63ffa472edd994ad253155970a319e8fba44453f  refs/remotes/origin/main
+    refs/remotes/origin/main 63ffa472edd994ad253155970a319e8fba44453f  
+worktrees
+    worktree <ROOT>/ws/tools
+    HEAD 63ffa472edd994ad253155970a319e8fba44453f
+    branch refs/heads/main
+    
+status
+    # branch.oid 63ffa472edd994ad253155970a319e8fba44453f
+    # branch.head main
+    # branch.upstream origin/main
+    # branch.ab +0 -0
+stash
+config
+    branch.main.merge=refs/heads/main
+    branch.main.remote=origin
+    core.bare=false
+    core.filemode=true
+    core.logallrefupdates=true
+    core.repositoryformatversion=0
+    remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+    remote.origin.url=https://fixture.invalid/tools.git
+in-progress
+exclude
+log
+    refs/heads/main
+    63ffa472edd994ad253155970a319e8fba44453f  Fixture Author author@fixture.invalid 946684860 Fixture Committer committer@fixture.invalid 946684860 Initial tools

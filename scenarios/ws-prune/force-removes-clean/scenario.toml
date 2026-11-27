@@ -1,0 +1,20 @@
+summary = "--force removes a clean undeclared clone."
+
+[fixture]
+workspace_git = true
+gitignore = "projects/\n"
+
+[[fixture.remote]]
+name = "old"
+
+[[fixture.remote.commit]]
+message = "Initial old"
+files = { "README.md" = "old fixture\n" }
+
+[[fixture.checkout]]
+remote = "old"
+path = "projects/old"
+
+[[step]]
+args = ["ws", "prune", "--force", "--json"]
+stdout = "json"

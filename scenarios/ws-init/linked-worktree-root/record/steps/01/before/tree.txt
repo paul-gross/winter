@@ -1,0 +1,16 @@
+f - 89fbd3cff0c0ae16c92e2e63569c5c6f170cdfd2 gitconfig
+d home
+d home/.config
+d remotes
+d remotes/api.git
+d remotes/root.git
+d remotes/tools.git
+d ws
+d ws/linked
+f - 6f124ee3ff69a4b0c0de8433232a8bfedcbaf69e ws/linked/.git
+d ws/linked/.winter
+f - e716d1418a553b61992aa6ad12a2ad319ec1f8ad ws/linked/.winter/config.toml
+d ws/main
+d ws/main/.git
+d ws/main/.winter
+f - e716d1418a553b61992aa6ad12a2ad319ec1f8ad ws/main/.winter/config.toml

@@ -1,0 +1,5 @@
+[[standalone_repository]]
+name = "lib"
+url = "https://fixture.invalid/lib.git"
+extension = false
+cmd = ["rm -rf .git"]
