@@ -381,6 +381,78 @@ fn a_declared_checkout_or_a_directory_that_holds_one_is_no_candidate() {
 }
 
 #[test]
+fn an_inherited_git_dir_alone_does_not_make_unpushed_work_safe() {
+    let tree = fixture(&["unpushed", "stashed"], true);
+    let projects = root(&tree).join("projects");
+    git(
+        &tree,
+        &projects.join("unpushed"),
+        &["commit", "--allow-empty", "-m", "local work"],
+    );
+    fs::write(projects.join("stashed/README"), "work\n").expect("a change");
+    git(&tree, &projects.join("stashed"), &["stash", "push"]);
+
+    let ended = InProcess::new(&["ws", "prune", "--force"])
+        .cwd(&root(&tree))
+        .pinned(&tree.env())
+        .env(
+            "GIT_DIR",
+            projects.join("api/.git").to_str().expect("UTF-8"),
+        )
+        .run();
+
+    assert_success(&ended, "a forced run");
+    assert!(projects.join("unpushed/.git").is_dir(), "{}", ended.stdout);
+    assert!(projects.join("stashed/.git").is_dir(), "{}", ended.stdout);
+}
+
+/// Git exports the variables that locate a repository to hooks and aliases. A run that inherits them still
+/// reads each candidate's own repository, and the exclude file of the workspace root.
+#[test]
+fn inherited_variables_that_locate_a_repository_answer_for_no_candidate() {
+    let tree = fixture(&["unpushed", "stashed"], true);
+    let projects = root(&tree).join("projects");
+    git(
+        &tree,
+        &projects.join("unpushed"),
+        &["commit", "--allow-empty", "-m", "local work"],
+    );
+    fs::write(projects.join("stashed/README"), "work\n").expect("a change");
+    git(&tree, &projects.join("stashed"), &["stash", "push"]);
+    let gone = clone_at(&tree, "gone", "gone");
+    write_blocks(&tree, &[("gone", &["/gone/"])]);
+    let other = projects.join("api/.git");
+    let index = other.join("index");
+    let objects = other.join("objects");
+
+    let ended = InProcess::new(&["ws", "prune", "--force"])
+        .cwd(&root(&tree))
+        .pinned(&tree.env())
+        .env("GIT_DIR", other.to_str().expect("UTF-8"))
+        .env("GIT_COMMON_DIR", other.to_str().expect("UTF-8"))
+        .env(
+            "GIT_WORK_TREE",
+            projects.join("api").to_str().expect("UTF-8"),
+        )
+        .env("GIT_INDEX_FILE", index.to_str().expect("UTF-8"))
+        .env("GIT_OBJECT_DIRECTORY", objects.to_str().expect("UTF-8"))
+        .run();
+
+    assert_success(&ended, "a forced run");
+    for line in [
+        "  skip   projects/unpushed (has commits no remote-tracking branch holds)\n",
+        "  skip   projects/stashed (has stashes)\n",
+        "  remove gone\n",
+    ] {
+        assert!(ended.stdout.contains(line), "{line:?}: {}", ended.stdout);
+    }
+    assert!(projects.join("unpushed/.git").is_dir());
+    assert!(projects.join("stashed/.git").is_dir());
+    assert!(!gone.exists());
+    assert!(!exclude(&tree).contains("gone"), "{}", exclude(&tree));
+}
+
+#[test]
 fn a_block_line_that_resolves_outside_the_root_is_retained() {
     let tree = fixture(&[], true);
     write_blocks(&tree, &[("ext", &["/../remotes/"])]);
