@@ -45,3 +45,5 @@ partial checkout or command effects, rerun the same command to reconcile again.
 Bare reconciliation does not create a workspace, prune checkouts, reconcile feature environments, provision resources,
 start services, project extensions or skills, run extension hooks, or reconcile nested workspaces. It maintains the
 workspace skill exclude block, not the projected skills themselves.
+
+Read `winter-workspace context ws/prune` to remove checkouts and links that no configuration declares any more.

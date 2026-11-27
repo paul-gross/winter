@@ -8,8 +8,8 @@ use std::sync::Mutex;
 use winter_workspace_core::{
     Call, CommandTracer, Diagnostics, Finished, GitFailure, GitOperation, Log, OperationSpan,
     OsFiles, OsPrograms, Pacing, ProcessEnv, RepoMessage, RunPrograms, TraceLog, checkout_branch,
-    checkout_detached, clean, clone, dirty, fetch, head, origin_url, set_config, stash_pop,
-    stash_push, toplevel, tree, verify,
+    checkout_detached, clean, clone, dirty, fetch, head, local_only, origin_url, set_config,
+    stash_pop, stash_push, stashed, toplevel, tree, verify,
 };
 use winter_workspace_test_support::{CommitSpec, Git, TempTree};
 
@@ -140,6 +140,93 @@ fn clean_is_false_for_an_untracked_file_alone() {
     f.write("new.txt", "x\n");
 
     assert!(!clean(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer"));
+}
+
+#[test]
+fn clean_is_false_for_an_untracked_file_in_a_repository_that_hides_untracked_files() {
+    let f = fixture();
+    f.out(&["config", "status.showUntrackedFiles", "no"]);
+    assert!(clean(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer"));
+    f.write("new.txt", "x\n");
+    assert_eq!(f.out(&["status", "--porcelain"]), "", "git hides the file");
+
+    let answer = clean(&f.programs, &Spans::default(), "api", &f.clone).expect("an answer");
+
+    assert!(!answer);
+}
+
+/// What `answer` failed with: the operation of its repo error.
+fn failed_operation(answer: Result<bool, GitFailure>) -> GitOperation {
+    match answer {
+        Err(GitFailure::Repo(error)) => match error.message {
+            RepoMessage::GitFailure { operation, .. } => operation,
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+}
+
+fn marked(failures: &Failures) -> Vec<String> {
+    let marked = failures.0.lock().expect("the failures");
+    marked.iter().map(|(name, _)| name.clone()).collect()
+}
+
+#[test]
+fn local_only_tells_a_commit_no_remote_branch_holds_and_fails_where_history_cannot_be_read() {
+    let f = fixture();
+    let plain = f.tree.root().join("plain");
+    std::fs::create_dir(&plain).expect("a directory");
+    let failures = Failures::default();
+
+    let fresh = local_only(&f.programs, &failures, "api", &f.clone).expect("an answer");
+    assert!(
+        !fresh,
+        "every commit of a fresh clone is on its remote branch"
+    );
+    assert!(marked(&failures).is_empty());
+
+    f.git()
+        .commit(&f.clone, &commit("two", "b.txt", "b\n"))
+        .expect("a local commit");
+    let ahead = local_only(&f.programs, &failures, "api", &f.clone).expect("an answer");
+    assert!(ahead);
+
+    f.out(&["reset", "--hard", "origin/main"]);
+    f.out(&["tag", "kept", &f.first]);
+    assert!(!local_only(&f.programs, &failures, "api", &f.clone).expect("an answer"));
+    f.out(&["checkout", "--detach"]);
+    f.git()
+        .commit(&f.clone, &commit("three", "c.txt", "c\n"))
+        .expect("a detached commit");
+    let detached = local_only(&f.programs, &failures, "api", &f.clone).expect("an answer");
+    assert!(detached, "a commit only a detached HEAD holds");
+    assert!(marked(&failures).is_empty());
+
+    let failed = local_only(&f.programs, &failures, "api", &plain);
+    assert_eq!(failed_operation(failed), GitOperation::LocalOnly);
+    assert_eq!(marked(&failures), ["git rev-list"]);
+}
+
+#[test]
+fn stashed_tells_a_stash_from_none_and_fails_on_any_other_exit() {
+    let f = fixture();
+    let plain = f.tree.root().join("plain");
+    std::fs::create_dir(&plain).expect("a directory");
+    let failures = Failures::default();
+
+    let none = stashed(&f.programs, &failures, "api", &f.clone).expect("an answer");
+    assert!(!none);
+    assert!(marked(&failures).is_empty(), "exit 1 is an answer");
+
+    f.write("a.txt", "changed\n");
+    f.out(&["stash"]);
+    let held = stashed(&f.programs, &failures, "api", &f.clone).expect("an answer");
+    assert!(held);
+    assert!(marked(&failures).is_empty());
+
+    let failed = stashed(&f.programs, &failures, "api", &plain);
+    assert_eq!(failed_operation(failed), GitOperation::StashList);
+    assert_eq!(marked(&failures), ["git rev-parse"]);
 }
 
 #[test]

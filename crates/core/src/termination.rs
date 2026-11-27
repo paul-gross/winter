@@ -29,6 +29,10 @@ pub enum Termination {
     Config(Box<ConfigError>),
     /// A program run on a repository failed; the diagnostic is the message and the details of the call.
     Repo(Box<RepoError>),
+    /// A confirmation was declined or could not be answered; `interrupted` tells an interrupt from an answer.
+    Aborted {
+        interrupted: bool,
+    },
     /// The reader closed stdout before the result was written; nothing more is written.
     BrokenPipe,
     Internal(Box<InternalError>),
@@ -43,6 +47,7 @@ impl Termination {
             | Self::Command(_)
             | Self::Config(_)
             | Self::Repo(_)
+            | Self::Aborted { .. }
             | Self::BrokenPipe
             | Self::Internal(_) => 1,
             Self::Usage(_) | Self::BareGroup { .. } => 2,
@@ -51,8 +56,8 @@ impl Termination {
 
     /// The text the process boundary writes to its error stream, or `None` when nothing more is written.
     ///
-    /// A bare group's text is its help. Every other text opens with a line that starts with the error marker
-    /// and carries the message; a usage error adds its usage line and the command that prints its help, and a
+    /// A bare group's text is its help, and an aborted run's is the aborted notice. Every other text opens with a
+    /// line that starts with the error marker and carries the message; a usage error adds its usage line and the command that prints its help, and a
     /// repo error one line for each detail of the failed call that is present.
     pub fn diagnostic(&self) -> Option<String> {
         match self {
@@ -62,6 +67,7 @@ impl Termination {
             Self::Command(error) => Some(format!("{ERROR_MARKER}{error}")),
             Self::Config(error) => Some(format!("{ERROR_MARKER}{error}")),
             Self::Repo(error) => Some(format!("{ERROR_MARKER}{}", error.detailed())),
+            Self::Aborted { .. } => Some(ABORTED_NOTICE.to_owned()),
             Self::Internal(error) => Some(format!("{ERROR_MARKER}{error}")),
         }
     }
@@ -81,6 +87,7 @@ impl Termination {
             Self::Command(_) => Some("Command"),
             Self::Config(_) => Some("Config"),
             Self::Repo(_) => Some("Repo"),
+            Self::Aborted { .. } => Some("Aborted"),
             Self::BrokenPipe => Some("BrokenPipe"),
             Self::Internal(_) => Some("Internal"),
         }
@@ -100,6 +107,9 @@ impl Termination {
 
 /// What opens the first line of every error diagnostic.
 const ERROR_MARKER: &str = "error: ";
+
+/// The whole diagnostic of an aborted run: the notice the binary also writes when an interrupt ends it.
+const ABORTED_NOTICE: &str = "aborted";
 
 /// What a usage diagnostic shows of the command at fault.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1133,6 +1143,7 @@ mod tests {
             }))),
             Termination::Config(Box::new(root_not_found())),
             Termination::Repo(Box::new(failed_status())),
+            Termination::Aborted { interrupted: false },
             Termination::BrokenPipe,
             Termination::Internal(Box::new(panic())),
         ];
@@ -1157,6 +1168,7 @@ mod tests {
                 "Command",
                 "Config",
                 "Repo",
+                "Aborted",
                 "BrokenPipe",
                 "Internal"
             ]
@@ -1177,6 +1189,17 @@ mod tests {
     fn success_and_reported_have_no_diagnostic() {
         assert_eq!(Termination::Success.diagnostic(), None);
         assert_eq!(Termination::Reported.diagnostic(), None);
+    }
+
+    #[test]
+    fn an_aborted_run_exits_1_with_the_aborted_notice_and_its_own_error_type() {
+        for interrupted in [false, true] {
+            let ending = Termination::Aborted { interrupted };
+
+            assert_eq!(ending.exit_code(), 1);
+            assert_eq!(ending.diagnostic().as_deref(), Some("aborted"));
+            assert_eq!(ending.error_type(), Some("Aborted"));
+        }
     }
 
     #[test]
