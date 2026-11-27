@@ -9,8 +9,10 @@ say what you are about to change before you change it.
 
 ## 1. Create the workspace
 
-When the directory has no `.winter/config.toml`, run `winter-workspace init` in it, as
-`winter-workspace context init` describes. Run the later steps from the workspace.
+Look for `.winter/config.toml` in the current directory and in each directory above it. The nearest directory that holds
+one is the root of the workspace you are already in: say so, and skip this step. Only when none holds one, run
+`winter-workspace init` in the current directory, as `winter-workspace context init` describes. Run the later steps from
+the workspace root, since their paths start there.
 
 ## 2. Declare the project repositories
 
@@ -20,6 +22,8 @@ the listings should show them. Ask for its clone URL, and find its default branc
 ```sh
 git ls-remote --symref <url> HEAD
 ```
+
+When the command fails or prints no `ref:` line, tell the user and ask for the default branch.
 
 Then declare it with `winter-workspace repo add https://example.com/repo.git --main-branch main`, using that URL and
 branch. `winter-workspace context repo/add` gives the other options.
