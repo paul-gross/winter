@@ -14,7 +14,9 @@ asks, and removes what cannot hold work. Lock and state records are not changed.
 - **`orphan_agent_copy`:** an agent file in `.claude/agents`, `.codex/agents`, or `.opencode/agent` that such a block
   names by its prefix.
 
-The checkout of a declared repository, and a directory that holds one, is never a candidate, whatever a block names.
+The checkout of a declared repository, and a directory that holds one, is never a candidate, whatever a block names. Nor
+is a link or an agent copy of a vendor directory that itself links outside the workspace. A block with no end marker, or
+with two begin markers, names no candidate and is left as it is, with a warning.
 
 Each line of the preview names the kind, the path, and the evidence that the workspace managed it: `projects/`, the
 exclude block, or a dangling link.
@@ -24,17 +26,19 @@ exclude block, or a dangling link.
 A clone is retained, marked `!` with the reason under it, when the first of these holds:
 
 1. it resolves outside the workspace;
-2. it is not a git clone: it holds no `.git`;
+2. it is not a git clone: it holds no `.git`, or one that git does not take as the repository of that directory;
 3. it is a linked worktree: its `.git` is a file;
 4. it has linked worktrees;
-5. it has uncommitted or untracked changes, or its status cannot be read;
+5. it has uncommitted or untracked changes, those in its submodules included, or its status cannot be read;
 6. it has commits no remote-tracking branch holds, or its history cannot be read;
-7. it has stashes, or its stash list cannot be read.
+7. it has stashes, or its stash list cannot be read;
+8. it holds another candidate that is retained, which its removal would take.
 
-Each of these is asked of the clone's own repository: an inherited `GIT_DIR`, or another variable that points git at a
-repository, is not passed on. Links and agent copies are never retained. Ignored files do not count as changes and go with a removed clone. Every
-candidate is checked again just before its removal, and one that changed since the scan is skipped. Retained material
-is never removed by this command, under any option: delete it by hand once you are sure nothing in it is wanted.
+Git is asked about the clone's own repository: an inherited `GIT_DIR`, or another variable that points git at a
+repository, is not passed on. Links and agent copies are never retained. Ignored files do not count as changes and go
+with a removed clone. Every candidate is checked again just before its removal, and one that changed since the scan is
+skipped. Retained material is never removed by this command, under any option: delete it by hand once you are sure
+nothing in it is wanted.
 
 ## Options
 

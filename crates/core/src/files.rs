@@ -20,6 +20,12 @@ pub trait ReadFiles: Sync {
     /// not exist.
     fn exists(&self, path: &Path) -> bool;
 
+    /// Whether it is known that there is nothing at `path`, with symbolic links followed. Unlike a false
+    /// [`exists`](Self::exists), a true answer is never that of a path that could not be looked at.
+    fn missing(&self, path: &Path) -> bool {
+        !self.exists(path)
+    }
+
     /// Whether `path` is a directory, with symbolic links followed.
     fn is_dir(&self, path: &Path) -> bool;
 
@@ -215,6 +221,10 @@ impl ReadFiles for OsFiles {
 
     fn exists(&self, path: &Path) -> bool {
         std::fs::metadata(path).is_ok()
+    }
+
+    fn missing(&self, path: &Path) -> bool {
+        std::fs::metadata(path).is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
     }
 
     fn is_dir(&self, path: &Path) -> bool {

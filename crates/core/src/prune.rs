@@ -12,7 +12,7 @@ use crate::config_load;
 use crate::config_model::Workspace;
 use crate::diagnostics::{self, Diagnostics};
 use crate::git::{self, GitFailure, OwnRepository};
-use crate::managed_block::blocks;
+use crate::managed_block::{Markers, Shape, blocks, shape};
 use crate::ports::Ports;
 use crate::termination::{ConfigError, Termination};
 use crate::workspace_exclude::{self, Finalized, Located};
@@ -96,6 +96,8 @@ pub enum Retained {
     LocalOnly,
     /// Also a stash list that cannot be read.
     Stashes,
+    /// Another candidate inside the clone is retained, so removing the clone would take it too.
+    HoldsCandidate,
 }
 
 impl Retained {
@@ -109,6 +111,7 @@ impl Retained {
             Self::Dirty => "uncommitted or untracked changes",
             Self::LocalOnly => "has commits no remote-tracking branch holds",
             Self::Stashes => "has stashes",
+            Self::HoldsCandidate => "holds retained material",
         }
     }
 }
@@ -255,7 +258,7 @@ fn run(
     let mut removals = Vec::with_capacity(survey.scan.orphans.len());
     let mut retained_blocks: Vec<String> = Vec::new();
     for orphan in &survey.scan.orphans {
-        let removal = remove(ports, workspace, orphan);
+        let removal = attempt(ports, workspace, &survey.scan.orphans, &removals, orphan);
         let relative = orphan
             .path
             .strip_prefix(&workspace.root)
@@ -289,16 +292,80 @@ fn run(
     })
 }
 
-/// The candidates of `workspace`, each with why it stays. Reads only.
-///
-/// Like [`remove`] and [`reaggregate`], it runs git without the variables that would have it answer for a
-/// repository other than the one it is asked about.
-pub fn scan(ports: &Ports<'_>, diagnostics: &mut Diagnostics<'_>, workspace: &Workspace) -> Scan {
+/// What becomes of `orphan`, the candidates before it having ended as `removals`. A candidate that went with a
+/// directory removed before it is removed. A clone that holds a candidate which is retained, or has become so,
+/// stays.
+fn attempt(
+    ports: &Ports<'_>,
+    workspace: &Workspace,
+    orphans: &[Orphan],
+    removals: &[Removal],
+    orphan: &Orphan,
+) -> Removal {
+    let went = orphans
+        .iter()
+        .zip(removals)
+        .any(|(outer, removal)| *removal == Removal::Removed && holds(ports, outer, orphan));
+    if went && ports.files.missing(&orphan.path) {
+        return Removal::Removed;
+    }
+    if orphan.retained.is_none() && holds_retained(ports, workspace, orphans, orphan) {
+        return Removal::Skipped(Skipped::Retained(Retained::HoldsCandidate));
+    }
+    remove(ports, workspace, orphan)
+}
+
+/// Whether removing `outer`, a clone that is a directory of its own, would take `inner` or what it leads to.
+fn holds(ports: &Ports<'_>, outer: &Orphan, inner: &Orphan) -> bool {
+    let place = |orphan: &Orphan| {
+        let name = orphan.path.file_name().unwrap_or_default();
+        orphan.scanned.parent.join(name)
+    };
+    if !outer.kind.is_clone() || outer.scanned.entry != Entry::Directory {
+        return false;
+    }
+    let top = place(outer);
+    [place(inner), ports.files.resolve(&inner.path)]
+        .iter()
+        .any(|held| *held != top && held.starts_with(&top))
+}
+
+/// Whether `outer` holds a candidate that is still there and is retained now or was at the scan.
+fn holds_retained(
+    ports: &Ports<'_>,
+    workspace: &Workspace,
+    orphans: &[Orphan],
+    outer: &Orphan,
+) -> bool {
+    in_own_repository(ports, |ports| {
+        orphans
+            .iter()
+            .filter(|inner| inner.kind.is_clone() && holds(ports, outer, inner))
+            .any(|inner| {
+                !ports.files.missing(&inner.path)
+                    && (inner.retained.is_some()
+                        || retained(ports, workspace, &inner.path).is_some())
+            })
+    })
+}
+
+/// Runs `work` with git answering only for the repository it is asked about: without the inherited variables
+/// that would have it answer for another. Every answer that permits a removal or a write of the exclude file
+/// is asked this way.
+fn in_own_repository<T>(ports: &Ports<'_>, work: impl FnOnce(&Ports<'_>) -> T) -> T {
     let programs = OwnRepository(ports.programs);
-    let ports = &Ports {
+    work(&Ports {
         programs: &programs,
         ..*ports
-    };
+    })
+}
+
+/// The candidates of `workspace`, each with why it stays. Reads only.
+pub fn scan(ports: &Ports<'_>, diagnostics: &mut Diagnostics<'_>, workspace: &Workspace) -> Scan {
+    in_own_repository(ports, |ports| candidates(ports, diagnostics, workspace))
+}
+
+fn candidates(ports: &Ports<'_>, diagnostics: &mut Diagnostics<'_>, workspace: &Workspace) -> Scan {
     let root = &workspace.root;
     let mut found = Found {
         ports,
@@ -333,7 +400,7 @@ pub fn scan(ports: &Ports<'_>, diagnostics: &mut Diagnostics<'_>, workspace: &Wo
         let directory = root.join(directory);
         for name in sorted_entries(ports, &directory) {
             let path = directory.join(name);
-            if entry(ports, &path) == Some(Entry::Link) && !ports.files.exists(&path) {
+            if entry(ports, &path) == Some(Entry::Link) && ports.files.missing(&path) {
                 found.add(OrphanKind::BrokenSymlink, path, None);
             }
         }
@@ -353,10 +420,20 @@ pub fn scan(ports: &Ports<'_>, diagnostics: &mut Diagnostics<'_>, workspace: &Wo
         }
     }
 
-    Scan {
-        orphans: found.orphans,
-        evidence,
+    let mut orphans = found.orphans;
+    let holding: Vec<usize> = (0..orphans.len())
+        .filter(|&outer| {
+            orphans[outer].retained.is_none()
+                && orphans
+                    .iter()
+                    .any(|inner| inner.retained.is_some() && holds(ports, &orphans[outer], inner))
+        })
+        .collect();
+    for outer in holding {
+        orphans[outer].retained = Some(Retained::HoldsCandidate);
     }
+
+    Scan { orphans, evidence }
 }
 
 /// The candidates of a scan under way.
@@ -367,8 +444,9 @@ struct Found<'a> {
 }
 
 impl Found<'_> {
-    /// Adds the candidate at `path`, unless it is one already, its entry cannot be told, or it is a clone
-    /// whose removal would take a declared checkout with it.
+    /// Adds the candidate at `path`, unless it is one already, its entry cannot be told, it is a link or an
+    /// agent copy of a directory that leads outside the root, or it is a clone whose removal would take a
+    /// declared checkout with it.
     fn add(&mut self, kind: OrphanKind, path: PathBuf, block: Option<&String>) {
         let files = self.ports.files;
         let known = self
@@ -382,6 +460,9 @@ impl Found<'_> {
             return;
         }
         let parent = files.resolve(path.parent().unwrap_or(&path));
+        if !kind.is_clone() && !parent.starts_with(files.resolve(&self.workspace.root)) {
+            return;
+        }
         let retained = kind
             .is_clone()
             .then(|| retained(self.ports, self.workspace, &path))
@@ -478,11 +559,41 @@ fn stale_blocks(
                 project.common.name == name && bootstrap::extension(ports, root, project)
             })
     };
-    let stale = blocks(&content)
-        .into_iter()
-        .filter(|(name, _)| !name.contains('/') && !eligible(name))
-        .collect();
+    let mut stale = blocks(&content);
+    stale.retain(|(name, _)| !name.contains('/') && !eligible(name));
+    stale.retain(|(name, _)| {
+        let whole = !malformed(&content, name);
+        if !whole {
+            diagnostics::notice(
+                diagnostics.err,
+                &format!(
+                    "warning: the block {name} of the workspace exclude file is malformed; \
+                     nothing it names is a candidate, and it is left as it is"
+                ),
+            );
+        }
+        whole
+    });
     (stale, Evidence::Read)
+}
+
+/// Whether the block `name` of `content` has no end marker or more than one begin marker, so that its lines
+/// cannot be told from the user's.
+fn malformed(content: &str, name: &str) -> bool {
+    shape(content, &Markers::exclude(name)) == Shape::Malformed
+}
+
+/// The names of the malformed blocks of the exclude file; none when it cannot be read.
+fn malformed_blocks(ports: &Ports<'_>, root: &Path) -> Result<Vec<String>, GitFailure> {
+    let Located::File(file) =
+        workspace_exclude::locate(ports.programs, ports.tracer, ports.files, root)?
+    else {
+        return Ok(Vec::new());
+    };
+    let content = ports.files.read(&file).ok().flatten().unwrap_or_default();
+    let content = String::from_utf8_lossy(&content);
+    let names = blocks(&content).into_iter().map(|(name, _)| name);
+    Ok(names.filter(|name| malformed(&content, name)).collect())
 }
 
 /// The path a block line names as a directory of the root: the line, trimmed, is `/<path>` with at most one
@@ -556,11 +667,10 @@ fn retained(ports: &Ports<'_>, workspace: &Workspace, path: &Path) -> Option<Ret
 /// Removes `orphan`, unless it was retained, its place is no longer what the scan saw, or, for a clone, a
 /// retention reason holds now.
 pub fn remove(ports: &Ports<'_>, workspace: &Workspace, orphan: &Orphan) -> Removal {
-    let programs = OwnRepository(ports.programs);
-    let ports = &Ports {
-        programs: &programs,
-        ..*ports
-    };
+    in_own_repository(ports, |ports| checked_removal(ports, workspace, orphan))
+}
+
+fn checked_removal(ports: &Ports<'_>, workspace: &Workspace, orphan: &Orphan) -> Removal {
     if let Some(reason) = orphan.retained {
         return Removal::Skipped(Skipped::Retained(reason));
     }
@@ -592,30 +702,30 @@ fn unchanged(ports: &Ports<'_>, workspace: &Workspace, orphan: &Orphan) -> bool 
     let now = entry(ports, &orphan.path);
     match orphan.kind {
         OrphanKind::ProjectClone | OrphanKind::StandaloneClone => now == Some(orphan.scanned.entry),
-        OrphanKind::BrokenSymlink => now == Some(Entry::Link) && !files.exists(&orphan.path),
+        OrphanKind::BrokenSymlink => now == Some(Entry::Link) && files.missing(&orphan.path),
         OrphanKind::OrphanAgentCopy => now == Some(Entry::File),
     }
 }
 
 /// Refreshes the exclude blocks of the extensions for the current configuration, keeping each block of
-/// `retained_blocks` and its lines as they are: a block stays with the material it names.
+/// `retained_blocks` and its lines as they are: a block stays with the material it names. A malformed block is
+/// kept too, since the lines after its begin marker may be the user's.
 pub fn reaggregate(
     ports: &Ports<'_>,
     workspace: &Workspace,
     retained_blocks: &[String],
 ) -> Result<Finalized, GitFailure> {
-    let programs = OwnRepository(ports.programs);
-    let ports = &Ports {
-        programs: &programs,
-        ..*ports
-    };
-    workspace_exclude::finalize(
-        ports,
-        &workspace.root,
-        workspace.config.adopt_extensions,
-        &bootstrap::eligible(ports, workspace),
-        retained_blocks,
-    )
+    in_own_repository(ports, |ports| {
+        let mut keep = retained_blocks.to_vec();
+        keep.extend(malformed_blocks(ports, &workspace.root)?);
+        workspace_exclude::finalize(
+            ports,
+            &workspace.root,
+            workspace.config.adopt_extensions,
+            &bootstrap::eligible(ports, workspace),
+            &keep,
+        )
+    })
 }
 
 #[cfg(test)]
@@ -625,7 +735,7 @@ mod tests {
 
     use super::*;
     use crate::files::{Edit, MemoryFiles, WriteFiles};
-    use crate::programs::{Call, Finished, RunPrograms};
+    use crate::programs::{Call, Exit, Finished, RunPrograms};
     use crate::trace::NoTrace;
 
     /// A writer that records each removal it is asked for and removes nothing.
@@ -813,6 +923,154 @@ mod tests {
             removed(&has_worktrees, &safe_clone()).0,
             Removal::Skipped(Skipped::Retained(Retained::HasWorktrees))
         );
+    }
+
+    /// What a stand-in git answers one probe: an exit code and stdout, or `None` for a git that cannot start.
+    type Answer = Option<(i32, &'static str)>;
+
+    /// A git that answers the four probes of retention: the top of the work tree, the status, the commits no
+    /// remote holds, and the stash.
+    struct Probes {
+        top: Answer,
+        status: Answer,
+        history: Answer,
+        stash: Answer,
+    }
+
+    /// The answers of a clone that holds no work.
+    const SAFE: Probes = Probes {
+        top: Some((0, "/ws/projects/old\n")),
+        status: Some((0, "")),
+        history: Some((0, "")),
+        stash: Some((1, "")),
+    };
+
+    impl RunPrograms for Probes {
+        fn run(&self, call: &Call<'_>) -> io::Result<Finished> {
+            let given = |name: &str| call.args.iter().any(|arg| *arg == name);
+            let answer = if given("--show-toplevel") {
+                self.top
+            } else if given("status") {
+                self.status
+            } else if given("rev-list") {
+                self.history
+            } else {
+                assert!(given("refs/stash"), "{:?}", call.args);
+                self.stash
+            };
+            let (code, stdout) = answer.ok_or_else(|| io::Error::other("no git"))?;
+            Ok(Finished {
+                exit: Exit::Code(code),
+                stdout: stdout.into(),
+                stderr: Vec::new(),
+            })
+        }
+    }
+
+    fn reason(files: &MemoryFiles, programs: &Probes) -> Option<Retained> {
+        let writer = Writer::default();
+        let ports = Ports {
+            files,
+            writer: &writer,
+            programs,
+            tracer: &NoTrace,
+        };
+        retained(&ports, &workspace(), Path::new("/ws/projects/old"))
+    }
+
+    #[test]
+    fn a_clone_is_retained_when_git_cannot_say_that_it_holds_no_work() {
+        let files = MemoryFiles::default().dir("/ws/projects/old/.git");
+        assert_eq!(reason(&files, &SAFE), None);
+        for (programs, expected) in [
+            (Probes { top: None, ..SAFE }, Retained::Dirty),
+            (
+                Probes {
+                    top: Some((128, "")),
+                    ..SAFE
+                },
+                Retained::NotAClone,
+            ),
+            (
+                Probes {
+                    top: Some((0, "/ws\n")),
+                    ..SAFE
+                },
+                Retained::NotAClone,
+            ),
+            (
+                Probes {
+                    status: None,
+                    ..SAFE
+                },
+                Retained::Dirty,
+            ),
+            (
+                Probes {
+                    status: Some((128, "")),
+                    ..SAFE
+                },
+                Retained::Dirty,
+            ),
+            (
+                Probes {
+                    history: None,
+                    ..SAFE
+                },
+                Retained::LocalOnly,
+            ),
+            (
+                Probes {
+                    history: Some((128, "")),
+                    ..SAFE
+                },
+                Retained::LocalOnly,
+            ),
+            (
+                Probes {
+                    stash: None,
+                    ..SAFE
+                },
+                Retained::Stashes,
+            ),
+            (
+                Probes {
+                    stash: Some((128, "")),
+                    ..SAFE
+                },
+                Retained::Stashes,
+            ),
+        ] {
+            assert_eq!(reason(&files, &programs), Some(expected));
+        }
+    }
+
+    #[test]
+    fn the_first_retention_reason_that_holds_is_the_one_given() {
+        let all = || Probes {
+            status: Some((0, "?? new\n")),
+            history: Some((0, "abc\n")),
+            stash: Some((0, "abc\n")),
+            ..SAFE
+        };
+        let clone = || MemoryFiles::default().dir("/ws/projects/old/.git");
+        let worktrees = clone().dir("/ws/projects/old/.git/worktrees/alpha");
+        let outside = MemoryFiles::default().link("/ws/projects/old", "/elsewhere");
+
+        assert_eq!(reason(&outside, &all()), Some(Retained::OutsideRoot));
+        assert_eq!(reason(&worktrees, &all()), Some(Retained::HasWorktrees));
+        assert_eq!(reason(&clone(), &all()), Some(Retained::Dirty));
+        let unpushed = Probes {
+            status: SAFE.status,
+            ..all()
+        };
+        assert_eq!(reason(&clone(), &unpushed), Some(Retained::LocalOnly));
+        let stashed = Probes {
+            history: SAFE.history,
+            status: SAFE.status,
+            ..all()
+        };
+        assert_eq!(reason(&clone(), &stashed), Some(Retained::Stashes));
     }
 
     #[test]

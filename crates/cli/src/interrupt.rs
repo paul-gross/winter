@@ -101,9 +101,18 @@ extern "C" fn on_interrupt(_signal: libc::c_int) {
 mod tests {
     use std::io::Write;
 
+    use winter_workspace_core::Termination;
     use winter_workspace_test_support::{Exit, Observation, TempTree, invoke};
 
     use super::*;
+
+    #[test]
+    fn the_handler_writes_the_diagnostic_of_an_aborted_run() {
+        let aborted = Termination::Aborted { interrupted: true };
+        let diagnostic = aborted.diagnostic().expect("a diagnostic");
+
+        assert_eq!(ABORTED_NOTICE, format!("{diagnostic}\n").as_bytes());
+    }
 
     /// Names the fixture a child test process was started to run. A fixture does nothing without its own name
     /// here.
