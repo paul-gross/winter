@@ -368,22 +368,9 @@ fn every_command_the_root_help_lists_answers_its_own_help() {
     }
 }
 
-#[test]
-fn init_is_no_command_and_the_root_help_does_not_list_it() {
-    let help = InProcess::new(&["--help"]).run().stdout;
-    assert!(!listed_commands(&help).contains(&"init"), "{help}");
-
-    let fault = usage_fault(&["init"]);
-
-    assert!(
-        matches!(&fault, ParseFault::UnknownCommand { name } if name == "init"),
-        "{fault:?}"
-    );
-}
-
 /// The groups and top-level commands this tree registers, in the order the help lists them. A change that adds
 /// a group, or a top-level command that is not hidden, adds its name here.
-const REGISTERED: [&str; 3] = ["context", "repo", "ws"];
+const REGISTERED: [&str; 4] = ["context", "init", "repo", "ws"];
 
 #[test]
 fn the_root_help_lists_exactly_the_groups_and_top_level_commands_registered() {
